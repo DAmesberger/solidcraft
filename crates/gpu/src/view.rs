@@ -17,9 +17,12 @@ use wgpu::util::DeviceExt;
 use crate::pbr;
 
 mod ao;
+pub mod ibl;
 #[cfg(not(target_arch = "wasm32"))]
 mod msaa_check;
 mod oit;
+
+pub use ibl::{ENV_MIPS, ENV_SIZE, PRODUCT_LOOK_KIND, ProductLook, StudioEnvironment, StudioPreset};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
 
@@ -2078,6 +2081,12 @@ pub struct Renderer {
     /// The same filter into an offscreen texture of its own (no depth, one sample): the picture
     /// [`Renderer::cached`] keeps for still frames.
     ss_filter: wgpu::RenderPipeline,
+    /// The same two filters for a frame with the product look ([`ProductLook`]): they dither the
+    /// filtered picture again.
+    ss_blit_look: wgpu::RenderPipeline,
+    ss_filter_look: wgpu::RenderPipeline,
+    /// The product look's studios, the PBR pipeline's group [`pbr::STUDIO_GROUP`].
+    studios: ibl::Studios,
     /// The frame drawn offscreen at the viewport's own size (for the see-through surfaces' order-
     /// independent transparency), copied as it is.
     copy_blit: wgpu::RenderPipeline,
@@ -2240,12 +2249,42 @@ fn fs_copy(i: O) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs(i: O) -> @location(0) vec4<f32> {
+    return filtered(i);
+}
+fn filtered(i: O) -> vec4<f32> {
     let d = vec2<f32>(dpdx(i.uv.x), dpdy(i.uv.y)) * 0.25;
     let a = textureSampleLevel(src, smp, i.uv + vec2<f32>(-d.x, -d.y), 0.0);
     let b = textureSampleLevel(src, smp, i.uv + vec2<f32>(d.x, -d.y), 0.0);
     let c = textureSampleLevel(src, smp, i.uv + vec2<f32>(-d.x, d.y), 0.0);
     let e = textureSampleLevel(src, smp, i.uv + vec2<f32>(d.x, d.y), 0.0);
     return (a + b + c + e) * 0.25;
+}
+// The product look (`ProductLook`): the filtered picture re-dithered by ±1 LSB (triangular), so
+// the 2 × 2 mean does not cancel the scene's dither into bands; `fs_look_linear` for an sRGB
+// target, whose own encode follows (dithered in the encoded values all the same).
+fn look_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+fn look_dither(p: vec2<f32>) -> f32 {
+    return (look_noise(p) + look_noise(vec2<f32>(p.y, p.x) + vec2<f32>(19.0, 47.0)) - 1.0) / 255.0;
+}
+fn encode(c: vec3<f32>) -> vec3<f32> {
+    return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
+}
+fn decode(c: vec3<f32>) -> vec3<f32> {
+    return select(c / 12.92, pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c > vec3<f32>(0.04045));
+}
+@fragment
+fn fs_look(i: O) -> @location(0) vec4<f32> {
+    let c = filtered(i);
+    // Premultiplied: a pixel stays within its coverage (the background stays clear).
+    return vec4<f32>(clamp(c.rgb + vec3<f32>(look_dither(i.pos.xy)), vec3<f32>(0.0), vec3<f32>(c.a)), c.a);
+}
+@fragment
+fn fs_look_linear(i: O) -> @location(0) vec4<f32> {
+    let c = filtered(i);
+    let e = clamp(encode(max(c.rgb, vec3<f32>(0.0))) + vec3<f32>(look_dither(i.pos.xy)), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(min(decode(e), vec3<f32>(c.a)), c.a);
 }
 "#;
 
@@ -2789,12 +2828,15 @@ impl Renderer {
             })
         };
         let pass_depth = window_depth(wgpu::CompareFunction::Always);
+        let look_filter = if t.format.is_srgb() { "fs_look_linear" } else { "fs_look" };
         let blits = || {
             (
                 blit("fs", window.samples.max(1), pass_depth.clone()),
                 blit("fs_copy", window.samples.max(1), pass_depth.clone()),
                 // Into the cached picture's own texture: no depth, one sample.
                 blit("fs", 1, None),
+                blit(look_filter, window.samples.max(1), pass_depth.clone()),
+                blit(look_filter, 1, None),
             )
         };
         let oit = || oit::Pipelines::new(device, &module, &layout, t.format, t.depth, t.samples);
@@ -2859,7 +2901,37 @@ impl Renderer {
                 solid("sc_tris_hl_instanced_flat", "fs_tri", None, highlight_depth(t.depth), TriSource::InstancedFlat),
             )
         };
-        let pbr = || pipeline("sc_pbr", "vs_pbr", "fs_pbr", pbr_layout(), opaque(), None);
+        // The PBR pipeline reads the product look's studio (group 3); groups 1 and 2 are the solid
+        // pipelines', bound for them before the PBR draw.
+        let studios = ibl::Studios::new(device);
+        let pbr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sc_pbr"),
+            bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
+            immediate_size: 0,
+        });
+        let pbr = || {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("sc_pbr"),
+                layout: Some(&pbr_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_pbr"),
+                    buffers: &[Some(pbr_layout())],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: opaque(),
+                multisample: wgpu::MultisampleState { count: t.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_pbr"),
+                    targets: &[Some(wgpu::ColorTargetState { format: t.format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -2905,7 +2977,7 @@ impl Renderer {
             let ((glass_far_flat, glass_near_flat, trans_flat), tri_hl_instanced_flat) = see_through_flat.join();
             let (line, line_hidden) = lines.join();
             let (overlay, guide_line) = lines_all.join();
-            let (ss_blit, copy_blit, ss_filter) = blits.join();
+            let (ss_blit, copy_blit, ss_filter, ss_blit_look, ss_filter_look) = blits.join();
             let (depth_reset, section_reset) = resets.join();
             let oit = oit.join();
             Renderer {
@@ -2919,6 +2991,9 @@ impl Renderer {
                 max_texture: device.limits().max_texture_dimension_2d,
                 ss_blit,
                 ss_filter,
+                ss_blit_look,
+                ss_filter_look,
+                studios,
                 copy_blit,
                 ss_scaled: false,
                 oit,
@@ -3227,6 +3302,11 @@ fn can_reuse(ss_ready: bool, cached: Option<u64>, key: u64) -> bool {
 /// section, images, analysis, accessibility map, ambient occlusion and the theme's hover and
 /// selection tints. The same key draws the same picture (pipelines and shaders are fixed for the
 /// renderer).
+/// The frame's opt-in product look, if its product lights carry one ([`ProductLook::find`]).
+fn product_look(cb: &Frame) -> Option<ProductLook> {
+    cb.product_lights.as_deref().and_then(ProductLook::find).map(|(_, look)| look)
+}
+
 fn frame_key(cb: &Frame) -> u64 {
     use std::hash::Hash as _;
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -3298,13 +3378,21 @@ impl Renderer {
             // A still frame shows the picture as it is; the first one filters it down once.
             let filter = res.ss_scaled && res.cached.is_none();
             if filter {
-                res.cache_picture(device, encoder, cb.size_px);
+                res.cache_picture(device, encoder, cb.size_px, product_look(cb).is_some());
             }
             // The scene isn't drawn again: `paint`'s blit (and that filter) is all this frame draws.
             res.ss_stats = DrawStats { draw_calls: u32::from(filter), ..DrawStats::default() };
             return;
         }
         res.cached = None;
+        // The product look's studio, baked here the first time a frame asks for it (a client can
+        // bake it on another thread first: `set_studio_environment`).
+        if let Some(look) = product_look(cb)
+            && look.intensity > 0.0
+            && !res.studios.has(look.studio)
+        {
+            res.studios.install(device, queue, &StudioEnvironment::bake(look.studio));
+        }
         if cb.product {
             res.product.take(device, queue, &res.uniform, &res.uniform_bgl, cb.key, &cb.slot, None, false);
             res.product.sort_glass(queue, cb.back);
@@ -3429,7 +3517,8 @@ impl Renderer {
                 pass.set_pipeline(&self.copy_blit);
                 pass.set_bind_group(0, &cached.bind, &[]);
             } else {
-                pass.set_pipeline(if self.ss_scaled { &self.ss_blit } else { &self.copy_blit });
+                let filter = if product_look(frame).is_some() { &self.ss_blit_look } else { &self.ss_blit };
+                pass.set_pipeline(if self.ss_scaled { filter } else { &self.copy_blit });
                 pass.set_bind_group(0, &ss.bind, &[]);
             }
             pass.draw(0..3, 0..1);
@@ -3471,6 +3560,22 @@ impl Renderer {
     /// The target the pipelines draw into.
     pub fn target(&self) -> GpuTarget {
         self.target
+    }
+
+    /// Install a studio baked with [`StudioEnvironment::bake`] (on any thread) for frames whose
+    /// [`ProductLook`] names its preset, replacing that preset's studio. Without it, the first
+    /// frame that asks for a preset bakes it during `prepare`, on the window thread (about 80 ms
+    /// in an optimised build, once per preset).
+    pub fn set_studio_environment(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, env: &StudioEnvironment) {
+        self.studios.install(device, queue, env);
+        // A picture kept from before shows the old studio.
+        self.ss_key = None;
+        self.cached = None;
+    }
+
+    /// Whether `preset`'s studio is on the GPU (installed, or baked by an earlier frame).
+    pub fn has_studio_environment(&self, preset: StudioPreset) -> bool {
+        self.studios.has(preset)
     }
 
     /// Evaluate planned bodies with `later`'s pipeline once it has compiled (#4860).
@@ -3636,6 +3741,7 @@ impl Renderer {
             }
         }
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
+        pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(product_look(cb).map(|look| look.studio)), &[]);
         tris(pass, &res.pbr, &m.pbr);
         if !cb.product {
             for (_, b) in res.clouds.values() {
@@ -3796,7 +3902,7 @@ impl Renderer {
     /// Filter the supersampled picture down to the viewport's own pixels once, into the texture
     /// [`Renderer::cached`] keeps: still frames then blit it as it is instead of filtering it every
     /// time.
-    fn cache_picture(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, size_px: [f32; 2]) {
+    fn cache_picture(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, size_px: [f32; 2], look: bool) {
         let Some(ss) = &self.ss else { return };
         let [w, h] = size_px;
         if !(w >= 1.0 && h >= 1.0) || self.no_cache {
@@ -3848,7 +3954,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.ss_filter);
+            pass.set_pipeline(if look { &self.ss_filter_look } else { &self.ss_filter });
             pass.set_bind_group(0, &ss.bind, &[]);
             pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
             pass.draw(0..3, 0..1);
@@ -4096,14 +4202,19 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
     v.extend([if reversed { 1.0 } else { 0.0 }, FACE_STEPS as f32, FACE_SLOPE, 0.0]);
     v.extend([cb.hover_tint[0], cb.hover_tint[1], cb.hover_tint[2], 0.0]);
     v.extend([cb.selection_tint[0], cb.selection_tint[1], cb.selection_tint[2], 0.0]);
+    let look = cb.product_lights.as_deref().and_then(ProductLook::find);
     v.extend([
         if cb.product_lights.is_some() { 1.0 } else { 0.0 },
         cb.product_lights.as_ref().map_or(0, |lights| lights.len().min(21)) as f32,
-        0.0,
+        // The product look's slot + 1 (0: none).
+        look.map_or(0.0, |(slot, _)| (slot + 1) as f32),
         0.0,
     ]);
     for index in 0..21 {
-        let light = cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]);
+        let light = match look {
+            Some((slot, look)) if slot == index => look.record(),
+            _ => cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]),
+        };
         v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
     }
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -4124,6 +4235,8 @@ pub fn analysis_colors(c: &solidcraft_render::AnalysisColors) -> [f32; 36] {
 
 #[cfg(test)]
 mod tests {
+    use super::{ProductLook, StudioPreset};
+
     /// A placed box is kept while any of it may be in view, and left out only when it lies
     /// wholly past one side of the view: in an orthographic view and a perspective one, behind
     /// the eye too.
@@ -4304,6 +4417,37 @@ mod tests {
         assert_ne!(super::frame_key(&frame), previous);
     }
 
+    /// The product look's slot rides in the uniform's `product_lights_meta.z` (slot + 1; 0 without
+    /// a look), and its record is written sanitised; a frame without one writes the lights as
+    /// before.
+    #[test]
+    fn product_look_slot_and_record_in_the_uniform() {
+        let floats = |f: &super::Frame| -> Vec<f32> {
+            super::uniform_bytes(f, 64.0, 64.0, false, false).as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+        };
+        // The meta vec4 sits right before the 21 light records.
+        let meta = (super::UNIFORM_SIZE as usize - 21 * 64) / 4 - 4;
+        let light = [0.6, 0.0, 0.8, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut f = cached_frame();
+        f.product_lights = Some(vec![light; 2]);
+        let plain = floats(&f);
+        assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
+        assert_eq!(&plain[meta + 4..meta + 20], &light);
+        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0 };
+        let mut record = wild.record();
+        record[4] = f32::INFINITY;
+        f.product_lights = Some(vec![light, record]);
+        let v = floats(&f);
+        assert_eq!(&v[meta..meta + 4], &[1.0, 2.0, 2.0, 0.0], "the look in slot 1");
+        let written = &v[meta + 20..meta + 36];
+        assert_eq!(written, &ProductLook { exposure: 1.0, studio: StudioPreset::Contrast, rotation: 0.0, intensity: 0.0 }.record());
+        // Past the 21 lights the shader reads, a record is no look.
+        let mut many = vec![light; 21];
+        many.push(ProductLook::default().record());
+        f.product_lights = Some(many);
+        assert_eq!(floats(&f)[meta + 2], 0.0);
+    }
+
     /// A frame with a fixed picture, and a key that names everything it shows.
     fn cached_frame() -> super::Frame {
         use std::sync::{Arc, Mutex};
@@ -4398,6 +4542,28 @@ mod tests {
         ] {
             assert_ne!(base, changed, "{what} must draw again");
         }
+        // The opt-in product look rides in the product lights: turning it on and each of its
+        // settings draws again.
+        let lights = |look: Option<ProductLook>| {
+            let mut f = cached_frame();
+            let mut lights = vec![[0.6, 0.0, 0.8, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]];
+            lights.extend(look.map(|look| look.record()));
+            f.product_lights = Some(lights);
+            super::frame_key(&f)
+        };
+        let off = lights(None);
+        let on = ProductLook::default();
+        for (what, changed) in [
+            ("product look", lights(Some(on))),
+            ("exposure", lights(Some(ProductLook { exposure: 2.0, ..on }))),
+            ("studio", lights(Some(ProductLook { studio: StudioPreset::Soft, ..on }))),
+            ("studio rotation", lights(Some(ProductLook { rotation: 0.5, ..on }))),
+            ("studio intensity", lights(Some(ProductLook { intensity: 0.5, ..on }))),
+        ] {
+            assert_ne!(off, changed, "{what} must draw again");
+            assert!(what == "product look" || changed != lights(Some(on)), "{what} must draw again");
+        }
+        assert_eq!(off, lights(None), "the same lights without a look draw the same picture");
         // The comparison a frame makes: only a frame drawn into a texture has a picture to blit,
         // and only the picture with the same content is shown again.
         assert!(super::can_reuse(true, Some(base), base));
@@ -4409,11 +4575,13 @@ mod tests {
     /// Derivatives and implicit-lod sampling run only in uniform control flow: browsers' WGSL
     /// compilers (Tint) reject them after a branch, and the whole viewport shader then fails,
     /// a black screen on the web (naga accepts it). Every fragment entry point makes such calls
-    /// (directly or through a helper) before its first branch or return.
+    /// (directly or through a helper) before its first branch or return; the PBR source appended
+    /// to the viewport shader (`pbr::SOURCE`, with the product look's studio) included.
     #[test]
     fn derivatives_only_in_uniform_control_flow() {
         // Without comments (their words are not code).
-        let src: String = super::SHADER.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let shader = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+        let src: String = shader.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
         let src = src.as_str();
         let derivs = ["dpdx(", "dpdy(", "fwidth(", "textureSample("];
         // Functions: name -> body.
@@ -4898,6 +5066,147 @@ mod glass_tests {
             ao_samples: crate::view::AO_SAMPLES,
             ssaa,
         }
+    }
+
+    /// A PBR square over the whole fixed view, facing the viewer (+Z).
+    fn pbr_scene(base: Vec3, metallic: f64, roughness: f64, ior: f64) -> Option<GpuScene> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok()?;
+        let mut scene = GpuScene::default();
+        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
+            scene.pbr_tri(p, [0.0, 0.0, 1.0], surface);
+        }
+        Some(scene)
+    }
+
+    /// The default preview's pixel for `surface` facing the viewer: the shared surface BRDF from
+    /// the CPU (f64) under `lights` (direction, relative radiance), per-channel Reinhard, sRGB.
+    fn reinhard_pixel(base: Vec3, metallic: f64, roughness: f64, ior: f64, lights: &[(Vec3, Vec3)]) -> Option<[u8; 3]> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok()?;
+        let mut radiance = Vec3::ZERO;
+        for (direction, colour) in lights {
+            let l = direction.normalized()?;
+            let f = surface.brdf(Vec3::Z, Vec3::Z, l).ok()?;
+            let cosine = l.z.max(0.0);
+            radiance += Vec3::new(f.x * colour.x, f.y * colour.y, f.z * colour.z) * cosine;
+        }
+        let encode = |c: f64| {
+            let m = c / (1.0 + c);
+            let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+            (e * 255.0).round().clamp(0.0, 255.0) as u8
+        };
+        Some([encode(radiance.x), encode(radiance.y), encode(radiance.z)])
+    }
+
+    /// The pixels inside the square (away from the frame's edge), RGB.
+    fn inner_pixels(bytes: &[u8]) -> Vec<[u8; 3]> {
+        const SIZE: usize = 64;
+        let mut out = Vec::new();
+        for y in 8..SIZE - 8 {
+            for x in 8..SIZE - 8 {
+                let i = (y * SIZE + x) * 4;
+                if let Some(p) = bytes.get(i..i + 3) {
+                    out.push([p[0], p[1], p[2]]);
+                }
+            }
+        }
+        out
+    }
+
+    fn close(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
+        a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tolerance)
+    }
+
+    /// Without the product look, the PBR preview is the one documented in
+    /// docs/render-opaque-pbr.md: the fixed studio (or the frame's product lights) through the
+    /// shared BRDF, per-channel Reinhard, one sRGB encode and no dither — every pixel of a flat
+    /// square the same, matching the CPU. A look record changes the picture; one with no studio
+    /// is the same lights through PBR Neutral, with a ±1 LSB dither.
+    #[test]
+    fn the_pbr_preview_is_unchanged_without_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let fixed = [
+            (Vec3::new(0.6, 0.0, 0.8), Vec3::new(3.0, 3.0, 3.0)),
+            (Vec3::new(-0.8, 0.0, 0.6), Vec3::new(1.0, 1.0, 1.0)),
+            (Vec3::new(0.0, -0.6, 0.8), Vec3::new(1.5, 1.5, 1.5)),
+        ];
+        let key = [0.3, -0.2, 0.93, 0.0, 2.0, 1.8, 1.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let key_light = [(Vec3::new(0.3, -0.2, 0.93), Vec3::new(2.0, 1.8, 1.6))];
+        let surfaces =
+            [(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.5, 1.5), (Vec3::new(0.95, 0.64, 0.54), 1.0, 0.3, 1.5), (Vec3::new(0.1, 0.45, 0.18), 0.0, 0.25, 1.0)];
+        for (key_number, (base, metallic, roughness, ior)) in (10..).zip(surfaces) {
+            let Some(scene) = pbr_scene(base, metallic, roughness, ior) else { panic!("valid surface") };
+            // Each surface is a new scene (the renderer keeps a scene while its key stays).
+            let test_frame = |scene: GpuScene, ssaa: f32| Frame { key: key_number, ..test_frame(scene, ssaa) };
+            for (lights, expected_lights) in [(None, &fixed[..]), (Some(vec![key]), &key_light[..])] {
+                let mut frame = test_frame(scene.clone(), 1.0);
+                frame.product_lights = lights.clone();
+                let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+                let Some(expected) = reinhard_pixel(base, metallic, roughness, ior, expected_lights) else { panic!("valid BRDF") };
+                let first = pixels.first().copied().unwrap_or_default();
+                assert!(pixels.iter().all(|p| *p == first), "the default preview has no dither: {base:?} {lights:?}");
+                assert!(close(first, expected, 2), "{base:?}, metallic {metallic}, roughness {roughness}: {first:?} against {expected:?}");
+            }
+            // The look, with no studio and exposure 1: the same radiance through PBR Neutral, dithered.
+            let mut frame = test_frame(scene.clone(), 1.0);
+            let look = ProductLook { intensity: 0.0, ..ProductLook::default() };
+            frame.product_lights = Some(vec![key, look.record()]);
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            if key_number == 10 {
+                assert!(!r.has_studio_environment(StudioPreset::Product), "no studio is baked for a look without one");
+            }
+            let Some(surface) = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok() else { panic!("valid surface") };
+            let Ok(f) = surface.brdf(Vec3::Z, Vec3::Z, Vec3::new(0.3, -0.2, 0.93).normalized().unwrap_or(Vec3::Z)) else { panic!("valid BRDF") };
+            let cosine = Vec3::new(0.3, -0.2, 0.93).normalized().map_or(1.0, |l| l.z);
+            let radiance = [f.x * 2.0 * cosine, f.y * 1.8 * cosine, f.z * 1.6 * cosine].map(|c| c as f32);
+            let mapped = super::ibl::pbr_neutral(radiance);
+            let expected = mapped.map(|m| {
+                let m = f64::from(m);
+                let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+                (e * 255.0).round().clamp(0.0, 255.0) as u8
+            });
+            assert!(pixels.iter().all(|p| close(*p, expected, 2)), "{base:?}: PBR Neutral {expected:?}, got e.g. {:?}", pixels.first());
+            let distinct: std::collections::BTreeSet<[u8; 3]> = pixels.iter().copied().collect();
+            assert!(distinct.len() > 1, "the look dithers a flat surface");
+            // With the studio, the picture changes (and the studio is baked on first use).
+            frame.product_lights = Some(vec![key, ProductLook::default().record()]);
+            let lit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            assert!(r.has_studio_environment(StudioPreset::Product));
+            let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
+            assert!(mean(&lit) > mean(&pixels) + 3.0, "the studio adds light: {} against {}", mean(&lit), mean(&pixels));
+        }
+    }
+
+    /// Supersampled, the product look's filter dithers the 2 × 2 mean again; without the look the
+    /// filter is the plain box, as before.
+    #[test]
+    fn the_supersample_filter_dithers_only_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Some(scene) = pbr_scene(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.5, 1.5) else { panic!("valid surface") };
+        let mut frame = test_frame(scene, 2.0);
+        let plain = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        assert!(r.ss_ready && r.ss_scaled, "drawn supersampled");
+        let first = plain.first().copied().unwrap_or_default();
+        assert!(plain.iter().all(|p| *p == first), "the default filter adds no noise");
+        // A studio baked off the window thread and installed (a second install replaces it).
+        let env =
+            std::thread::spawn(|| StudioEnvironment::bake(StudioPreset::Soft)).join().unwrap_or_else(|_| StudioEnvironment::bake(StudioPreset::Soft));
+        r.set_studio_environment(&device, &queue, &env);
+        r.set_studio_environment(&device, &queue, &env);
+        assert!(r.has_studio_environment(StudioPreset::Soft) && !r.has_studio_environment(StudioPreset::Product));
+        frame.product_lights = Some(vec![ProductLook { studio: StudioPreset::Soft, ..ProductLook::default() }.record()]);
+        let look = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        let distinct: std::collections::BTreeSet<[u8; 3]> = look.iter().copied().collect();
+        assert!(distinct.len() > 1, "the look's filter dithers");
+        // Again, from the cached picture: the same dithered picture.
+        let again = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        assert!(r.cached.is_some());
+        assert!(look.iter().zip(&again).all(|(a, b)| close(*a, *b, 1)), "the cached picture is the filtered one");
     }
 
     /// A frame of opaque triangles at the fixed view.

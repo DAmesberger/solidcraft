@@ -60,6 +60,53 @@ fn out_color(c: vec4<f32>) -> vec4<f32> {
     return c;
 }
 
+// The opt-in product look (`view::ProductLook`, docs/render-opaque-pbr.md): a product-light
+// record of this kind lights nothing; `product_lights_meta.z` is its slot + 1 (0: no look), and
+// its second vec4 holds exposure, studio intensity, studio rotation and the studio's id.
+const PRODUCT_LOOK_KIND: f32 = 6.0;
+
+fn look_on() -> bool {
+    let slot = u.product_lights_meta.z;
+    return u.product_lights_meta.x > 0.0 && slot >= 1.0 && slot <= 21.0;
+}
+
+/// The look's (exposure, intensity, rotation, studio); only when `look_on()`.
+fn look_params() -> vec4<f32> {
+    return u.product_lights[(u32(u.product_lights_meta.z) - 1u) * 4u + 1u];
+}
+
+/// Khronos PBR Neutral tone mapping: linear Rec. 709 in, [0, 1] out. Adapted from the Khronos
+/// Group's reference (Apache-2.0, see ATTRIBUTION.md); `ibl::pbr_neutral` on the CPU.
+fn look_tone(colour: vec3<f32>) -> vec3<f32> {
+    var c = max(colour, vec3<f32>(0.0));
+    let x = min(c.r, min(c.g, c.b));
+    let offset = select(0.04, x - 6.25 * x * x, x < 0.08);
+    c = c - vec3<f32>(offset);
+    let peak = max(c.r, max(c.g, c.b));
+    let d = 0.24;
+    let new_peak = 1.0 - d * d / (peak + d - 0.76);
+    let g = 1.0 - 1.0 / (0.15 * (peak - new_peak) + 1.0);
+    let compressed = mix(c * (new_peak / max(peak, 0.000001)), vec3<f32>(new_peak), g);
+    return select(c, compressed, peak >= 0.76);
+}
+
+/// Interleaved gradient noise in [0, 1) at pixel `p` (as the ambient occlusion's turn).
+fn look_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+/// A triangular dither in (−1, 1) LSB: two noise values along different pixel gradients, summed.
+fn look_dither(p: vec2<f32>) -> f32 {
+    return look_noise(p) + look_noise(vec2<f32>(p.y, p.x) + vec2<f32>(19.0, 47.0)) - 1.0;
+}
+
+/// A tone-mapped colour sRGB-encoded for an 8-bit target, dithered at pixel `p`.
+fn look_encode(mapped: vec3<f32>, p: vec2<f32>) -> vec3<f32> {
+    let c = clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0));
+    let e = select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
+    return clamp(e + vec3<f32>(look_dither(p) / 255.0), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 struct TOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) n: vec3<f32>,
@@ -520,9 +567,13 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     if u.product_lights_meta.x>0.0 {
         var radiance=vec3<f32>(0.0);
         for (var k=0u;k<min(u32(u.product_lights_meta.y),21u);k+=1u) {
+            if u.product_lights[k*4u].w == PRODUCT_LOOK_KIND {continue;}
             if u.product_lights[k*4u].w == 4.0 {radiance+=to_linear(base.rgb)*u.product_lights[k*4u+1u].xyz/3.141592653589793;continue;}
             let sample=product_light_sample(k,i.wp);
             radiance+=to_linear(base.rgb)*sample[1]*(max(dot(n,sample[0]),0.0)/3.141592653589793);
+        }
+        if look_on() {
+            return out_color(vec4<f32>(look_encode(look_tone(radiance*look_params().x),i.pos.xy),base.a));
         }
         let mapped=radiance/(vec3<f32>(1.0)+radiance);
         let encoded=select(mapped*12.92,1.055*pow(mapped,vec3<f32>(1.0/2.4))-vec3<f32>(0.055),mapped>vec3<f32>(0.0031308));

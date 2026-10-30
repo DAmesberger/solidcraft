@@ -172,12 +172,94 @@ emission, anisotropy, coating, absorption or transmission. Lighting magnitudes a
 relative preview values, not calibrated lux or spectral data. The single-scattering
 model can darken rough metals. Transparent legacy looks retain approximate sorted
 alpha blending, including when seen in front of an opaque PBR surface; that is not
-glass optics. Nondefault exposure/environment controls remain explicitly unsupported.
+glass optics. Nondefault exposure/environment controls remain explicitly unsupported
+in SolidCraft's own app; an embedding client can opt into the product look below.
 
 Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
 capture, ownership, cancellation, stale-result rejection and PNG export policies
 remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
+
+## Opt-in product look for embedding clients
+
+The GPU viewport has a second, opt-in path for clients that embed it (Pcbcraft's PCB
+view). SolidCraft's own app never sends it, so everything above, the `cpu-product`
+parity and the viewport BRDF probe stay as they are. A frame turns it on by putting a
+`ProductLook` record among its product lights:
+
+```rust
+use solidcraft_gpu::view::{ProductLook, StudioPreset};
+let look = ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0 };
+frame.product_lights = Some(lights_with(look.record())); // one of the 21 slots
+```
+
+The record (`PRODUCT_LOOK_KIND` = 6) lights nothing; the frame's other product lights
+still do. Its first occurrence among the 21 lights the shader reads selects the look;
+the uniform carries its slot + 1 in `product_lights_meta.z`, so no `Frame` field and
+no `Frame` literal changes. Out-of-range values are clamped (exposure and intensity
+to [0, 1024], rotation wrapped into [0, 2π)) and non-finite ones replaced by the
+defaults before upload. The frame cache key already hashes the product lights, so any
+change to the look draws a new picture.
+
+With the look, the PBR shader (and the scalar product-light shading of non-PBR faces):
+
+- adds a procedural **studio** to the product lights: `Product` (four softboxes over a
+  light grey cyclorama and a dark floor), `Soft` (two large softboxes, bright cyclorama)
+  or `Contrast` (two strips and an overhead panel in a dark studio), turned by
+  `rotation` about +Z and scaled by `intensity`. No HDR file is read. Radiance is
+  relative, like the product lights; the presets are original visual studies;
+- reflects it with split-sum specular: a prefiltered Rgba16Float cube map, 128 × 128
+  texels a face at perceptual roughness 0 and five more levels to roughness 1, sampled
+  at level `roughness × 5`, times an analytic environment-BRDF fit, with
+  single-to-multiple-scattering compensation `1 + F0 (1 / (A + B) − 1)`;
+- lights the diffuse layer from nine spherical-harmonic irradiance terms, weighted by
+  what the specular lobe does not reflect, so a white lossless surface reflects exactly
+  the light it receives;
+- scales the radiance by `exposure`, tone maps it with Khronos PBR Neutral instead of
+  per-channel Reinhard, encodes it once and adds a ±1 LSB triangular dither (two
+  interleaved-gradient noise values) before the 8-bit store. For an sRGB attachment
+  (`u.back.w`), the dithered encoded value is decoded again so the attachment's own
+  encode quantises it. The 2 × 2 supersample filter and the cached still picture use a
+  look variant of the filter that dithers the mean again, so averaging does not cancel
+  the dither into bands.
+
+The studio is baked on the CPU, so it also works on WebGL2 (no compute shaders): 2 × 2
+radiance samples per texel of the sharpest level, a box pyramid of it, and 64 GGX
+samples per texel of each rougher level with filtered importance sampling; the
+irradiance terms are projected from the 32 × 32 level. A bake takes about 75–95 ms in
+an optimised build on an Apple M-series laptop (measured, three presets) and about
+1 MB of texels. `StudioEnvironment::bake(preset)` is plain CPU work a client can run on
+another thread and hand to `Renderer::set_studio_environment`; otherwise the first frame
+that names a preset bakes it during `prepare`. The PBR pipeline gains bind group 3 (the
+cube, its sampler and the irradiance uniform); a stand-in black cube is bound without a
+look. Groups 1 and 2 of its layout are the solid pipelines' (accessibility, occlusion).
+
+The environment-BRDF fit is SolidCraft's own: polynomials in perceptual roughness and
+`1 − n·v` plus a Smith-masking term, least-squares fitted to the split-sum scale and bias
+integrated numerically from the viewport's own GGX/separable-Smith/Schlick BRDF. Its
+largest error over n·v in [0.02, 1] and roughness in [0.045, 1] is 0.046 (scale) and
+0.023 (bias); RMS 0.006 and 0.004. The sum is kept at or below one.
+
+Mathematics only, from public sources: split-sum prefiltering (Karis 2013, *Real Shading
+in Unreal Engine 4*), filtered importance sampling (Křivánek and Colbert 2008, *GPU Gems
+3*, ch. 20), nine-term irradiance (Ramamoorthi and Hanrahan 2001), multiple-scattering
+compensation (Fdez-Agüera 2019; Filament documentation). The PBR Neutral curve is
+adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
+
+Still out of reach with the look: cast shadows and ambient occlusion on PBR surfaces,
+clear coats, textures, crisp rectangular highlights (the cube's resolution limits the
+sharpest reflections), and any parity with the CPU hosts, which keep the fixed studio.
+
+Tests (`crates/gpu/src/view/ibl/tests.rs`, `view.rs`): white furnace (every level,
+irradiance π, white metal, white diffuse and white dielectric reflect 1 at every
+roughness and angle), energy conservation of each prefiltered level (mean within 5 %),
+irradiance against a direct cosine integral, the fit against the numerical split sum
+and the shader's coefficients against the fit, the actual WGSL environment term and cube
+lookups on a native GPU against the CPU reference, the tone curve, the dither's
+distribution, the record's sanitising, the uniform slot, the frame key, and GPU frames
+showing that a frame without the look draws the documented Reinhard preview with no
+dither (against the CPU BRDF) while the look dithers, follows PBR Neutral and adds the
+studio, supersampled and cached too.
 
 ## Validation and original example
 

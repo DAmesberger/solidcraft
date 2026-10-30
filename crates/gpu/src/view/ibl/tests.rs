@@ -1,0 +1,445 @@
+#![allow(clippy::needless_range_loop)] // Channels compared side by side.
+
+use std::f64::consts::PI;
+
+use super::reference::{dfg, shade, unturn};
+use super::*;
+
+/// The environment-BRDF fit stays within its stated error of the split-sum terms integrated
+/// numerically from the viewport's own BRDF.
+#[test]
+fn env_brdf_fit_matches_the_numerical_split_sum() {
+    let (mut worst, mut squares, mut count) = ((0.0_f64, 0.0_f64), (0.0, 0.0), 0.0);
+    for i in 0..24 {
+        for j in 0..24 {
+            let nv = 0.02 + 0.98 * (f64::from(i) + 0.5) / 24.0;
+            let r = 0.045 + 0.955 * f64::from(j) / 23.0;
+            let (a, b) = dfg(nv, r, 4096);
+            let (fa, fb) = env_brdf(nv as f32, r as f32);
+            let (ea, eb) = ((f64::from(fa) - a).abs(), (f64::from(fb) - b).abs());
+            worst = (worst.0.max(ea), worst.1.max(eb));
+            squares = (squares.0 + ea * ea, squares.1 + eb * eb);
+            count += 1.0;
+            assert!((0.0..=1.0).contains(&fa) && (0.0..=1.0).contains(&fb));
+        }
+    }
+    let rms = ((squares.0 / count).sqrt(), (squares.1 / count).sqrt());
+    assert!(worst.0 <= 0.05 && worst.1 <= 0.03, "largest error {worst:?}");
+    assert!(rms.0 <= 0.01 && rms.1 <= 0.01, "RMS error {rms:?}");
+    // A smooth surface seen head-on reflects F0; at grazing nearly everything.
+    let (a, b) = env_brdf(1.0, 0.045);
+    assert!((a - 1.0).abs() < 0.02 && b < 0.02, "{a} {b}");
+}
+
+/// The shader's coefficients are the Rust fit's, digit for digit.
+#[test]
+fn shader_env_brdf_coefficients_are_the_fit() {
+    for (table, name) in [(&ENV_BRDF_A, "A"), (&ENV_BRDF_B, "B")] {
+        for part in table {
+            for row in part {
+                let text = format!("vec4<f32>({:.5}, {:.5}, {:.5}, {:.5})", row[0], row[1], row[2], row[3]);
+                assert!(crate::pbr::SOURCE.contains(&text), "{name}: {text} is not in pbr::SOURCE");
+            }
+        }
+    }
+}
+
+/// White furnace: in a studio of constant radiance 1 every level holds 1, the irradiance is π
+/// in every direction, and a white metal (multiple scattering compensated), an index-matched
+/// white diffuse surface and a white dielectric each reflect 1 at every roughness and angle.
+#[test]
+fn white_furnace() {
+    let env = StudioEnvironment::furnace(1.0);
+    assert_eq!(env.level_count(), ENV_MIPS as usize);
+    for level in 0..env.level_count() {
+        let mean = env.level_mean(level);
+        assert!(mean.iter().all(|c| (c - 1.0).abs() < 1e-4), "level {level}: {mean:?}");
+    }
+    let normals = [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.3, -0.5, 0.81], [-0.7, 0.7, -0.14]];
+    for n in normals {
+        let e = env.irradiance_at(unit(n));
+        assert!(e.iter().all(|c| (c - PI).abs() < 1e-3 * PI), "{n:?}: {e:?}");
+    }
+    let n = [0.0, 0.0, 1.0];
+    for roughness in [0.045, 0.2, 0.5, 0.8, 1.0] {
+        for nv in [0.05_f64, 0.3, 0.7, 1.0] {
+            let v = [(1.0 - nv * nv).sqrt(), 0.0, nv];
+            for rotation in [0.0, 1.3] {
+                let metal = shade(&env, [1.0; 3], 1.0, roughness, 1.5, n, v, rotation);
+                assert!(metal.iter().all(|c| (c - 1.0).abs() < 1e-3), "metal r={roughness} nv={nv}: {metal:?}");
+                let diffuse = shade(&env, [1.0; 3], 0.0, roughness, 1.0, n, v, rotation);
+                assert!(diffuse.iter().all(|c| (c - 1.0).abs() < 1e-3), "diffuse r={roughness} nv={nv}: {diffuse:?}");
+                let plastic = shade(&env, [1.0; 3], 0.0, roughness, 1.5, n, v, rotation);
+                // A white dielectric: the diffuse layer takes what the specular lobe leaves.
+                assert!(plastic.iter().all(|c| (c - 1.0).abs() < 1e-3), "dielectric r={roughness} nv={nv}: {plastic:?}");
+                let grey = shade(&env, [0.5; 3], 0.0, roughness, 1.5, n, v, rotation);
+                assert!(grey.iter().all(|c| *c > 0.5 && *c < 1.0), "grey dielectric r={roughness} nv={nv}: {grey:?}");
+                // A coloured metal: between its single-scattering albedo and one.
+                let gold = shade(&env, [0.9, 0.6, 0.3], 1.0, roughness, 1.5, n, v, rotation);
+                let (a, b) = env_brdf(nv as f32, roughness as f32);
+                for (k, f0) in [0.9, 0.6, 0.3].into_iter().enumerate() {
+                    let single = f0 * f64::from(a) + f64::from(b);
+                    assert!(gold[k] >= single - 1e-6 && gold[k] <= 1.0 + 1e-6, "coloured metal r={roughness} nv={nv}: {gold:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Prefiltering only spreads the studio's light: every level keeps the sharpest level's mean
+/// radiance (a rotation-invariant, normalised lobe), within the sampling error.
+#[test]
+fn prefiltering_conserves_the_studio_energy() {
+    for preset in StudioPreset::ALL {
+        let env = StudioEnvironment::bake(preset);
+        let sharp = env.level_mean(0);
+        for level in 1..env.level_count() {
+            let mean = env.level_mean(level);
+            for k in 0..3 {
+                assert!((mean[k] - sharp[k]).abs() <= 0.05 * sharp[k], "{preset:?} level {level}: {mean:?} against {sharp:?}");
+            }
+        }
+    }
+}
+
+/// The nine-term irradiance against the cosine-weighted integral of the studio's own radiance.
+#[test]
+fn irradiance_matches_the_cosine_integral() {
+    for preset in StudioPreset::ALL {
+        let env = StudioEnvironment::bake(preset);
+        let integral = |n: [f64; 3]| {
+            let (steps_t, steps_p) = (256, 512);
+            let mut e = [0.0; 3];
+            for i in 0..steps_t {
+                let theta = PI * (f64::from(i) + 0.5) / f64::from(steps_t);
+                for j in 0..steps_p {
+                    let phi = 2.0 * PI * (f64::from(j) + 0.5) / f64::from(steps_p);
+                    let d = [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()];
+                    let cosine = dot(n, d);
+                    if cosine <= 0.0 {
+                        continue;
+                    }
+                    let w = theta.sin() * (PI / f64::from(steps_t)) * (2.0 * PI / f64::from(steps_p)) * cosine;
+                    let l = env.source(d);
+                    add(&mut e, l, w);
+                }
+            }
+            e
+        };
+        let up = integral([0.0, 0.0, 1.0]);
+        for n in [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.5, 0.5, 0.7]] {
+            let n = unit(n);
+            let expected = integral(n);
+            let got = env.irradiance_at(n);
+            for k in 0..3 {
+                // Nine terms keep a smooth lighting's irradiance; the error is a share of the
+                // brightest (upward) irradiance.
+                assert!((got[k] - expected[k]).abs() <= 0.1 * up[k], "{preset:?} n={n:?}: {got:?} against {expected:?} (up {up:?})");
+            }
+        }
+    }
+}
+
+/// The sharpest level shows the studio as it is: a softbox's centre and the dark floor.
+#[test]
+fn the_sharpest_level_shows_the_studio() {
+    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let (sa, ca) = 135.0_f64.to_radians().sin_cos();
+    let (se, ce) = 40.0_f64.to_radians().sin_cos();
+    for d in [[ca * ce, sa * ce, se], [0.2, 0.1, -0.97], [0.0, 1.0, 0.3]] {
+        let expected = env.source(d);
+        let got = env.prefiltered(d, 0.0);
+        for k in 0..3 {
+            assert!((got[k] - expected[k]).abs() <= 0.02 * expected[k] + 1e-3, "{d:?}: {got:?} against {expected:?}");
+        }
+    }
+    assert!(env.prefiltered([ca * ce, sa * ce, se], 0.0)[0] > 10.0 * env.prefiltered([0.2, 0.1, -0.97], 0.0)[0], "the key light outshines the floor");
+    // Turning the studio turns what a direction sees.
+    let turned = unturn([ca * ce, sa * ce, se], 1.0);
+    let back = unturn(turned, -1.0);
+    assert!((0..3).all(|k| (back[k] - [ca * ce, sa * ce, se][k]).abs() < 1e-12));
+    assert!(env.prefiltered(turned, 0.0)[0] < 0.5 * env.prefiltered([ca * ce, sa * ce, se], 0.0)[0], "turned away from the key light");
+}
+
+/// Every cube texel's direction maps back to the same texel.
+#[test]
+fn cube_faces_round_trip() {
+    for face in 0..6 {
+        for (s, t) in [(-0.9, -0.9), (0.0, 0.0), (0.5, -0.25), (0.9, 0.7)] {
+            let (f, s2, t2) = direction_face(face_direction(face, s, t));
+            assert_eq!(f, face);
+            assert!((s - s2).abs() < 1e-9 && (t - t2).abs() < 1e-9, "face {face}: ({s}, {t}) -> ({s2}, {t2})");
+        }
+    }
+}
+
+#[test]
+fn pbr_neutral_tone_map() {
+    // Below the compression start, only the small offset that lifts the toe is subtracted.
+    let mid = pbr_neutral([0.3, 0.4, 0.5]);
+    for (got, x) in mid.iter().zip([0.3, 0.4, 0.5]) {
+        assert!((got - (x - 0.04)).abs() < 1e-6, "{mid:?}");
+    }
+    assert_eq!(pbr_neutral([0.0; 3]), [0.0; 3]);
+    let dark = pbr_neutral([0.05; 3]);
+    assert!((dark[0] - 6.25 * 0.05 * 0.05).abs() < 1e-6, "{dark:?}");
+    // Highlights roll off below one, keeping their order and their hue's lead channel.
+    let mut previous = 0.0;
+    for x in [0.5_f32, 0.8, 1.0, 2.0, 4.0, 16.0, 1000.0] {
+        let y = pbr_neutral([x; 3])[0];
+        assert!(y > previous && y < 1.0, "{x}: {y}");
+        previous = y;
+    }
+    let warm = pbr_neutral([4.0, 1.0, 0.2]);
+    assert!(warm[0] > warm[1] && warm[1] > warm[2] && warm[0] < 1.0, "{warm:?}");
+    // Per-channel Reinhard greys a bright saturated colour more: its green/red ratio rises more.
+    let reinhard = [4.0_f32, 1.0, 0.2].map(|c| c / (1.0 + c));
+    assert!(warm[1] / warm[0] < reinhard[1] / reinhard[0], "{warm:?} against {reinhard:?}");
+    assert_eq!(pbr_neutral([f32::NAN, -1.0, f32::INFINITY]), pbr_neutral([0.0; 3]));
+}
+
+/// The CPU twin of the shaders' `look_dither` (`viewport.wgsl` and the supersample filter).
+fn dither(x: f32, y: f32) -> f32 {
+    let noise = |p: (f32, f32)| (52.982_918_f32 * (p.0 * 0.06711056 + p.1 * 0.00583715).fract()).fract();
+    noise((x, y)) + noise((y + 19.0, x + 47.0)) - 1.0
+}
+
+/// The dither is ±1 LSB, centred and triangular (variance 1/6, not a uniform's 1/3).
+#[test]
+fn dither_is_triangular_within_one_step() {
+    let mut values = Vec::new();
+    for y in 0..256 {
+        for x in 0..256 {
+            values.push(f64::from(dither(x as f32 + 0.5, y as f32 + 0.5)));
+        }
+    }
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    let variance = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n;
+    assert!(values.iter().all(|v| v.abs() < 1.0));
+    assert!(mean.abs() < 0.02, "mean {mean}");
+    assert!((variance - 1.0 / 6.0).abs() < 0.03, "variance {variance}");
+}
+
+#[test]
+fn half_floats() {
+    assert_eq!(half(1.0), 0x3c00);
+    assert_eq!(half(0.5), 0x3800);
+    assert_eq!(half(65504.0), 0x7bff);
+    assert_eq!(half(1e9), 0x7bff);
+    assert_eq!(half(2.0_f32.powi(-24)), 1);
+    assert_eq!(half(2.0_f32.powi(-14)), 0x0400);
+    for bad in [0.0, -1.0, f32::NAN, f32::NEG_INFINITY] {
+        assert_eq!(half(bad), 0);
+    }
+    for x in [0.001_f32, 0.1, 0.7, 3.3, 123.4, 4000.0] {
+        let bits = half(x);
+        let exponent = i32::from((bits >> 10) & 0x1f) - 15;
+        let value = (1.0 + f32::from(bits & 0x3ff) / 1024.0) * 2.0_f32.powi(exponent);
+        assert!((value - x).abs() <= x / 2048.0 + 1e-7, "{x}: {value}");
+    }
+}
+
+#[test]
+fn look_records() {
+    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6 };
+    let record = look.record();
+    assert_eq!(record[3], PRODUCT_LOOK_KIND);
+    assert_eq!(ProductLook::from_record(&record), Some(look));
+    assert_eq!(ProductLook::from_record(&[0.0; 16]), None, "a directional light is not a look");
+    // Hostile values: clamped or replaced, never passed through.
+    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12 };
+    let tame = ProductLook::from_record(&wild.record()).unwrap();
+    assert_eq!(tame, ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE });
+    let mut odd = record;
+    odd[4] = -3.0;
+    odd[6] = -1.0;
+    odd[7] = 99.0;
+    let odd = ProductLook::from_record(&odd).unwrap();
+    assert_eq!(odd.exposure, 0.0);
+    assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
+    assert_eq!(odd.studio, StudioPreset::Product, "an unknown studio is the default one");
+    // Found among the lights the shader reads, not past them.
+    let light = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let mut lights = vec![light; 3];
+    lights.push(record);
+    assert_eq!(ProductLook::find(&lights), Some((3, look)));
+    let mut far = vec![light; 21];
+    far.push(record);
+    assert_eq!(ProductLook::find(&far), None);
+    for preset in StudioPreset::ALL {
+        assert_eq!(StudioPreset::from_id(preset.id()), Some(preset));
+    }
+}
+
+/// A compute probe around the production shader: the studio cube sampled along a direction, and
+/// the actual `pbr_ibl` term.
+fn probe_source() -> String {
+    format!(
+        "{}\n{}\n{}",
+        crate::view::SHADER,
+        crate::pbr::SOURCE,
+        r#"
+struct Probe { base: vec4<f32>, parameters: vec4<f32>, normal: vec4<f32>, view: vec4<f32>, };
+@group(0) @binding(2) var<storage, read> probes: array<Probe>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_ibl(@builtin(global_invocation_id) id: vec3<u32>) {
+    let p = probes[id.x];
+    if (p.parameters.w > 0.5) {
+        result[id.x] = vec4<f32>(textureSampleLevel(studio_cube, studio_smp, p.view.xyz, p.normal.w).rgb, 1.0);
+        return;
+    }
+    result[id.x] = vec4<f32>(pbr_ibl(p.base.xyz, p.parameters.xyz, p.normal.xyz, p.view.xyz, p.view.w), 1.0);
+}
+"#
+    )
+}
+
+#[test]
+fn probe_shader_is_valid() {
+    let source = probe_source();
+    let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
+        .validate(&module)
+        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+}
+
+/// The shader's environment term on the GPU matches the CPU reference on the baked studio: the
+/// cube's face orientation, the turn, the levels, the irradiance terms and the fit.
+#[test]
+fn gpu_environment_term_matches_the_cpu_reference() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let furnace = StudioEnvironment::furnace(1.0);
+    let source = probe_source();
+    let module =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("studio probe"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None },
+        count: None,
+    };
+    let probe_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[storage(2, true), storage(3, false)] });
+    let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+    let studio_layout = layout(&device, wgpu::ShaderStages::COMPUTE);
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&probe_layout), Some(&empty), Some(&empty), Some(&studio_layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some("probe_ibl"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let sampler = sampler(&device);
+    let (sa, ca) = 135.0_f64.to_radians().sin_cos();
+    let (se, ce) = 40.0_f64.to_radians().sin_cos();
+    let key = [ca * ce, sa * ce, se];
+    // (base, metallic, roughness, ior, normal, view, rotation) and cube lookups (direction, level).
+    let surfaces: Vec<([f64; 3], f64, f64, f64, [f64; 3], [f64; 3], f64)> = vec![
+        ([0.95, 0.64, 0.54], 1.0, 0.25, 1.5, [0.0, 0.0, 1.0], unit([0.3, 0.2, 0.9]), 0.0),
+        ([0.9, 0.9, 0.9], 1.0, 0.6, 1.5, unit([0.2, -0.3, 0.9]), unit([-0.4, 0.1, 0.8]), 1.1),
+        ([0.06, 0.24, 0.07], 0.0, 0.3, 1.5, [0.0, 0.0, 1.0], unit([0.5, -0.5, 0.7]), 2.5),
+        ([0.8, 0.8, 0.8], 0.0, 1.0, 1.0, unit([0.6, 0.0, 0.8]), unit([0.0, 0.0, 1.0]), 0.4),
+        ([0.5, 0.5, 0.5], 0.5, 0.8, 2.0, unit([-0.5, 0.5, -0.7]), unit([-0.3, 0.3, -0.9]), 0.0),
+    ];
+    let lookups: Vec<([f64; 3], f64)> =
+        vec![(key, 0.0), (unit([0.2, 0.1, -0.97]), 0.0), (unit([0.1, 0.9, 0.4]), 2.5), (unit([-0.2, -0.3, 0.93]), 5.0)];
+    let mut input: Vec<f32> = Vec::new();
+    for (base, metallic, roughness, ior, n, v, rotation) in &surfaces {
+        input.extend(
+            [base[0], base[1], base[2], 0.0, *metallic, *roughness, *ior, 0.0, n[0], n[1], n[2], 0.0, v[0], v[1], v[2], *rotation].map(|x| x as f32),
+        );
+    }
+    for (d, lod) in &lookups {
+        input.extend([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, *lod, d[0], d[1], d[2], 0.0].map(|x| x as f32));
+    }
+    let count = surfaces.len() + lookups.len();
+    let run = |env: &StudioEnvironment| -> Vec<[f32; 4]> {
+        let gpu = upload(&device, &queue, &studio_layout, &sampler, env);
+        let probes = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &input.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>(),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let size = (count * 16) as u64;
+        let out = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let probe_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &probe_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 2, resource: probes.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
+            ],
+        });
+        let empty_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &probe_bind, &[]);
+            pass.set_bind_group(1, &empty_bind, &[]);
+            pass.set_bind_group(2, &empty_bind, &[]);
+            pass.set_bind_group(3, &gpu.bind, &[]);
+            pass.dispatch_workgroups(count as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
+        queue.submit([encoder.finish()]);
+        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+        let bytes = read.slice(..).get_mapped_range().map(|b| b.to_vec()).unwrap_or_default();
+        bytes
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|c| std::array::from_fn(|k| f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])))
+            .collect()
+    };
+    for (env, name) in [(&env, "product studio"), (&furnace, "furnace")] {
+        let got = run(env);
+        assert_eq!(got.len(), count);
+        for (i, (base, metallic, roughness, ior, n, v, rotation)) in surfaces.iter().enumerate() {
+            let expected = shade(env, *base, *metallic, *roughness, *ior, *n, *v, *rotation);
+            for k in 0..3 {
+                let g = f64::from(got[i][k]);
+                assert!((g - expected[k]).abs() <= 0.04 * expected[k] + 0.01, "{name}, surface {i}: {:?} against {expected:?}", got[i]);
+            }
+        }
+        for (j, (d, lod)) in lookups.iter().enumerate() {
+            let expected = env.prefiltered(*d, *lod);
+            let g = got[surfaces.len() + j];
+            for k in 0..3 {
+                assert!((f64::from(g[k]) - expected[k]).abs() <= 0.03 * expected[k] + 0.005, "{name}, lookup {j} {d:?}: {g:?} against {expected:?}");
+            }
+        }
+    }
+}
+
+/// The bake is bounded: its size is fixed, whatever the preset.
+#[test]
+fn bake_size_is_fixed() {
+    let env = StudioEnvironment::bake(StudioPreset::Soft);
+    let texels: usize = env.levels.iter().map(|l| l.texels.len()).sum();
+    let expected: usize = (0..ENV_MIPS).map(|m| 6 * ((ENV_SIZE >> m) as usize).pow(2)).sum();
+    assert_eq!(texels, expected);
+    assert_eq!(env.preset(), StudioPreset::Soft);
+    assert_eq!(env.uniform_bytes().len() as u64, ENV_UNIFORM_SIZE);
+}
