@@ -67,6 +67,10 @@ impl StudioPreset {
 /// (which then must be `Some`). The record takes one of the 21 light slots and lights nothing
 /// itself; the frame's other product lights still light the scene. Without a record a frame keeps
 /// the default preview, unchanged.
+///
+/// With the look, PBR surfaces also show their clear coat, ambient occlusion (from a frame's
+/// `ao_radius`) on the studio's and the ambient lights, and the procedural [`SurfacePattern`]
+/// their vertices name ([`crate::view::GpuScene::pbr_tri_with`]), sized by the fields below.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProductLook {
     /// Scale of the scene-referred radiance (product lights and studio) before tone mapping.
@@ -77,21 +81,43 @@ pub struct ProductLook {
     pub rotation: f32,
     /// Scale of the studio's radiance (0: only the product lights).
     pub intensity: f32,
+    /// [`SurfacePattern::Fr4Weave`]'s yarn pitch along world X and Y, millimetres.
+    pub weave_pitch: [f32; 2],
+    /// The weave's ply thickness (its period up through a board's edge), millimetres.
+    pub ply_thickness: f32,
+    /// World units per millimetre, so the patterns keep their physical size.
+    pub units_per_mm: f32,
 }
 
 impl Default for ProductLook {
     fn default() -> Self {
-        ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0 }
+        ProductLook {
+            exposure: 1.0,
+            studio: StudioPreset::Product,
+            rotation: 0.0,
+            intensity: 1.0,
+            weave_pitch: Self::WEAVE_7628,
+            ply_thickness: Self::PLY_7628,
+            units_per_mm: 1.0,
+        }
     }
 }
 
 impl ProductLook {
     /// Largest exposure and intensity a record keeps.
     pub const MAX_SCALE: f32 = 1024.0;
+    /// Glass style 7628 (44 × 31 ends per inch, Isola glass fabric data): yarn pitch, mm.
+    pub const WEAVE_7628: [f32; 2] = [25.4 / 44.0, 25.4 / 31.0];
+    /// Glass style 7628's thickness (Isola glass fabric data), mm.
+    pub const PLY_7628: f32 = 0.173;
+    /// Smallest and largest pattern length (pitch, ply) a record keeps, mm.
+    pub const PATTERN_RANGE: [f32; 2] = [0.01, 100.0];
+    /// Smallest and largest `units_per_mm` a record keeps.
+    pub const UNITS_RANGE: [f32; 2] = [1e-6, 1e6];
 
     /// The product-light record that turns the look on: `[0, 0, 0, PRODUCT_LOOK_KIND, exposure,
-    /// intensity, rotation, studio id, 0, …]`. Out-of-range values are clamped, non-finite ones
-    /// replaced by the defaults.
+    /// intensity, rotation, studio id, weave pitch x, weave pitch y, ply thickness, units per mm,
+    /// 0, …]`. Out-of-range values are clamped, non-finite ones replaced by the defaults.
     pub fn record(&self) -> [f32; 16] {
         let look = self.sanitized();
         let mut record = [0.0; 16];
@@ -100,17 +126,32 @@ impl ProductLook {
         record[5] = look.intensity;
         record[6] = look.rotation;
         record[7] = look.studio.id() as f32;
+        record[8] = look.weave_pitch[0];
+        record[9] = look.weave_pitch[1];
+        record[10] = look.ply_thickness;
+        record[11] = look.units_per_mm;
         record
     }
 
-    /// The look a record carries (`None`: not a look record).
+    /// The look a record carries (`None`: not a look record). Zero pattern sizes are the defaults.
     pub fn from_record(record: &[f32; 16]) -> Option<Self> {
         if record[3] != PRODUCT_LOOK_KIND {
             return None;
         }
         let id = record[7];
         let studio = if (0.0..16.0).contains(&id) { StudioPreset::from_id(id as u32) } else { None };
-        Some(ProductLook { exposure: record[4], studio: studio.unwrap_or_default(), rotation: record[6], intensity: record[5] }.sanitized())
+        Some(
+            ProductLook {
+                exposure: record[4],
+                studio: studio.unwrap_or_default(),
+                rotation: record[6],
+                intensity: record[5],
+                weave_pitch: [record[8], record[9]],
+                ply_thickness: record[10],
+                units_per_mm: record[11],
+            }
+            .sanitized(),
+        )
     }
 
     /// The first look record among the lights the shader reads, and its slot.
@@ -120,8 +161,62 @@ impl ProductLook {
 
     fn sanitized(self) -> Self {
         let scale = |x: f32| if x.is_finite() { x.clamp(0.0, Self::MAX_SCALE) } else { 1.0 };
+        // A length: positive and finite within `range`, else `default`.
+        let length = |x: f32, range: [f32; 2], default: f32| if x.is_finite() && x > 0.0 { x.clamp(range[0], range[1]) } else { default };
         let rotation = if self.rotation.is_finite() { self.rotation.rem_euclid(std::f32::consts::TAU) } else { 0.0 };
-        ProductLook { exposure: scale(self.exposure), studio: self.studio, rotation, intensity: scale(self.intensity) }
+        ProductLook {
+            exposure: scale(self.exposure),
+            studio: self.studio,
+            rotation,
+            intensity: scale(self.intensity),
+            weave_pitch: [
+                length(self.weave_pitch[0], Self::PATTERN_RANGE, Self::WEAVE_7628[0]),
+                length(self.weave_pitch[1], Self::PATTERN_RANGE, Self::WEAVE_7628[1]),
+            ],
+            ply_thickness: length(self.ply_thickness, Self::PATTERN_RANGE, Self::PLY_7628),
+            units_per_mm: length(self.units_per_mm, Self::UNITS_RANGE, 1.0),
+        }
+    }
+}
+
+/// A procedural surface detail the product look evaluates in the PBR shader from a vertex's world
+/// position (no textures or UVs), faded to its mean where its period is below a pixel. Without the
+/// look it is ignored. The shader's ids are [`SurfacePattern::id`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SurfacePattern {
+    #[default]
+    None,
+    /// Glass-fibre plain weave (two yarn families, over-under parity) over world X and Y at
+    /// [`ProductLook::weave_pitch`]: it varies the albedo and adds a small relief, for bare
+    /// laminate. On an edge (a normal within about 45° of horizontal) it runs along the edge
+    /// and up through plies of [`ProductLook::ply_thickness`].
+    Fr4Weave,
+    /// A solder mask's orange peel: a gentle waviness of the normal (strength scales it).
+    SolderMask,
+    /// A solder mask over laminate: full orange peel, and the weave beneath showing through the
+    /// albedo only (strength scales the show-through).
+    SolderMaskOverWeave,
+    /// Silkscreen ink's grain: fine albedo and normal noise (strength scales both).
+    Silkscreen,
+}
+
+impl SurfacePattern {
+    pub const ALL: [SurfacePattern; 5] =
+        [SurfacePattern::None, SurfacePattern::Fr4Weave, SurfacePattern::SolderMask, SurfacePattern::SolderMaskOverWeave, SurfacePattern::Silkscreen];
+
+    /// The number a PBR vertex carries (`PATTERN_*` in the shader).
+    pub fn id(self) -> u32 {
+        match self {
+            SurfacePattern::None => 0,
+            SurfacePattern::Fr4Weave => 1,
+            SurfacePattern::SolderMask => 2,
+            SurfacePattern::SolderMaskOverWeave => 3,
+            SurfacePattern::Silkscreen => 4,
+        }
+    }
+
+    pub fn from_id(id: u32) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id() == id)
     }
 }
 

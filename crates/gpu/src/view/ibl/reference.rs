@@ -95,6 +95,25 @@ pub(crate) fn unturn(d: Rgb, rotation: f64) -> Rgb {
 /// surface (`base` linear reflectance, metallic, perceptual roughness, dielectric IOR) with unit
 /// normal `n`, lit by `env` turned by `rotation`.
 pub(crate) fn shade(env: &StudioEnvironment, base: Rgb, metallic: f64, roughness: f64, ior: f64, n: Rgb, v: Rgb, rotation: f64) -> Rgb {
+    let [specular, coat, diffuse] = shade_parts(env, base, metallic, roughness, ior, [0.0, 1.0, 1.0], n, v, rotation);
+    std::array::from_fn(|k| specular[k] + coat[k] + diffuse[k])
+}
+
+/// `pbr_ibl_parts` on the CPU: the base's specular, the clear coat's (weight, perceptual roughness,
+/// IOR) specular and the diffuse layer. A coat reflects its single-scattering albedo
+/// w·(F0·A + B) of the studio at its own roughness and passes the rest to the base.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn shade_parts(
+    env: &StudioEnvironment,
+    base: Rgb,
+    metallic: f64,
+    roughness: f64,
+    ior: f64,
+    coat: Rgb,
+    n: Rgb,
+    v: Rgb,
+    rotation: f64,
+) -> [Rgb; 3] {
     let nv = dot(n, v).max(1e-4);
     let ratio = (ior - 1.0) / (ior + 1.0);
     let f0: Rgb = std::array::from_fn(|k| ratio * ratio + (base[k] - ratio * ratio) * metallic);
@@ -106,9 +125,20 @@ pub(crate) fn shade(env: &StudioEnvironment, base: Rgb, metallic: f64, roughness
     let top = env.level_count().saturating_sub(1) as f64;
     let prefiltered = env.prefiltered(unturn(r, rotation), roughness * top);
     let irradiance = env.irradiance_at(unturn(n, rotation)).map(|e| e.max(0.0));
-    std::array::from_fn(|k| {
-        let specular = (f0[k] * a + f90 * b) * (1.0 + f0[k] * (1.0 / ess - 1.0));
-        let diffuse = base[k] * (1.0 - metallic) / PI * (1.0 - specular).max(0.0) * irradiance[k];
-        prefiltered[k] * specular + diffuse
-    })
+    let mut specular = [0.0; 3];
+    let mut diffuse = [0.0; 3];
+    for k in 0..3 {
+        let s = (f0[k] * a + f90 * b) * (1.0 + f0[k] * (1.0 / ess - 1.0));
+        specular[k] = prefiltered[k] * s;
+        diffuse[k] = base[k] * (1.0 - metallic) / PI * (1.0 - s).max(0.0) * irradiance[k];
+    }
+    let [weight, coat_roughness, coat_ior] = coat;
+    if weight <= 0.0 || coat_ior == 1.0 {
+        return [specular, [0.0; 3], diffuse];
+    }
+    let coat_ratio = (coat_ior - 1.0) / (coat_ior + 1.0);
+    let (ca, cb) = env_brdf(nv as f32, coat_roughness as f32);
+    let albedo = weight * (coat_ratio * coat_ratio * f64::from(ca) + f64::from(cb));
+    let seen = env.prefiltered(unturn(r, rotation), coat_roughness * top);
+    [specular.map(|s| s * (1.0 - albedo)), seen.map(|c| c * albedo), diffuse.map(|d| d * (1.0 - albedo))]
 }

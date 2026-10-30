@@ -22,7 +22,7 @@ pub mod ibl;
 mod msaa_check;
 mod oit;
 
-pub use ibl::{ENV_MIPS, ENV_SIZE, PRODUCT_LOOK_KIND, ProductLook, StudioEnvironment, StudioPreset};
+pub use ibl::{ENV_MIPS, ENV_SIZE, PRODUCT_LOOK_KIND, ProductLook, StudioEnvironment, StudioPreset, SurfacePattern};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
 
@@ -793,10 +793,33 @@ impl BlockBuilder {
 }
 
 impl GpuScene {
+    /// A vertex of an opaque PBR surface ([`PBR_SIZE`] bytes), with no pattern. The surface's
+    /// clear coat is carried along but drawn only with the product look ([`ProductLook`]); the
+    /// default preview has no coating (docs/render-opaque-pbr.md).
     pub fn pbr_tri(&mut self, p: [f32; 3], n: [f32; 3], surface: solidcraft_render::surface::OpaqueSurface) {
+        self.pbr_tri_with(p, n, surface, SurfacePattern::None, 0.0);
+    }
+
+    /// A vertex of an opaque PBR surface with the product look's detail: a procedural `pattern`
+    /// at `strength` (clamped to [0, 1]) and the surface's clear coat. Both are drawn only with
+    /// the product look. The vertex's last four floats are (pattern id + 0.25 + (coat IOR − 1) / 4,
+    /// strength, coat weight, coat roughness): the fraction carries the coat's IOR. Under a coat,
+    /// a base that has no interface of its own (a pigmented layer beneath the lacquer) takes IOR
+    /// 1, so the air-to-coat reflection is counted once, by the coat.
+    pub fn pbr_tri_with(
+        &mut self,
+        p: [f32; 3],
+        n: [f32; 3],
+        surface: solidcraft_render::surface::OpaqueSurface,
+        pattern: SurfacePattern,
+        strength: f32,
+    ) {
         let base = surface.base_color().to_f32();
         let parameters = [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32];
-        for value in p.into_iter().chain(n).chain(base).chain(parameters) {
+        let (weight, roughness, ior) = surface.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
+        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+        let detail = [pattern.id() as f32 + 0.25 + (ior - 1.0) / 4.0, strength, weight, roughness];
+        for value in p.into_iter().chain(n).chain(base).chain(parameters).chain(detail) {
             self.pbr.extend_from_slice(&value.to_le_bytes());
         }
     }
@@ -2329,7 +2352,7 @@ fn tri_layout() -> wgpu::VertexBufferLayout<'static> {
 /// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
 /// at [`crate::NORMAL_OFFSET`] (each padded to four floats).
 fn pbr_layout() -> wgpu::VertexBufferLayout<'static> {
-    const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3];
+    const A: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3, 4 => Float32x4];
     wgpu::VertexBufferLayout { array_stride: PBR_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
@@ -3433,7 +3456,9 @@ impl Renderer {
             res.access_version = a.version;
         }
         let ao_binds = [scene_bind(&res.model, &res.bind), scene_bind(&res.preview, &res.bind)];
-        res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview]);
+        // PBR surfaces join the depth map only with the product look (the only frames that occlude them).
+        let look = product_look(cb).is_some();
+        res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview], look);
         // Images: upload new or changed textures, drop removed ones, rebuild the quads.
         res.textures.retain(|id, _| cb.images.iter().any(|i| i.id == *id));
         res.quads.clear();
@@ -4433,14 +4458,18 @@ mod tests {
         let plain = floats(&f);
         assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
         assert_eq!(&plain[meta + 4..meta + 20], &light);
-        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0 };
+        let wild =
+            ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0, ..ProductLook::default() };
         let mut record = wild.record();
         record[4] = f32::INFINITY;
         f.product_lights = Some(vec![light, record]);
         let v = floats(&f);
         assert_eq!(&v[meta..meta + 4], &[1.0, 2.0, 2.0, 0.0], "the look in slot 1");
         let written = &v[meta + 20..meta + 36];
-        assert_eq!(written, &ProductLook { exposure: 1.0, studio: StudioPreset::Contrast, rotation: 0.0, intensity: 0.0 }.record());
+        assert_eq!(
+            written,
+            &ProductLook { exposure: 1.0, studio: StudioPreset::Contrast, rotation: 0.0, intensity: 0.0, ..ProductLook::default() }.record()
+        );
         // Past the 21 lights the shader reads, a record is no look.
         let mut many = vec![light; 21];
         many.push(ProductLook::default().record());
@@ -4559,6 +4588,9 @@ mod tests {
             ("studio", lights(Some(ProductLook { studio: StudioPreset::Soft, ..on }))),
             ("studio rotation", lights(Some(ProductLook { rotation: 0.5, ..on }))),
             ("studio intensity", lights(Some(ProductLook { intensity: 0.5, ..on }))),
+            ("weave pitch", lights(Some(ProductLook { weave_pitch: [0.42, 0.44], ..on }))),
+            ("ply thickness", lights(Some(ProductLook { ply_thickness: 0.1, ..on }))),
+            ("units per millimetre", lights(Some(ProductLook { units_per_mm: 0.001, ..on }))),
         ] {
             assert_ne!(off, changed, "{what} must draw again");
             assert!(what == "product look" || changed != lights(Some(on)), "{what} must draw again");
@@ -4636,7 +4668,7 @@ mod tests {
             }
             if !*frag {
                 // A helper: its own derivatives must come before any branch or return in it.
-                let first = ["if (", "return", "discard"].iter().filter_map(|k| body.find(k)).min().unwrap_or(usize::MAX);
+                let first = first_branch(body);
                 for d in derivs {
                     if let Some(i) = body.find(d) {
                         assert!(i < first, "{n}: {d} after a branch");
@@ -4644,11 +4676,27 @@ mod tests {
                 }
                 continue;
             }
-            let first = ["if (", "return", "discard"].iter().filter_map(|k| body.find(k)).min().unwrap_or(usize::MAX);
+            let first = first_branch(body);
             for c in calls {
                 assert!(c < first, "fragment {n}: a derivative after a branch or return: {}", &body[c..(c + 40).min(body.len())]);
             }
         }
+        // The PBR source is scanned too: its fragment takes the pixel footprint the product look's
+        // patterns fade by, before its first branch.
+        let pbr = fns.iter().find(|(n, _, frag)| n == "fs_pbr" && *frag).map(|(_, body, _)| body.as_str()).unwrap_or("");
+        assert!(pbr.find("fwidth(").is_some_and(|c| c < first_branch(pbr)), "fs_pbr takes its footprint first");
+    }
+
+    /// Where a WGSL body first branches, loops or returns (`if` with or without parentheses,
+    /// `for`, `loop`, `while`, `switch`, `select` excluded: it evaluates both sides).
+    fn first_branch(body: &str) -> usize {
+        let words = ["if (", "if ", "for (", "loop", "while", "switch", "return", "discard", "continue", "break"];
+        words
+            .iter()
+            .flat_map(|w| body.match_indices(w).map(|(i, _)| i).collect::<Vec<_>>())
+            .filter(|&i| i == 0 || !body[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+            .min()
+            .unwrap_or(usize::MAX)
     }
 }
 
@@ -5207,6 +5255,176 @@ mod glass_tests {
         let again = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
         assert!(r.cached.is_some());
         assert!(look.iter().zip(&again).all(|(a, b)| close(*a, *b, 1)), "the cached picture is the filtered one");
+    }
+
+    /// A PBR square like [`pbr_scene`], with the product look's detail on every vertex.
+    fn detailed_scene(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> GpuScene {
+        let mut scene = GpuScene::default();
+        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
+            scene.pbr_tri_with(p, [0.0, 0.0, 1.0], surface, pattern, strength);
+        }
+        scene
+    }
+
+    /// A PBR floor with a 4 × 4 block standing 3 high in the middle (its top face is what the
+    /// fixed view looks down on).
+    fn block_on_floor() -> Option<GpuScene> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.7, 0.7, 0.7), 0.0, 0.6, 1.5).ok()?;
+        let mut scene = GpuScene::default();
+        let mut quad = |z: f32, h: f32| {
+            for [x, y] in [[-h, -h], [h, -h], [h, h], [-h, -h], [h, h], [-h, h]] {
+                scene.pbr_tri([x, y, z], [0.0, 0.0, 1.0], surface);
+            }
+        };
+        quad(0.0, 12.0);
+        quad(3.0, 2.0);
+        Some(scene)
+    }
+
+    /// The pixel at (`x`, `y`) of a 64 × 64 frame, RGB.
+    fn pixel(bytes: &[u8], x: usize, y: usize) -> [u8; 3] {
+        let i = (y * 64 + x) * 4;
+        bytes.get(i..i + 3).map_or([0; 3], |p| [p[0], p[1], p[2]])
+    }
+
+    /// Without the product look a coat, a pattern or a frame's occlusion radius changes nothing
+    /// on a PBR surface: the documented preview, as without them (docs/render-opaque-pbr.md).
+    #[test]
+    fn coats_patterns_and_occlusion_wait_for_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let fixed = [
+            (Vec3::new(0.6, 0.0, 0.8), Vec3::new(3.0, 3.0, 3.0)),
+            (Vec3::new(-0.8, 0.0, 0.6), Vec3::new(1.0, 1.0, 1.0)),
+            (Vec3::new(0.0, -0.6, 0.8), Vec3::new(1.5, 1.5, 1.5)),
+        ];
+        let base = Vec3::new(0.06, 0.24, 0.07);
+        let (Ok(plain), Ok(coat)) =
+            (solidcraft_render::surface::OpaqueSurface::new(base, 0.0, 0.4, 1.5), solidcraft_render::clear_coat::ClearCoat::new(1.0, 0.06, 1.52))
+        else {
+            panic!("valid surface")
+        };
+        let Some(expected) = reinhard_pixel(base, 0.0, 0.4, 1.5, &fixed) else { panic!("valid BRDF") };
+        for (key, pattern) in (30..).zip(SurfacePattern::ALL) {
+            let scene = detailed_scene(plain.with_clear_coat(coat), pattern, 1.0);
+            let frame = Frame { key, ao_radius: 3.0, ..test_frame(scene, 1.0) };
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            let first = pixels.first().copied().unwrap_or_default();
+            assert!(pixels.iter().all(|p| *p == first), "{pattern:?}: no pattern and no dither");
+            assert!(close(first, expected, 2), "{pattern:?}: {first:?} against the uncoated {expected:?}");
+        }
+        let Some(scene) = block_on_floor() else { panic!("valid surface") };
+        let plain = render_frame(&mut r, &device, &queue, &Frame { key: 40, ..test_frame(scene.clone(), 1.0) }, true);
+        let occluded = render_frame(&mut r, &device, &queue, &Frame { key: 41, ao_radius: 4.0, ..test_frame(scene, 1.0) }, true);
+        assert_eq!(plain, occluded, "no occlusion on PBR surfaces without the look");
+    }
+
+    /// With the product look, a PBR surface shows its clear coat: the frame's pixel is the f64
+    /// coated surface oracle under the frame's light through exposure, PBR Neutral and the
+    /// dithered encode (no studio, so nothing else lights it).
+    #[test]
+    fn the_product_look_draws_the_clear_coat() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let light = Vec3::new(0.2, -0.1, 0.97);
+        let key = [0.2, -0.1, 0.97, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let look = ProductLook { intensity: 0.0, exposure: 1.5, ..ProductLook::default() };
+        let mut previous: Option<[u8; 3]> = None;
+        for (key_number, (base_ior, coat)) in (50..).zip([(1.5, None), (1.0, Some((1.0, 0.3, 1.52))), (1.5, Some((0.5, 0.2, 2.0)))]) {
+            let Ok(mut surface) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.06, 0.24, 0.07), 0.0, 0.5, base_ior) else {
+                panic!("valid surface")
+            };
+            if let Some((w, roughness, ior)) = coat {
+                let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, roughness, ior) else { panic!("valid coat") };
+                surface = surface.with_clear_coat(c);
+            }
+            let mut frame = Frame { key: key_number, ..test_frame(detailed_scene(surface, SurfacePattern::None, 0.0), 1.0) };
+            frame.product_lights = Some(vec![key, look.record()]);
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            let (Some(l), Ok(f)) = (light.normalized(), surface.brdf(Vec3::Z, Vec3::Z, light.normalized().unwrap_or(Vec3::Z))) else {
+                panic!("valid BRDF")
+            };
+            let radiance = [f.x, f.y, f.z].map(|c| (c * 2.0 * l.z * 1.5) as f32);
+            let expected = super::ibl::pbr_neutral(radiance).map(|m| {
+                let m = f64::from(m);
+                let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+                (e * 255.0).round().clamp(0.0, 255.0) as u8
+            });
+            assert!(pixels.iter().all(|p| close(*p, expected, 2)), "coat {coat:?}: {expected:?}, got e.g. {:?}", pixels.first());
+            let first = pixels.first().copied().unwrap_or_default();
+            assert!(previous.is_none_or(|p| p != first), "each coat changes the picture");
+            previous = Some(first);
+        }
+    }
+
+    /// With the product look and an occlusion radius, a PBR floor darkens where a PBR block stands
+    /// on it (PBR surfaces join the depth prepass), only in the studio's light: away from the
+    /// block, and under the frame's directional light alone, nothing changes.
+    #[test]
+    fn the_product_look_occludes_only_indirect_light() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Some(scene) = block_on_floor() else { panic!("valid surface") };
+        let key = [0.3, -0.2, 0.93, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let draw = |r: &mut Renderer, number: u64, radius: f32, lights: Vec<[f32; 16]>| {
+            let frame = Frame { key: number, ao_radius: radius, product_lights: Some(lights), ..test_frame(scene.clone(), 1.0) };
+            render_frame(r, &device, &queue, &frame, true)
+        };
+        let studio = vec![ProductLook::default().record()];
+        let open = draw(&mut r, 60, 0.0, studio.clone());
+        let shut = draw(&mut r, 61, 4.0, studio);
+        let sum = |p: [u8; 3]| p.iter().map(|&c| u32::from(c)).sum::<u32>();
+        // World (2.6, 0) beside the block, and (8.5, -8.5) far from it.
+        let (near, far) = ((40, 32), (59, 59));
+        assert!(
+            sum(pixel(&shut, near.0, near.1)) + 15 < sum(pixel(&open, near.0, near.1)),
+            "the floor darkens beside the block: {:?} against {:?}",
+            pixel(&shut, near.0, near.1),
+            pixel(&open, near.0, near.1)
+        );
+        assert!(close(pixel(&shut, far.0, far.1), pixel(&open, far.0, far.1), 1), "far from the block nothing changes");
+        let direct = vec![key, ProductLook { intensity: 0.0, ..ProductLook::default() }.record()];
+        let lit = draw(&mut r, 62, 0.0, direct.clone());
+        let lit_occluded = draw(&mut r, 63, 4.0, direct);
+        assert_eq!(lit, lit_occluded, "direct light is not occluded");
+    }
+
+    /// With the product look a pattern shows where its period spans pixels, and fades to the plain
+    /// surface where it is far below one.
+    #[test]
+    fn the_product_look_patterns_fade_to_the_plain_surface() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Ok(laminate) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.36, 0.32, 0.17), 0.0, 0.6, 1.5) else {
+            panic!("valid surface")
+        };
+        let key = [0.3, -0.2, 0.93, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let draw = |r: &mut Renderer, number: u64, pattern: SurfacePattern, units: f32| {
+            let mut frame = Frame { key: number, ..test_frame(detailed_scene(laminate, pattern, 1.0), 1.0) };
+            let look = ProductLook { intensity: 0.0, units_per_mm: units, ..ProductLook::default() };
+            frame.product_lights = Some(vec![key, look.record()]);
+            inner_pixels(&render_frame(r, &device, &queue, &frame, true))
+        };
+        let plain = draw(&mut r, 70, SurfacePattern::None, 10.0);
+        let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
+        for (number, pattern) in (71..).step_by(2).zip([SurfacePattern::Fr4Weave, SurfacePattern::Silkscreen]) {
+            // 10 world units a millimetre: a 0.58 mm pitch is about 18 pixels.
+            let near = draw(&mut r, number, pattern, if pattern == SurfacePattern::Silkscreen { 200.0 } else { 10.0 });
+            let red = |p: &[[u8; 3]]| p.iter().map(|c| c[0]).max().unwrap_or(0) - p.iter().map(|c| c[0]).min().unwrap_or(0);
+            assert!(red(&near) > 12, "{pattern:?} shows: spread {}", red(&near));
+            assert!((mean(&near) - mean(&plain)).abs() < 0.05 * mean(&plain), "{pattern:?} keeps the mean: {} against {}", mean(&near), mean(&plain));
+            // 0.01 world units a millimetre: many periods to a pixel.
+            let far = draw(&mut r, number + 1, pattern, 0.01);
+            assert!(far.iter().zip(&plain).all(|(a, b)| close(*a, *b, 1)), "{pattern:?} fades to the plain surface");
+        }
     }
 
     /// A frame of opaque triangles at the fixed view.

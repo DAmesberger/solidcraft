@@ -1,12 +1,12 @@
-//! The optional AO depth prepass. Only opaque model and preview triangles participate: their
-//! depth is drawn once into a single-sample depth map the lit fragment samples for occlusion.
+//! The optional AO depth prepass. Only opaque model and preview triangles participate (PBR
+//! surfaces too, with the product look, which occludes them): their depth is drawn once into a single-sample depth map the lit fragment samples for occlusion.
 //! The map is independent of the window's MSAA, and the depth runs the same way as the
 //! viewport's own buffer (see [`super::depth_compare`] and [`super::far_depth`]).
 //! Depth testing chooses the nearest surface; an R32Uint colour attachment stores that depth's
 //! bits for portable integer texel reads. GLSL cannot load from a depth texture, and float
 //! colour attachments are not available on every GL adapter.
 
-use super::{Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, planned_layout, shared_layout, tri_layout};
+use super::{Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_layout, planned_layout, shared_layout, tri_layout};
 
 pub(super) struct Resources {
     pub layout: wgpu::BindGroupLayout,
@@ -18,6 +18,7 @@ pub(super) struct Resources {
     planned_pipeline: wgpu::RenderPipeline,
     instanced_pipeline: wgpu::RenderPipeline,
     instanced_flat_pipeline: wgpu::RenderPipeline,
+    pbr_pipeline: wgpu::RenderPipeline,
 }
 
 fn texture(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: [u32; 2]) -> (wgpu::TextureView, wgpu::TextureView, wgpu::BindGroup) {
@@ -79,17 +80,21 @@ impl Resources {
         let built = [Some(tri_layout())];
         let evaluated = [Some(planned_layout()), Some(color_layout())];
         let placed = [Some(shared_layout()), Some(instance_layout())];
-        let pipeline = |source: TriSource| {
+        let pbr = [Some(pbr_layout())];
+        // `None`: the PBR surfaces' pipeline.
+        let pipeline = |source: Option<TriSource>| {
+            let fragment = source.map_or_else(|| "fs_ao_depth_pbr".to_string(), |s| s.fragment("fs_ao_depth"));
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sc_ao_prepass"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module,
-                    entry_point: Some(source.entry()),
+                    entry_point: Some(source.map_or("vs_pbr", |s| s.entry())),
                     buffers: match source {
-                        TriSource::Built => &built[..],
-                        TriSource::Planned => &evaluated[..],
-                        TriSource::Instanced | TriSource::InstancedFlat => &placed[..],
+                        Some(TriSource::Built) => &built[..],
+                        Some(TriSource::Planned) => &evaluated[..],
+                        Some(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
+                        None => &pbr[..],
                     },
                     compilation_options: Default::default(),
                 },
@@ -104,7 +109,7 @@ impl Resources {
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module,
-                    entry_point: Some(&source.fragment("fs_ao_depth")),
+                    entry_point: Some(&fragment),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::R32Uint,
                         blend: None,
@@ -116,14 +121,18 @@ impl Resources {
                 cache: None,
             })
         };
-        let planned_pipeline = pipeline(TriSource::Planned);
-        let instanced_pipeline = pipeline(TriSource::Instanced);
-        let instanced_flat_pipeline = pipeline(TriSource::InstancedFlat);
-        let pipeline = pipeline(TriSource::Built);
+        let planned_pipeline = pipeline(Some(TriSource::Planned));
+        let instanced_pipeline = pipeline(Some(TriSource::Instanced));
+        let instanced_flat_pipeline = pipeline(Some(TriSource::InstancedFlat));
+        let pbr_pipeline = pipeline(None);
+        let pipeline = pipeline(Some(TriSource::Built));
         let (depth, values, bind) = texture(device, &layout, [1, 1]);
-        Self { layout, bind, depth, values, size: [1, 1], pipeline, planned_pipeline, instanced_pipeline, instanced_flat_pipeline }
+        Self { layout, bind, depth, values, size: [1, 1], pipeline, planned_pipeline, instanced_pipeline, instanced_flat_pipeline, pbr_pipeline }
     }
 
+    /// Draw the depth map when `radius` is positive; `pbr` adds the PBR surfaces (the product
+    /// look's, which they occlude and are occluded by).
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -133,6 +142,7 @@ impl Resources {
         size_px: [f32; 2],
         reversed: bool,
         batches: [&Batches; 2],
+        pbr: bool,
     ) {
         let enabled = radius.is_finite() && radius > 0.0;
         // Bound memory at large window sizes; normalized coordinates also handle downsampling.
@@ -190,6 +200,13 @@ impl Resources {
             }
             for draw in batch.instanced.iter().filter(|d| d.look == super::InstanceLook::Opaque) {
                 draw.draw(&mut pass, &self.instanced_pipeline, &self.instanced_flat_pipeline, &uncounted);
+            }
+            if let Some(surfaces) = batch.pbr.as_ref().filter(|_| pbr) {
+                pass.set_pipeline(&self.pbr_pipeline);
+                for (buffer, count) in &surfaces.parts {
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..*count, 0..1);
+                }
             }
         }
     }

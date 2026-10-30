@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 
-use super::reference::{dfg, shade, unturn};
+use super::reference::{dfg, shade, shade_parts, unturn};
 use super::*;
 
 /// The environment-BRDF fit stays within its stated error of the split-sum terms integrated
@@ -242,15 +242,29 @@ fn half_floats() {
 
 #[test]
 fn look_records() {
-    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6 };
+    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6, ..ProductLook::default() };
     let record = look.record();
     assert_eq!(record[3], PRODUCT_LOOK_KIND);
     assert_eq!(ProductLook::from_record(&record), Some(look));
     assert_eq!(ProductLook::from_record(&[0.0; 16]), None, "a directional light is not a look");
     // Hostile values: clamped or replaced, never passed through.
-    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12 };
+    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12, ..ProductLook::default() };
     let tame = ProductLook::from_record(&wild.record()).unwrap();
-    assert_eq!(tame, ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE });
+    assert_eq!(
+        tame,
+        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE, ..ProductLook::default() }
+    );
+    // Pattern sizes: zero (a record without them) is the default; others are clamped.
+    let mut sized = record;
+    sized[8] = 0.0;
+    sized[9] = f32::NAN;
+    sized[10] = 1e9;
+    sized[11] = -2.0;
+    let sized = ProductLook::from_record(&sized).unwrap();
+    assert_eq!(sized.weave_pitch, ProductLook::WEAVE_7628);
+    assert_eq!((sized.ply_thickness, sized.units_per_mm), (ProductLook::PATTERN_RANGE[1], 1.0));
+    let custom = ProductLook { weave_pitch: [0.42, 0.44], ply_thickness: 0.1, units_per_mm: 1000.0, ..look };
+    assert_eq!(ProductLook::from_record(&custom.record()), Some(custom));
     let mut odd = record;
     odd[4] = -3.0;
     odd[6] = -1.0;
@@ -442,4 +456,366 @@ fn bake_size_is_fixed() {
     assert_eq!(texels, expected);
     assert_eq!(env.preset(), StudioPreset::Soft);
     assert_eq!(env.uniform_bytes().len() as u64, ENV_UNIFORM_SIZE);
+}
+
+/// Run `entry` of the production viewport and PBR shaders plus `probe` (WGSL that reads
+/// `probes: array<vec4<f32>>` at group 0 binding 2 and writes `result: array<vec4<f32>>` at
+/// binding 3) once per `invocations`, with `studio` bound as group 3 when given.
+fn run_probe(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    probe: &str,
+    entry: &str,
+    input: &[f32],
+    invocations: usize,
+    studio: Option<&StudioEnvironment>,
+) -> Vec<[f32; 4]> {
+    let source = format!("{}\n{}\n{}", crate::view::SHADER, crate::pbr::SOURCE, probe);
+    let module =
+        device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("look probe"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None },
+        count: None,
+    };
+    let probe_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[storage(2, true), storage(3, false)] });
+    let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+    let studio_layout = layout(device, wgpu::ShaderStages::COMPUTE);
+    let mut layouts = vec![Some(&probe_layout)];
+    if studio.is_some() {
+        layouts.extend([Some(&empty), Some(&empty), Some(&studio_layout)]);
+    }
+    let pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &layouts, immediate_size: 0 });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let probes = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: &input.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>(),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let size = (invocations * 16) as u64;
+    let out = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let probe_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &probe_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 2, resource: probes.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: out.as_entire_binding() },
+        ],
+    });
+    let empty_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+    let sampler = sampler(device);
+    let gpu = studio.map(|env| upload(device, queue, &studio_layout, &sampler, env));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &probe_bind, &[]);
+        if let Some(gpu) = &gpu {
+            pass.set_bind_group(1, &empty_bind, &[]);
+            pass.set_bind_group(2, &empty_bind, &[]);
+            pass.set_bind_group(3, &gpu.bind, &[]);
+        }
+        pass.dispatch_workgroups(invocations as u32, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
+    queue.submit([encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    let bytes = read.slice(..).get_mapped_range().map(|b| b.to_vec()).unwrap_or_default();
+    bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|c| std::array::from_fn(|k| f32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])))
+        .collect()
+}
+
+/// The last four floats of a PBR vertex written by `pbr_tri_with` (the detail the shader reads).
+fn vertex_detail(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> [f32; 4] {
+    let mut scene = crate::view::GpuScene::default();
+    scene.pbr_tri_with([0.0; 3], [0.0, 0.0, 1.0], surface, pattern, strength);
+    assert_eq!(scene.pbr.len(), crate::view::PBR_SIZE);
+    std::array::from_fn(|k| {
+        let at = 48 + 4 * k;
+        f32::from_le_bytes([scene.pbr[at], scene.pbr[at + 1], scene.pbr[at + 2], scene.pbr[at + 3]])
+    })
+}
+
+/// The PBR vertex: 64 bytes, its first 48 as before; `pbr_tri` names no pattern and carries the
+/// surface's coat, its IOR in the pattern float's fraction.
+#[test]
+fn pbr_vertices_carry_pattern_and_coat() {
+    use solidcraft_geom::Vec3;
+    use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
+    assert_eq!(crate::view::PBR_SIZE, 64);
+    let Ok(plain) = OpaqueSurface::new(Vec3::new(0.2, 0.4, 0.6), 0.25, 0.5, 1.45) else { panic!("valid surface") };
+    let mut scene = crate::view::GpuScene::default();
+    scene.pbr_tri([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain);
+    let floats: Vec<f32> = scene.pbr.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+    assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.0, 1.0, 0.2, 0.4, 0.6, 0.25, 0.5, 1.45, 0.25, 0.0, 0.0, 1.0]);
+    let Ok(coat) = ClearCoat::new(0.8, 0.12, 1.52) else { panic!("valid coat") };
+    let detail = vertex_detail(plain.with_clear_coat(coat), SurfacePattern::SolderMaskOverWeave, 0.4);
+    assert_eq!(detail[0].floor(), 3.0);
+    assert!((1.0 + (detail[0].fract() - 0.25) * 4.0 - 1.52).abs() < 1e-5, "{detail:?}");
+    assert_eq!(&detail[1..], &[0.4, 0.8, 0.12]);
+    for (strength, kept) in [(f32::NAN, 0.0), (-1.0, 0.0), (7.0, 1.0)] {
+        assert_eq!(vertex_detail(plain, SurfacePattern::Silkscreen, strength)[1], kept);
+    }
+    for pattern in SurfacePattern::ALL {
+        assert_eq!(SurfacePattern::from_id(pattern.id()), Some(pattern));
+    }
+    assert_eq!(SurfacePattern::from_id(5), None);
+}
+
+/// The shader's pattern ids are [`SurfacePattern::id`].
+#[test]
+fn shader_pattern_ids_are_the_enum() {
+    for (pattern, name) in [
+        (SurfacePattern::Fr4Weave, "PATTERN_WEAVE"),
+        (SurfacePattern::SolderMask, "PATTERN_MASK"),
+        (SurfacePattern::SolderMaskOverWeave, "PATTERN_MASK_OVER_WEAVE"),
+        (SurfacePattern::Silkscreen, "PATTERN_SILKSCREEN"),
+    ] {
+        let text = format!("const {name}: i32 = {};", pattern.id());
+        assert!(crate::pbr::SOURCE.contains(&text), "{text} is not in pbr::SOURCE");
+    }
+}
+
+/// The viewport's clear coat (the actual `pbr_coated`, fed the vertex detail `pbr_tri_with`
+/// writes) against the f64 surface oracle (`OpaqueSurface::with_clear_coat`), as the path
+/// tracer's `gpu_clear_coat_brdf_matches_f64_surface_oracle` does, on any native GPU.
+#[test]
+fn gpu_viewport_clear_coat_matches_f64_surface_oracle() {
+    use solidcraft_geom::Vec3;
+    use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_coat(@builtin(global_invocation_id) id: vec3<u32>) {
+    let b = id.x * 5u;
+    result[id.x] = vec4<f32>(pbr_coated(probes[b].xyz, probes[b + 1u].xyz, pbr_coat_of(probes[b + 2u]), vec3<f32>(0.0, 0.0, 1.0), probes[b + 3u].xyz, probes[b + 4u].xyz), 1.0);
+}
+"#;
+    let base = Vec3::new(0.8, 0.5, 0.2);
+    let pairs = [
+        (Vec3::Z, Vec3::Z),
+        (Vec3::new(0.5, 0.2, 1.0), Vec3::new(-0.4, 0.3, 0.8)),
+        (Vec3::new(1.0, 0.0, 0.02), Vec3::new(-1.0, 0.1, 0.02)),
+        (Vec3::new(0.0, 0.7, 0.7), Vec3::new(0.1, -0.7, 0.7)),
+    ];
+    let mut cases = Vec::new();
+    for metallic in [0.0, 1.0] {
+        for base_ior in [1.0, 1.5] {
+            for roughness in [0.045, 0.12, 0.5] {
+                for ior in [1.0, 1.5, 3.0] {
+                    for weight in [0.5, 1.0] {
+                        let (Ok(under), Ok(coat)) = (OpaqueSurface::new(base, metallic, 0.3, base_ior), ClearCoat::new(weight, roughness, ior))
+                        else {
+                            panic!("valid surface")
+                        };
+                        for (view, light) in pairs {
+                            let (Some(view), Some(light)) = (view.normalized(), light.normalized()) else { panic!("unit") };
+                            cases.push((under, under.with_clear_coat(coat), view, light));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut input = Vec::new();
+    for (under, coated, view, light) in &cases {
+        input.extend([0.8, 0.5, 0.2, 0.0, under.metallic() as f32, under.roughness() as f32, under.dielectric_ior() as f32, 0.0]);
+        input.extend(vertex_detail(*coated, SurfacePattern::None, 0.0));
+        input.extend([view.x as f32, view.y as f32, view.z as f32, 0.0, light.x as f32, light.y as f32, light.z as f32, 0.0]);
+    }
+    let got = run_probe(&device, &queue, probe, "probe_coat", &input, cases.len(), None);
+    assert_eq!(got.len(), cases.len());
+    for ((under, coated, view, light), g) in cases.iter().zip(&got) {
+        let Ok(expected) = coated.brdf(Vec3::Z, *view, *light) else { panic!("valid BRDF") };
+        for (a, b) in g.iter().zip([expected.x, expected.y, expected.z]) {
+            assert!(
+                (f64::from(*a) - b).abs() <= 3e-3 * b.abs() + 2e-5,
+                "m={}, base ior={}, coat {:?}, v={view:?}, l={light:?}: {a} vs {b}",
+                under.metallic(),
+                under.dielectric_ior(),
+                coated.clear_coat()
+            );
+        }
+    }
+}
+
+/// A clear coat in the studio: its own reflection plus the base it passes. White furnace: a
+/// coated white surface still reflects exactly what it receives; and the actual WGSL term on the
+/// baked studio matches the CPU reference.
+#[test]
+fn coated_environment_term_conserves_energy_and_matches_the_gpu() {
+    let furnace = StudioEnvironment::furnace(1.0);
+    let n = [0.0, 0.0, 1.0];
+    for coat_roughness in [0.045, 0.2, 0.6] {
+        for weight in [0.5, 1.0] {
+            for nv in [0.05_f64, 0.4, 1.0] {
+                let v = [(1.0 - nv * nv).sqrt(), 0.0, nv];
+                for (metallic, ior) in [(1.0, 1.5), (0.0, 1.0), (0.0, 1.5)] {
+                    let parts = shade_parts(&furnace, [1.0; 3], metallic, 0.4, ior, [weight, coat_roughness, 1.5], n, v, 0.3);
+                    let total: Rgb = std::array::from_fn(|k| parts[0][k] + parts[1][k] + parts[2][k]);
+                    assert!(total.iter().all(|c| (c - 1.0).abs() < 1e-3), "coat r={coat_roughness} w={weight} nv={nv} m={metallic}: {total:?}");
+                    assert!(parts[1][0] > 0.0, "the coat reflects");
+                }
+                // A coat at IOR 1 is no coat.
+                let plain = shade(&furnace, [0.3; 3], 0.0, 0.4, 1.5, n, v, 0.0);
+                let matched = shade_parts(&furnace, [0.3; 3], 0.0, 0.4, 1.5, [weight, coat_roughness, 1.0], n, v, 0.0);
+                assert!((0..3).all(|k| (matched[0][k] + matched[2][k] - plain[k]).abs() < 1e-12 && matched[1][k] == 0.0));
+            }
+        }
+    }
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_coated_ibl(@builtin(global_invocation_id) id: vec3<u32>) {
+    let b = id.x * 5u;
+    let p = pbr_ibl_parts(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, probes[b + 3u].xyz, probes[b + 4u].xyz, probes[b + 4u].w);
+    result[id.x] = vec4<f32>(p.specular + p.coat + p.diffuse, 1.0);
+}
+"#;
+    // (base, metallic, roughness, ior, coat, normal, view, rotation)
+    type Case = (Rgb, f64, f64, f64, Rgb, Rgb, Rgb, f64);
+    let cases: Vec<Case> = vec![
+        ([0.06, 0.24, 0.07], 0.0, 0.6, 1.0, [1.0, 0.06, 1.52], [0.0, 0.0, 1.0], unit([0.3, 0.2, 0.9]), 0.0),
+        ([0.06, 0.24, 0.07], 0.0, 0.6, 1.0, [1.0, 0.2, 1.52], unit([0.1, -0.2, 0.95]), unit([-0.5, 0.4, 0.6]), 1.2),
+        ([0.95, 0.64, 0.54], 1.0, 0.25, 1.5, [0.5, 0.1, 1.5], [0.0, 0.0, 1.0], unit([0.6, -0.3, 0.7]), 2.0),
+        ([0.5, 0.5, 0.5], 0.0, 0.8, 1.5, [1.0, 0.4, 2.0], unit([0.8, 0.0, 0.6]), unit([0.2, 0.1, 0.97]), 0.0),
+    ];
+    let mut input = Vec::new();
+    for (base, metallic, roughness, ior, coat, n, v, rotation) in &cases {
+        input.extend(
+            [
+                base[0], base[1], base[2], 0.0, *metallic, *roughness, *ior, 0.0, coat[0], coat[1], coat[2], 0.0, n[0], n[1], n[2], 0.0, v[0], v[1],
+                v[2], *rotation,
+            ]
+            .map(|x| x as f32),
+        );
+    }
+    for (env, name) in [(&StudioEnvironment::bake(StudioPreset::Product), "product studio"), (&furnace, "furnace")] {
+        let got = run_probe(&device, &queue, probe, "probe_coated_ibl", &input, cases.len(), Some(env));
+        assert_eq!(got.len(), cases.len());
+        for ((base, metallic, roughness, ior, coat, n, v, rotation), g) in cases.iter().zip(&got) {
+            let p = shade_parts(env, *base, *metallic, *roughness, *ior, *coat, *n, *v, *rotation);
+            for k in 0..3 {
+                let expected = p[0][k] + p[1][k] + p[2][k];
+                assert!((f64::from(g[k]) - expected).abs() <= 0.04 * expected + 0.01, "{name}, coat {coat:?}: {g:?} against {expected}");
+            }
+        }
+    }
+}
+
+/// The product look's patterns, through the actual `look_detail`: a weave with two yarn
+/// families and over-under parity at the given pitch (zero mean, so it fades to the plain
+/// colour), an edge's weave along the edge and up through the plies, a mask's orange peel (normal
+/// only), silkscreen grain, and every pattern gone where its period is below the pixel.
+#[test]
+fn gpu_patterns_have_their_period_parity_and_mean() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_detail(@builtin(global_invocation_id) id: vec3<u32>) {
+    let b = id.x * 5u;
+    let d = look_detail(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, probes[b + 3u], probes[b + 4u]);
+    result[id.x] = vec4<f32>(d.n, d.albedo);
+}
+"#;
+    let pitch = ProductLook::WEAVE_7628;
+    let ply = ProductLook::PLY_7628;
+    let params = |units: f32| [pitch[0], pitch[1], ply, units];
+    // (position, normal, footprint, pattern, strength, units per mm)
+    let mut cases: Vec<([f32; 3], [f32; 3], f32, SurfacePattern, f32, f32)> = Vec::new();
+    let up = [0.0, 0.0, 1.0];
+    // 0..4: parity and period of the weave on a face.
+    let p0 = [0.8 * pitch[0], 0.5 * pitch[1], 0.0];
+    for shift in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 0.0]] {
+        cases.push(([p0[0] + shift[0] * pitch[0], p0[1] + shift[1] * pitch[1], 0.0], up, 0.0, SurfacePattern::Fr4Weave, 1.0, 1.0));
+    }
+    // 4: the same point in world units of 0.1 mm (the pattern keeps its size in millimetres).
+    cases.push(([p0[0] * 10.0, p0[1] * 10.0, 0.0], up, 0.0, SurfacePattern::Fr4Weave, 1.0, 10.0));
+    // 5, 6: a footprint of one pitch fades the weave to its mean, and no pattern is no change.
+    cases.push((p0, up, pitch[0], SurfacePattern::Fr4Weave, 1.0, 1.0));
+    cases.push((p0, up, 0.0, SurfacePattern::None, 1.0, 1.0));
+    // 7..10: an edge facing +X: unchanged along X, changed along Y and up through a ply.
+    let e0 = [3.0, 0.3 * pitch[1], 0.6 * ply];
+    for shift in [[0.0, 0.0, 0.0], [0.37, 0.0, 0.0], [0.0, pitch[1], 0.0], [0.0, 0.0, ply]] {
+        cases.push(([e0[0] + shift[0], e0[1] + shift[1], e0[2] + shift[2]], [1.0, 0.0, 0.0], 0.0, SurfacePattern::Fr4Weave, 1.0, 1.0));
+    }
+    let grid = 24;
+    let start = cases.len();
+    // A grid over one full repeat (2 × 2 cells) of each pattern, then of the grain and peel.
+    for pattern in [SurfacePattern::Fr4Weave, SurfacePattern::SolderMask, SurfacePattern::SolderMaskOverWeave, SurfacePattern::Silkscreen] {
+        for j in 0..grid {
+            for i in 0..grid {
+                let x = 2.0 * pitch[0] * (i as f32 + 0.5) / grid as f32 + 10.0 * pitch[0];
+                let y = 2.0 * pitch[1] * (j as f32 + 0.5) / grid as f32 + 4.0 * pitch[1];
+                cases.push(([x, y, 0.0], up, 0.0, pattern, 0.5, 1.0));
+            }
+        }
+    }
+    let mut input = Vec::new();
+    for (p, n, footprint, pattern, strength, units) in &cases {
+        input.extend([p[0], p[1], p[2], 0.0, n[0], n[1], n[2], 0.0, *footprint, *footprint, *footprint, 0.0]);
+        input.extend([pattern.id() as f32 + 0.25, *strength, 0.0, 1.0]);
+        input.extend(params(*units));
+    }
+    let got = run_probe(&device, &queue, probe, "probe_detail", &input, cases.len(), None);
+    assert_eq!(got.len(), cases.len());
+    let albedo = |i: usize| got[i][3];
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+    assert!(!close(albedo(0), albedo(1)), "the next cell along X has the other yarn on top: {} {}", albedo(0), albedo(1));
+    assert!(close(albedo(0), albedo(2)), "a diagonal neighbour has the same yarn on top");
+    assert!(close(albedo(0), albedo(3)), "the repeat is two cells");
+    assert!((albedo(0) - albedo(4)).abs() < 1e-3, "units per millimetre keep the size");
+    assert!(close(albedo(5), 1.0) && got[5][..3] == [0.0, 0.0, 1.0], "a pitch-wide footprint shows the mean: {:?}", got[5]);
+    assert!(albedo(6) == 1.0 && got[6][..3] == [0.0, 0.0, 1.0], "no pattern");
+    assert!(close(albedo(7), albedo(8)), "along an edge's normal nothing changes");
+    assert!(!close(albedo(7), albedo(9)) || !close(albedo(7), albedo(10)), "an edge's weave runs along it and through the plies");
+    assert!(got[7][0] > 0.99, "an edge's normal stays near its own: {:?}", got[7]);
+    let block = |k: usize| &got[start + k * grid * grid..start + (k + 1) * grid * grid];
+    let mean = |b: &[[f32; 4]]| b.iter().map(|g| f64::from(g[3])).sum::<f64>() / b.len() as f64;
+    let spread = |b: &[[f32; 4]]| b.iter().map(|g| g[3]).fold(f32::MIN, f32::max) - b.iter().map(|g| g[3]).fold(f32::MAX, f32::min);
+    let tilt = |b: &[[f32; 4]]| b.iter().map(|g| g[2]).fold(1.0, f32::min);
+    let (weave, peel, over, grain) = (block(0), block(1), block(2), block(3));
+    assert!((mean(weave) - 1.0).abs() < 0.01, "the weave's mean is the plain colour: {}", mean(weave));
+    assert!(spread(weave) > 0.2, "the weave shows: {}", spread(weave));
+    assert!(tilt(weave) < 0.99999 && tilt(weave) > 0.99, "a small relief on bare laminate: {}", tilt(weave));
+    assert!(peel.iter().all(|g| g[3] == 1.0), "orange peel keeps the colour");
+    assert!(tilt(peel) < 0.99999 && tilt(peel) > 0.995, "orange peel tilts the normal a little: {}", tilt(peel));
+    // Under a mask the weave shows in the colour only; the normal is the mask's own peel.
+    assert!((mean(over) - 1.0).abs() < 0.01 && (spread(over) - spread(weave)).abs() < 1e-4, "weave shows through a mask");
+    // The same peel at full strength (over the weave) and at half (on its own): twice the slope.
+    assert!(over.iter().zip(peel).all(|(o, p)| o[2] <= p[2] + 1e-6) && tilt(over) < tilt(peel), "the mask's peel at full strength");
+    assert!(spread(grain) > 0.05 && (mean(grain) - 1.0).abs() < 0.05, "silkscreen grain: {} {}", spread(grain), mean(grain));
+    assert!(got.iter().all(|g| g.iter().all(|c| c.is_finite()) && (g[0] * g[0] + g[1] * g[1] + g[2] * g[2] - 1.0).abs() < 1e-4));
 }

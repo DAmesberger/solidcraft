@@ -159,7 +159,10 @@ The static legacy `cpu-raster` descriptor retains its previous capabilities.
 No host gains HDRI, refraction, progressive/final rendering or EXR support.
 
 Look colors are decoded from sRGB8 to linear sRGB once in the shared document/scene
-adapter. PBR GPU vertices carry linear reflectance and optical parameters. The CPU
+adapter. PBR GPU vertices (64 bytes) carry linear reflectance and optical parameters,
+plus the product look's detail (a pattern, its strength and the surface's clear coat).
+The default preview reads none of that detail: a coated body previews uncoated, as
+below, and only an embedding client's opt-in product look draws the coat. The CPU
 rasterizer interpolates world position and normals with perspective correction;
 the GPU uses the corresponding fragment interpolation. Both use the original
 [opaque BRDF](render-surface.md) and three fixed neutral directional lights in Z-up
@@ -175,7 +178,8 @@ alpha blending, including when seen in front of an opaque PBR surface; that is n
 glass optics. Nondefault exposure/environment controls remain explicitly unsupported
 in SolidCraft's own app; an embedding client can opt into the product look below.
 
-Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
+Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices (64 bytes
+each since they carry the product look's detail, so a third fewer PBR triangles fit).
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
 capture, ownership, cancellation, stale-result rejection and PNG export policies
 remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
@@ -188,13 +192,16 @@ parity and the viewport BRDF probe stay as they are. A frame turns it on by putt
 `ProductLook` record among its product lights:
 
 ```rust
-use solidcraft_gpu::view::{ProductLook, StudioPreset};
-let look = ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0 };
+use solidcraft_gpu::view::{ProductLook, StudioPreset, SurfacePattern};
+let look = ProductLook { exposure: 1.0, studio: StudioPreset::Product, ..ProductLook::default() };
 frame.product_lights = Some(lights_with(look.record())); // one of the 21 slots
+scene.pbr_tri_with(p, n, surface_with_coat, SurfacePattern::SolderMaskOverWeave, 0.3);
 ```
 
 The record (`PRODUCT_LOOK_KIND` = 6) lights nothing; the frame's other product lights
-still do. Its first occurrence among the 21 lights the shader reads selects the look;
+still do. Its layout is `[0, 0, 0, 6, exposure, intensity, rotation, studio id, weave
+pitch x, weave pitch y, ply thickness, units per mm, 0, 0, 0, 0]`; zero pattern sizes
+are the defaults, so a record without them keeps the 7628 weave in millimetres. Its first occurrence among the 21 lights the shader reads selects the look;
 the uniform carries its slot + 1 in `product_lights_meta.z`, so no `Frame` field and
 no `Frame` literal changes. Out-of-range values are clamped (exposure and intensity
 to [0, 1024], rotation wrapped into [0, 2π)) and non-finite ones replaced by the
@@ -246,9 +253,47 @@ in Unreal Engine 4*), filtered importance sampling (Křivánek and Colbert 2008,
 compensation (Fdez-Agüera 2019; Filament documentation). The PBR Neutral curve is
 adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
 
-Still out of reach with the look: cast shadows and ambient occlusion on PBR surfaces,
-clear coats, textures, crisp rectangular highlights (the cube's resolution limits the
-sharpest reflections), and any parity with the CPU hosts, which keep the fixed studio.
+The look also draws three things the default preview leaves out:
+
+- **Clear coat.** A vertex written by `GpuScene::pbr_tri_with` (or `pbr_tri`) carries its
+  surface's `ClearCoat` (weight, roughness, IOR; the IOR rides in the pattern float's
+  fraction, `id + 0.25 + (IOR − 1) / 4`). For direct light `pbr_coated` is the shared
+  coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
+  GGX dielectric lobe over the base, which it attenuates at entry and exit by an upper bound
+  of its directional reflectance. In the studio the coat reflects its single-scattering
+  albedo w·(F0·A + B) at its own roughness and passes the rest to the base; the ambient
+  product light reaches the base through the same factor. The interface Fresnel is counted
+  once: a layer under a lacquer (a solder mask's pigmented body) takes base IOR 1, which has
+  no interface of its own (no specular, no Fresnel attenuation of its diffuse), so only the
+  coat reflects at the air boundary. A client that keeps a base IOR above 1 under a coat
+  models two interfaces on purpose.
+- **Ambient occlusion.** With a frame's `ao_radius` above zero, PBR surfaces join the depth
+  prepass (a PBR pipeline there, drawn only with the look) and `fs_pbr` calls the solid
+  pipelines' `occlusion()`. Occlusion scales only indirect light: the studio's diffuse
+  term and the ambient product light by the occlusion, the studio's specular (base and coat)
+  by specular occlusion `clamp((n·v + ao)^exp2(−16α − 1) − 1 + ao, 0, 1)` at each lobe's α
+  (Lagarde and de Rousiers 2014, *Moving Frostbite to PBR*; mathematics only). Direct product
+  lights are never occluded. Product-preview frames (`Frame::product`) draw no prepass, as
+  before, so they stay unoccluded.
+- **Procedural patterns** (`SurfacePattern`), evaluated in the shader from the world
+  position in millimetres (`units_per_mm`), with no textures or UVs:
+  `Fr4Weave` is a plain weave of two yarn families with over-under parity at
+  `weave_pitch` (default glass style 7628: 44 × 31 ends per inch, so 0.577 × 0.819 mm; 0.173
+  mm thick, from Isola's published glass fabric data), varying the albedo by up to ±0.3 ×
+  strength and adding a small relief (6 µm × strength); on an edge (a normal within 45° of
+  horizontal) it runs along the edge and up through plies of `ply_thickness`.
+  `SolderMask` is orange peel, a normal-only waviness at 1.2 mm and 0.35 mm wavelengths
+  (12 µm and 2 µm relief). `SolderMaskOverWeave` is the same peel at full strength with the
+  weave showing through the albedo only. `Silkscreen` is grain at 0.05 mm and 0.16 mm cells
+  (±18 % albedo, 2 µm relief). These sizes and amplitudes are visual estimates, not measured
+  surface data. Each pattern has zero mean in the albedo and fades to it by the pixel's
+  footprint (`fwidth` of the world position, taken in `fs_pbr` before any branch, so it is
+  valid WGSL on the web): fully shown at a footprint of a fifth of its period, gone at 0.6.
+
+Still out of reach with the look: cast shadows, textures and board-space layer images,
+true subsurface or absorption in a coat, crisp rectangular highlights (the cube's
+resolution limits the sharpest reflections), and any parity with the CPU hosts, which keep
+the fixed studio and draw no coat in the viewport sense above.
 
 Tests (`crates/gpu/src/view/ibl/tests.rs`, `view.rs`): white furnace (every level,
 irradiance π, white metal, white diffuse and white dielectric reflect 1 at every
@@ -259,7 +304,16 @@ lookups on a native GPU against the CPU reference, the tone curve, the dither's
 distribution, the record's sanitising, the uniform slot, the frame key, and GPU frames
 showing that a frame without the look draws the documented Reinhard preview with no
 dither (against the CPU BRDF) while the look dithers, follows PBR Neutral and adds the
-studio, supersampled and cached too.
+studio, supersampled and cached too. For the coat, occlusion and patterns: the actual
+`pbr_coated` against the f64 `OpaqueSurface::with_clear_coat` oracle on any native GPU
+(fed the vertex detail `pbr_tri_with` writes), a coated white furnace and the coated studio
+term against its CPU reference, the patterns' parity, period, size in millimetres, edge
+orientation, zero mean and fade through the actual `look_detail`, the vertex layout, and
+GPU frames showing that without the look a coat, any pattern and an occlusion radius change
+no pixel, while with it the coated pixel is the oracle's through PBR Neutral, a block
+darkens the floor beside it only in the studio's light, and a pattern fades to the plain
+surface. The derivatives guard scans `pbr::SOURCE` and also stops at unparenthesised
+branches, loops and `continue`.
 
 ## Validation and original example
 
