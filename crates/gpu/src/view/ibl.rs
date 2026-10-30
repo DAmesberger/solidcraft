@@ -4,9 +4,10 @@
 //! environment-BRDF fit and multiple-scattering compensation, Khronos PBR Neutral tone mapping
 //! with exposure, and a ±1 LSB triangular dither.
 //!
-//! Nothing changes unless a frame's product lights carry a [`ProductLook`] record (kind
-//! [`PRODUCT_LOOK_KIND`]): the fixed studio and the per-channel Reinhard preview stay the default
-//! (docs/render-opaque-pbr.md). The bake needs no compute shaders, so it runs on WebGL2 too.
+//! Nothing changes unless a frame names a [`ProductLook`] (`Frame::product_look`): the fixed
+//! studio and the per-channel Reinhard preview stay the default (docs/render-opaque-pbr.md). The
+//! bake needs no compute shaders, so it runs on WebGL2 too; it never runs inside the renderer
+//! ([`StudioBake`]).
 //!
 //! Sources (mathematics only; no code or data copied): split-sum prefiltering (Karis 2013, "Real
 //! Shading in Unreal Engine 4"), filtered importance sampling (Křivánek and Colbert 2008, GPU Gems
@@ -19,14 +20,10 @@ use std::f64::consts::PI;
 
 use wgpu::util::DeviceExt;
 
-/// The product-light kind that carries a [`ProductLook`] record rather than a light.
-pub const PRODUCT_LOOK_KIND: f32 = 6.0;
 /// Side of the prefiltered cube map's sharpest level, in texels.
-pub const ENV_SIZE: u32 = 128;
+pub(crate) const ENV_SIZE: u32 = 128;
 /// Levels of the prefiltered cube map: level `m` holds perceptual roughness `m / (ENV_MIPS - 1)`.
-pub const ENV_MIPS: u32 = 6;
-/// The shader reads at most this many product lights.
-const MAX_LIGHTS: usize = 21;
+pub(crate) const ENV_MIPS: u32 = 6;
 /// GGX samples per texel of each rough level (filtered importance sampling keeps them smooth).
 const SPECULAR_SAMPLES: u32 = 64;
 /// The source level the irradiance terms are projected from (32 × 32 texels a face).
@@ -63,10 +60,10 @@ impl StudioPreset {
     }
 }
 
-/// The opt-in product look of a frame: append [`ProductLook::record`] to `Frame::product_lights`
-/// (which then must be `Some`). The record takes one of the 21 light slots and lights nothing
-/// itself; the frame's other product lights still light the scene. Without a record a frame keeps
-/// the default preview, unchanged.
+/// The opt-in product look of a frame (`Frame::product_look`). The frame's product lights, if any,
+/// still light the scene, and the look's studio lights it from all around (once installed:
+/// `Renderer::set_studio_environment`); the fixed three-light studio of the default preview does
+/// not. Without a look a frame keeps the default preview, unchanged.
 ///
 /// With the look, PBR surfaces also show their clear coat, ambient occlusion (from a frame's
 /// `ao_radius`) on the studio's and the ambient lights, and the procedural [`SurfacePattern`]
@@ -115,51 +112,16 @@ impl ProductLook {
     /// Smallest and largest `units_per_mm` a record keeps.
     pub const UNITS_RANGE: [f32; 2] = [1e-6, 1e6];
 
-    /// The product-light record that turns the look on: `[0, 0, 0, PRODUCT_LOOK_KIND, exposure,
-    /// intensity, rotation, studio id, weave pitch x, weave pitch y, ply thickness, units per mm,
-    /// 0, …]`. Out-of-range values are clamped, non-finite ones replaced by the defaults.
-    pub fn record(&self) -> [f32; 16] {
+    /// The uniform the shaders read: (exposure, studio intensity, studio rotation, 1) and (weave
+    /// pitch x, weave pitch y, ply thickness, units per mm), of [`ProductLook::sanitized`].
+    pub(crate) fn uniform(&self) -> [f32; 8] {
         let look = self.sanitized();
-        let mut record = [0.0; 16];
-        record[3] = PRODUCT_LOOK_KIND;
-        record[4] = look.exposure;
-        record[5] = look.intensity;
-        record[6] = look.rotation;
-        record[7] = look.studio.id() as f32;
-        record[8] = look.weave_pitch[0];
-        record[9] = look.weave_pitch[1];
-        record[10] = look.ply_thickness;
-        record[11] = look.units_per_mm;
-        record
+        [look.exposure, look.intensity, look.rotation, 1.0, look.weave_pitch[0], look.weave_pitch[1], look.ply_thickness, look.units_per_mm]
     }
 
-    /// The look a record carries (`None`: not a look record). Zero pattern sizes are the defaults.
-    pub fn from_record(record: &[f32; 16]) -> Option<Self> {
-        if record[3] != PRODUCT_LOOK_KIND {
-            return None;
-        }
-        let id = record[7];
-        let studio = if (0.0..16.0).contains(&id) { StudioPreset::from_id(id as u32) } else { None };
-        Some(
-            ProductLook {
-                exposure: record[4],
-                studio: studio.unwrap_or_default(),
-                rotation: record[6],
-                intensity: record[5],
-                weave_pitch: [record[8], record[9]],
-                ply_thickness: record[10],
-                units_per_mm: record[11],
-            }
-            .sanitized(),
-        )
-    }
-
-    /// The first look record among the lights the shader reads, and its slot.
-    pub fn find(lights: &[[f32; 16]]) -> Option<(usize, Self)> {
-        lights.iter().take(MAX_LIGHTS).enumerate().find_map(|(slot, light)| Self::from_record(light).map(|look| (slot, look)))
-    }
-
-    fn sanitized(self) -> Self {
+    /// The look the renderer draws: out-of-range values clamped, non-finite ones (and pattern
+    /// lengths of zero or less) replaced by the defaults, the rotation within [0, 2π).
+    pub fn sanitized(self) -> Self {
         let scale = |x: f32| if x.is_finite() { x.clamp(0.0, Self::MAX_SCALE) } else { 1.0 };
         // A length: positive and finite within `range`, else `default`.
         let length = |x: f32, range: [f32; 2], default: f32| if x.is_finite() && x > 0.0 { x.clamp(range[0], range[1]) } else { default };
@@ -461,12 +423,224 @@ pub struct StudioEnvironment {
     irradiance: [Rgb; 9],
 }
 
+/// Where a bake's radiance comes from.
+#[derive(Clone, Copy)]
+enum Radiance {
+    Studio(&'static Studio),
+    /// The same radiance everywhere (the white furnace of the tests).
+    #[cfg(test)]
+    Constant(f64),
+}
+
+impl Radiance {
+    fn at(self, d: Rgb) -> Rgb {
+        match self {
+            Radiance::Studio(s) => studio_radiance(s, d),
+            #[cfg(test)]
+            Radiance::Constant(c) => [c; 3],
+        }
+    }
+}
+
+/// A studio bake in bounded steps ([`StudioBake::step`]), for a client that cannot bake on another
+/// thread (the web has no `std::thread`) or wants to spread the work over frames. The renderer
+/// never bakes: a client bakes (all at once off the window thread with
+/// [`StudioEnvironment::bake`], or step by step here) and installs the result with
+/// `Renderer::set_studio_environment`.
+pub struct StudioBake {
+    preset: StudioPreset,
+    radiance: Radiance,
+    /// The sharpest level's texels so far, while it is being drawn.
+    sharp: Vec<[f32; 3]>,
+    /// The source pyramid (the sharpest level halved down), once the sharpest level is drawn.
+    source: Vec<Level>,
+    irradiance: [Rgb; 9],
+    /// The prefiltered levels done so far, and the texels of the one in progress.
+    levels: Vec<Level>,
+    current: Vec<[f32; 3]>,
+    /// The GGX samples (cos θ, φ, source lod) of the level in progress.
+    samples: Vec<(f64, f64, f64)>,
+    /// The next row of the level in progress, counted over its six faces.
+    row: usize,
+}
+
+impl StudioBake {
+    /// Work units per row: the sharpest level evaluates the radiance 4 times a texel, a rough
+    /// level takes [`SPECULAR_SAMPLES`] samples a texel.
+    const SHARP_SAMPLES: usize = 4;
+    /// A step size that keeps a frame's share of the bake short: at most 1.8 ms in an optimised
+    /// native build (measured, docs/render-opaque-pbr.md; a debug or wasm build is slower), 152
+    /// steps a studio.
+    pub const FRAME_WORK: usize = 16_384;
+
+    pub fn new(preset: StudioPreset) -> Self {
+        Self::with_radiance(preset, Radiance::Studio(studio(preset)))
+    }
+
+    fn with_radiance(preset: StudioPreset, radiance: Radiance) -> Self {
+        let size = ENV_SIZE as usize;
+        StudioBake {
+            preset,
+            radiance,
+            sharp: Vec::with_capacity(6 * size * size),
+            source: Vec::new(),
+            irradiance: [[0.0; 3]; 9],
+            levels: Vec::new(),
+            current: Vec::new(),
+            samples: Vec::new(),
+            row: 0,
+        }
+    }
+
+    /// The studio being baked.
+    pub fn preset(&self) -> StudioPreset {
+        self.preset
+    }
+
+    /// Whether every level is baked.
+    pub fn is_done(&self) -> bool {
+        !self.source.is_empty() && self.levels.len() >= self.source.len()
+    }
+
+    /// Bake whole rows until about `work` units are done (at least one row; a unit is one
+    /// radiance or GGX sample). Returns whether the bake is done.
+    pub fn step(&mut self, work: usize) -> bool {
+        let mut done = 0;
+        while !self.is_done() {
+            done += self.row_step();
+            if done >= work {
+                break;
+            }
+        }
+        self.is_done()
+    }
+
+    /// The baked studio, once [`StudioBake::is_done`] (`None` before).
+    pub fn finish(self) -> Option<StudioEnvironment> {
+        self.is_done().then_some(StudioEnvironment { preset: self.preset, levels: self.levels, irradiance: self.irradiance })
+    }
+
+    /// One row of the level in progress; its work units.
+    fn row_step(&mut self) -> usize {
+        if self.source.is_empty() {
+            return self.sharp_row();
+        }
+        let m = self.levels.len();
+        let Some(size) = self.source.get(m).map(|l| l.size) else { return 1 };
+        if self.row == 0 {
+            self.samples = specular_samples(m);
+            self.current = Vec::with_capacity(6 * size * size);
+        }
+        let (face, y) = (self.row / size, self.row % size);
+        for x in 0..size {
+            let c = prefilter(&self.source, &self.samples, face, x, y, size);
+            self.current.push(c);
+        }
+        self.row += 1;
+        if self.row >= 6 * size {
+            self.levels.push(Level { size, texels: std::mem::take(&mut self.current) });
+            self.row = 0;
+        }
+        size * SPECULAR_SAMPLES as usize
+    }
+
+    /// One row of the sharpest level: the radiance at 2 × 2 points in each texel. After its last
+    /// row, the source pyramid and the irradiance terms.
+    fn sharp_row(&mut self) -> usize {
+        let size = ENV_SIZE as usize;
+        let n = size as f64;
+        let (face, y) = (self.row / size, self.row % size);
+        for x in 0..size {
+            let mut c = [0.0; 3];
+            for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                let d = face_direction(face, 2.0 * (x as f64 + ox) / n - 1.0, 2.0 * (y as f64 + oy) / n - 1.0);
+                add(&mut c, self.radiance.at(d), 0.25);
+            }
+            self.sharp.push(c.map(|v| v as f32));
+        }
+        self.row += 1;
+        if self.row >= 6 * size {
+            let mut source = vec![Level { size, texels: std::mem::take(&mut self.sharp) }];
+            while source.len() < ENV_MIPS as usize {
+                let Some(last) = source.last() else { break };
+                let next = last.halved();
+                source.push(next);
+            }
+            self.irradiance = StudioEnvironment::project(source.get(SH_LEVEL).or(source.last()));
+            if let Some(sharp) = source.first() {
+                self.levels.push(sharp.clone());
+            }
+            self.source = source;
+            self.row = 0;
+        }
+        size * Self::SHARP_SAMPLES
+    }
+}
+
+/// The GGX samples (cos θ, φ, source lod) prefiltering level `m` takes, with the source level
+/// each reads (filtered importance sampling).
+fn specular_samples(m: usize) -> Vec<(f64, f64, f64)> {
+    let top = (ENV_MIPS - 1) as f64;
+    let n = ENV_SIZE as f64;
+    // One texel's solid angle at the sharpest level.
+    let texel_angle = 4.0 * PI / (6.0 * n * n);
+    let roughness = m as f64 / top;
+    let a2 = roughness.powi(4);
+    (0..SPECULAR_SAMPLES)
+        .map(|i| {
+            let (u1, u2) = hammersley(i, SPECULAR_SAMPLES);
+            let cos_t = ((1.0 - u1) / (1.0 + (a2 - 1.0) * u1)).sqrt();
+            let denominator = cos_t * cos_t * (a2 - 1.0) + 1.0;
+            let pdf = a2 / (PI * denominator * denominator) / 4.0;
+            let lod = 0.5 * (1.0 / (f64::from(SPECULAR_SAMPLES) * pdf.max(1e-12) * texel_angle)).log2() + 1.0;
+            (cos_t, 2.0 * PI * u2, lod)
+        })
+        .collect()
+}
+
+/// One prefiltered texel (`x`, `y` of `face` at a level of `size`) from the source pyramid.
+fn prefilter(source: &[Level], samples: &[(f64, f64, f64)], face: usize, x: usize, y: usize, size: usize) -> [f32; 3] {
+    let s = 2.0 * (x as f64 + 0.5) / size as f64 - 1.0;
+    let t = 2.0 * (y as f64 + 0.5) / size as f64 - 1.0;
+    let normal = face_direction(face, s, t);
+    let helper = if normal[2].abs() < 0.999 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+    let tx = unit(cross(helper, normal));
+    let ty = cross(normal, tx);
+    let (mut sum, mut weight) = ([0.0; 3], 0.0);
+    for &(cos_t, phi, lod) in samples {
+        let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
+        let (sp, cp) = phi.sin_cos();
+        let h = [
+            tx[0] * sin_t * cp + ty[0] * sin_t * sp + normal[0] * cos_t,
+            tx[1] * sin_t * cp + ty[1] * sin_t * sp + normal[1] * cos_t,
+            tx[2] * sin_t * cp + ty[2] * sin_t * sp + normal[2] * cos_t,
+        ];
+        let nh = dot(normal, h);
+        let l = [2.0 * nh * h[0] - normal[0], 2.0 * nh * h[1] - normal[1], 2.0 * nh * h[2] - normal[2]];
+        let nl = dot(normal, l);
+        if nl <= 0.0 {
+            continue;
+        }
+        let c = sample(source, unit(l), lod);
+        add(&mut sum, c, nl);
+        weight += nl;
+    }
+    let w = if weight > 0.0 { 1.0 / weight } else { 0.0 };
+    sum.map(|v| (v * w) as f32)
+}
+
 impl StudioEnvironment {
-    /// Bake `preset` (about 1 MB of texels; tens of milliseconds in an optimised build). Pure CPU
-    /// work with no GPU or I/O, so a client may run it off the window thread.
+    /// Bake `preset` all at once (about 1 MB of texels; tens of milliseconds in an optimised
+    /// build). Pure CPU work with no GPU or I/O: run it off the window thread, or bake in steps
+    /// with [`StudioBake`] where there are no threads.
     pub fn bake(preset: StudioPreset) -> Self {
-        let s = studio(preset);
-        Self::from_radiance(preset, |d| studio_radiance(s, d))
+        Self::run(StudioBake::new(preset))
+    }
+
+    fn run(mut bake: StudioBake) -> Self {
+        let preset = bake.preset;
+        while !bake.step(usize::MAX) {}
+        bake.finish().unwrap_or(StudioEnvironment { preset, levels: Vec::new(), irradiance: [[0.0; 3]; 9] })
     }
 
     /// The studio this was baked from.
@@ -474,89 +648,10 @@ impl StudioEnvironment {
         self.preset
     }
 
-    fn from_radiance(preset: StudioPreset, radiance: impl Fn(Rgb) -> Rgb) -> Self {
-        let size = ENV_SIZE as usize;
-        // The sharpest level: the radiance at 2 × 2 points in each texel.
-        let mut texels = Vec::with_capacity(6 * size * size);
-        let n = size as f64;
-        for face in 0..6 {
-            for y in 0..size {
-                for x in 0..size {
-                    let mut c = [0.0; 3];
-                    for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                        let d = face_direction(face, 2.0 * (x as f64 + ox) / n - 1.0, 2.0 * (y as f64 + oy) / n - 1.0);
-                        let r = radiance(d);
-                        add(&mut c, r, 0.25);
-                    }
-                    texels.push(c.map(|v| v as f32));
-                }
-            }
-        }
-        let mut source = vec![Level { size, texels }];
-        while source.len() < ENV_MIPS as usize {
-            let Some(last) = source.last() else { break };
-            let next = last.halved();
-            source.push(next);
-        }
-        let irradiance = Self::project(source.get(SH_LEVEL).or(source.last()));
-        let mut levels = Vec::with_capacity(source.len());
-        if let Some(sharp) = source.first() {
-            levels.push(sharp.clone());
-        }
-        let top = (ENV_MIPS - 1) as f64;
-        // One texel's solid angle at the sharpest level, for the filtered importance sampling.
-        let texel_angle = 4.0 * PI / (6.0 * n * n);
-        for (m, base) in source.iter().enumerate().skip(1) {
-            let roughness = m as f64 / top;
-            let a2 = roughness.powi(4);
-            let samples: Vec<(f64, f64, f64)> = (0..SPECULAR_SAMPLES)
-                .map(|i| {
-                    let (u1, u2) = hammersley(i, SPECULAR_SAMPLES);
-                    let cos_t = ((1.0 - u1) / (1.0 + (a2 - 1.0) * u1)).sqrt();
-                    let denominator = cos_t * cos_t * (a2 - 1.0) + 1.0;
-                    let pdf = a2 / (PI * denominator * denominator) / 4.0;
-                    let lod = 0.5 * (1.0 / (f64::from(SPECULAR_SAMPLES) * pdf.max(1e-12) * texel_angle)).log2() + 1.0;
-                    (cos_t, 2.0 * PI * u2, lod)
-                })
-                .collect();
-            let size = base.size;
-            let mut texels = Vec::with_capacity(6 * size * size);
-            for face in 0..6 {
-                for y in 0..size {
-                    for x in 0..size {
-                        let s = 2.0 * (x as f64 + 0.5) / size as f64 - 1.0;
-                        let t = 2.0 * (y as f64 + 0.5) / size as f64 - 1.0;
-                        let normal = face_direction(face, s, t);
-                        let helper = if normal[2].abs() < 0.999 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
-                        let tx = unit(cross(helper, normal));
-                        let ty = cross(normal, tx);
-                        let (mut sum, mut weight) = ([0.0; 3], 0.0);
-                        for &(cos_t, phi, lod) in &samples {
-                            let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
-                            let (sp, cp) = phi.sin_cos();
-                            let h = [
-                                tx[0] * sin_t * cp + ty[0] * sin_t * sp + normal[0] * cos_t,
-                                tx[1] * sin_t * cp + ty[1] * sin_t * sp + normal[1] * cos_t,
-                                tx[2] * sin_t * cp + ty[2] * sin_t * sp + normal[2] * cos_t,
-                            ];
-                            let nh = dot(normal, h);
-                            let l = [2.0 * nh * h[0] - normal[0], 2.0 * nh * h[1] - normal[1], 2.0 * nh * h[2] - normal[2]];
-                            let nl = dot(normal, l);
-                            if nl <= 0.0 {
-                                continue;
-                            }
-                            let c = sample(&source, unit(l), lod);
-                            add(&mut sum, c, nl);
-                            weight += nl;
-                        }
-                        let w = if weight > 0.0 { 1.0 / weight } else { 0.0 };
-                        texels.push(sum.map(|v| (v * w) as f32));
-                    }
-                }
-            }
-            levels.push(Level { size, texels });
-        }
-        StudioEnvironment { preset, levels, irradiance }
+    /// A studio of constant radiance `c` everywhere.
+    #[cfg(test)]
+    fn constant(c: f64) -> Self {
+        Self::run(StudioBake::with_radiance(StudioPreset::Product, Radiance::Constant(c)))
     }
 
     /// The irradiance polynomial of a level's radiance: its nine spherical-harmonic terms, each
@@ -819,18 +914,21 @@ impl Studios {
 /// perceptual roughness `r` and `t = 1 − n·v`: P(r, t) + (1 − G1(n·v)) Q(r, t). Rows are r⁰, r¹,
 /// r²; columns t⁰ … t³. SolidCraft's own least-squares fit to [`reference::dfg`] over n·v in
 /// [0.02, 1] and r in [0.045, 1]: largest error 0.046 (A) and 0.023 (B), RMS 0.006 and 0.004.
-pub const ENV_BRDF_A: [[[f32; 4]; 3]; 2] = [
+#[cfg(test)]
+pub(crate) const ENV_BRDF_A: [[[f32; 4]; 3]; 2] = [
     [[1.00560, -0.56397, 2.50123, -2.93657], [0.32333, -0.09745, -2.44274, 2.89048], [-1.07421, 4.87385, -9.53132, 5.20517]],
     [[-27.45309, 62.21089, -24.05595, -10.77288], [10.98918, 41.63909, -157.76626, 106.99327], [9.57360, -85.17991, 167.93185, -93.69565]],
 ];
-pub const ENV_BRDF_B: [[[f32; 4]; 3]; 2] = [
+#[cfg(test)]
+pub(crate) const ENV_BRDF_B: [[[f32; 4]; 3]; 2] = [
     [[-0.02603, 0.65203, -2.71929, 3.09764], [0.09148, -3.19509, 11.5273, -9.30966], [-0.07161, 5.26964, -16.16043, 8.05334]],
     [[-30.15892, 134.44678, -183.67455, 78.98073], [44.8516, -207.80166, 299.57468, -136.8757], [-20.09456, 90.78933, -127.08962, 59.86296]],
 ];
 
 /// [`ENV_BRDF_A`] and [`ENV_BRDF_B`] at `n·v` and perceptual roughness `r`, each in [0, 1] and
 /// their sum (the white-furnace albedo of F0 = 1) at most one.
-pub fn env_brdf(nv: f32, r: f32) -> (f32, f32) {
+#[cfg(test)]
+pub(crate) fn env_brdf(nv: f32, r: f32) -> (f32, f32) {
     let nv = nv.clamp(1e-4, 1.0);
     let a2 = (r * r) * (r * r);
     let g = 2.0 * nv / (nv + (a2 + (1.0 - a2) * nv * nv).sqrt());
@@ -855,7 +953,8 @@ pub fn env_brdf(nv: f32, r: f32) -> (f32, f32) {
 /// Khronos PBR Neutral tone mapping (`look_tone` in the viewport shader): linear Rec. 709 in,
 /// [0, 1] out. Adapted from the Khronos Group's PBR Neutral reference (Apache-2.0; see
 /// ATTRIBUTION.md).
-pub fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
+#[cfg(test)]
+pub(crate) fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     const START: f32 = 0.8 - 0.04;
     const DESATURATION: f32 = 0.15;
     let c = c.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });

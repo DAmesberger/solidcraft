@@ -159,10 +159,9 @@ The static legacy `cpu-raster` descriptor retains its previous capabilities.
 No host gains HDRI, refraction, progressive/final rendering or EXR support.
 
 Look colors are decoded from sRGB8 to linear sRGB once in the shared document/scene
-adapter. PBR GPU vertices (64 bytes) carry linear reflectance and optical parameters,
-plus the product look's detail (a pattern, its strength and the surface's clear coat).
-The default preview reads none of that detail: a coated body previews uncoated, as
-below, and only an embedding client's opt-in product look draws the coat. The CPU
+adapter. PBR GPU vertices (48 bytes) carry linear reflectance and optical parameters;
+a coated body previews uncoated, as below. Only an embedding client's opt-in product
+look writes 64-byte vertices with more detail, into a stream of their own. The CPU
 rasterizer interpolates world position and normals with perspective correction;
 the GPU uses the corresponding fragment interpolation. Both use the original
 [opaque BRDF](render-surface.md) and three fixed neutral directional lights in Z-up
@@ -178,8 +177,7 @@ alpha blending, including when seen in front of an opaque PBR surface; that is n
 glass optics. Nondefault exposure/environment controls remain explicitly unsupported
 in SolidCraft's own app; an embedding client can opt into the product look below.
 
-Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices (64 bytes
-each since they carry the product look's detail, so a third fewer PBR triangles fit).
+Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
 capture, ownership, cancellation, stale-result rejection and PNG export policies
 remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
@@ -188,27 +186,36 @@ remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
 
 The GPU viewport has a second, opt-in path for clients that embed it (Pcbcraft's PCB
 view). SolidCraft's own app never sends it, so everything above, the `cpu-product`
-parity and the viewport BRDF probe stay as they are. A frame turns it on by putting a
-`ProductLook` record among its product lights:
+parity and the viewport BRDF probe stay as they are, and so do its memory and upload
+bounds: plain PBR vertices stay 48 bytes. A frame turns the look on with
+`Frame::product_look`, and a client bakes and installs the studio itself:
 
 ```rust
-use solidcraft_gpu::view::{ProductLook, StudioPreset, SurfacePattern};
-let look = ProductLook { exposure: 1.0, studio: StudioPreset::Product, ..ProductLook::default() };
-frame.product_lights = Some(lights_with(look.record())); // one of the 21 slots
+use solidcraft_gpu::view::{ProductLook, StudioEnvironment, StudioPreset, SurfacePattern};
+// Off the window thread (or step by step with `StudioBake` where there are no threads):
+let studio = StudioEnvironment::bake(StudioPreset::Product);
+renderer.set_studio_environment(&device, &queue, &studio);
+frame.product_look = Some(ProductLook { exposure: 1.0, studio: StudioPreset::Product, ..ProductLook::default() });
 scene.pbr_tri_with(p, n, surface_with_coat, SurfacePattern::SolderMaskOverWeave, 0.3);
 ```
 
-The record (`PRODUCT_LOOK_KIND` = 6) lights nothing; the frame's other product lights
-still do. Its layout is `[0, 0, 0, 6, exposure, intensity, rotation, studio id, weave
-pitch x, weave pitch y, ply thickness, units per mm, 0, 0, 0, 0]`; zero pattern sizes
-are the defaults, so a record without them keeps the 7628 weave in millimetres. Its first occurrence among the 21 lights the shader reads selects the look;
-the uniform carries its slot + 1 in `product_lights_meta.z`, so no `Frame` field and
-no `Frame` literal changes. Out-of-range values are clamped (exposure and intensity
-to [0, 1024], rotation wrapped into [0, 2π)) and non-finite ones replaced by the
-defaults before upload. The frame cache key already hashes the product lights, so any
-change to the look draws a new picture.
+The look takes none of the 21 product-light slots; the frame's product lights, if any,
+still light the scene, and the fixed three-light studio of the default preview does not.
+The uniform carries the look in two `vec4`s after the lights: (exposure, intensity,
+rotation, 1) and (weave pitch x, weave pitch y, ply thickness, units per mm), all zero
+without a look. Out-of-range values are clamped (exposure and intensity to [0, 1024],
+rotation wrapped into [0, 2π), pattern lengths to [0.01, 100] mm) and non-finite or
+non-positive ones replaced by the defaults before upload (`ProductLook::sanitized`).
+The frame cache key hashes the drawn look, so any change to it draws a new picture.
 
-With the look, the PBR shader (and the scalar product-light shading of non-PBR faces):
+`GpuScene::pbr_tri_with` writes 64-byte vertices (the 48 of `pbr_tri`, then the pattern,
+its strength and the clear coat) into `GpuScene::pbr_detailed`, drawn by a second PBR
+pipeline (`vs_pbr_detailed`); `pbr_tri` writes no detail and carries no coat. The detail
+varying is flat (`@interpolate(flat, either)`, which WebGL2 supports), since the coat's
+IOR rides in the fraction of the pattern float and is compared exactly; the shader also
+snaps an IOR within 10⁻⁴ of 1 to 1.
+
+With the look, the PBR shader:
 
 - adds a procedural **studio** to the product lights: `Product` (four softboxes over a
   light grey cyclorama and a dark floor), `Soft` (two large softboxes, bright cyclorama)
@@ -230,16 +237,26 @@ With the look, the PBR shader (and the scalar product-light shading of non-PBR f
   look variant of the filter that dithers the mean again, so averaging does not cancel
   the dither into bands.
 
+Non-PBR faces get no studio (their pipelines have no studio group): under the look they
+are lit by the frame's product lights alone, through the same exposure, PBR Neutral and
+dither. A look frame with no product lights therefore draws non-PBR faces black; a client
+that wants them lit gives them PBR surfaces or product lights.
+
 The studio is baked on the CPU, so it also works on WebGL2 (no compute shaders): 2 × 2
 radiance samples per texel of the sharpest level, a box pyramid of it, and 64 GGX
 samples per texel of each rougher level with filtered importance sampling; the
-irradiance terms are projected from the 32 × 32 level. A bake takes about 75–95 ms in
+irradiance terms are projected from the 32 × 32 level. A bake takes about 75–110 ms in
 an optimised build on an Apple M-series laptop (measured, three presets) and about
-1 MB of texels. `StudioEnvironment::bake(preset)` is plain CPU work a client can run on
-another thread and hand to `Renderer::set_studio_environment`; otherwise the first frame
-that names a preset bakes it during `prepare`. The PBR pipeline gains bind group 3 (the
-cube, its sampler and the irradiance uniform); a stand-in black cube is bound without a
-look. Groups 1 and 2 of its layout are the solid pipelines' (accessibility, occlusion).
+1 MB of texels. The renderer never bakes (that would stall the window thread): until a
+client installs a preset's studio with `Renderer::set_studio_environment`, the look
+draws without it (a stand-in black cube). `StudioEnvironment::bake(preset)` is plain
+CPU work for another thread; where there are no threads (the web), `StudioBake` bakes
+in bounded steps, a frame's share at a time: `StudioBake::FRAME_WORK` is 152 steps a
+studio, each at most 1.8 ms in an optimised native build (measured, three presets),
+with the same result as the whole bake. The PBR pipelines gain bind group 3 (the cube,
+its sampler and the irradiance uniform); the stand-in is bound without a look. Groups 1
+and 2 of their layout are the solid pipelines' (accessibility, occlusion). Group 3 is
+the last group WebGL2's limit of four allows.
 
 The environment-BRDF fit is SolidCraft's own: polynomials in perceptual roughness and
 `1 − n·v` plus a Smith-masking term, least-squares fitted to the split-sum scale and bias
@@ -255,7 +272,7 @@ adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
 
 The look also draws three things the default preview leaves out:
 
-- **Clear coat.** A vertex written by `GpuScene::pbr_tri_with` (or `pbr_tri`) carries its
+- **Clear coat.** A vertex written by `GpuScene::pbr_tri_with` carries its
   surface's `ClearCoat` (weight, roughness, IOR; the IOR rides in the pattern float's
   fraction, `id + 0.25 + (IOR − 1) / 4`). For direct light `pbr_coated` is the shared
   coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
@@ -268,7 +285,7 @@ The look also draws three things the default preview leaves out:
   coat reflects at the air boundary. A client that keeps a base IOR above 1 under a coat
   models two interfaces on purpose.
 - **Ambient occlusion.** With a frame's `ao_radius` above zero, PBR surfaces join the depth
-  prepass (a PBR pipeline there, drawn only with the look) and `fs_pbr` calls the solid
+  prepass (the two PBR vertex layouts there, drawn only with the look) and `fs_pbr` calls the solid
   pipelines' `occlusion()`. Occlusion scales only indirect light: the studio's diffuse
   term and the ambient product light by the occlusion, the studio's specular (base and coat)
   by specular occlusion `clamp((n·v + ao)^exp2(−16α − 1) − 1 + ao, 0, 1)` at each lobe's α
@@ -301,19 +318,24 @@ roughness and angle), energy conservation of each prefiltered level (mean within
 irradiance against a direct cosine integral, the fit against the numerical split sum
 and the shader's coefficients against the fit, the actual WGSL environment term and cube
 lookups on a native GPU against the CPU reference, the tone curve, the dither's
-distribution, the record's sanitising, the uniform slot, the frame key, and GPU frames
+distribution, the look's sanitising, its uniform, the frame key, a stepped bake against
+the whole bake, and GPU frames
 showing that a frame without the look draws the documented Reinhard preview with no
 dither (against the CPU BRDF) while the look dithers, follows PBR Neutral and adds the
-studio, supersampled and cached too. For the coat, occlusion and patterns: the actual
+studio once installed (and never bakes it in `prepare`: a look naming a studio that is
+not installed draws the lights alone), supersampled and cached too. For the coat, occlusion and patterns: the actual
 `pbr_coated` against the f64 `OpaqueSurface::with_clear_coat` oracle on any native GPU
 (fed the vertex detail `pbr_tri_with` writes), a coated white furnace and the coated studio
 term against its CPU reference, the patterns' parity, period, size in millimetres, edge
-orientation, zero mean and fade through the actual `look_detail`, the vertex layout, and
+orientation, zero mean and fade through the actual `look_detail`, both vertex layouts, and
 GPU frames showing that without the look a coat, any pattern and an occlusion radius change
 no pixel, while with it the coated pixel is the oracle's through PBR Neutral, a block
 darkens the floor beside it only in the studio's light, and a pattern fades to the plain
 surface. The derivatives guard scans `pbr::SOURCE` and also stops at unparenthesised
-branches, loops and `continue`.
+branches, loops and `continue`. The PBR entry points (both vertex layouts, `fs_pbr` and the
+prepass's) translate to WebGL2's GLSL ES 3.00 through naga's GL backend, with the flat
+detail varying and the studio's cube; the GPU frames themselves run on a native adapter
+only (Metal here), and no browser has drawn a look frame yet.
 
 ## Validation and original example
 

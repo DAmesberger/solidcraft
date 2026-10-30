@@ -1979,6 +1979,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let slot = app.render_workspace.slot.clone();
         let callback = ViewportCallback(Frame {
             product_lights: Some(light::preview(app)?),
+            product_look: None,
             product: true,
             key,
             slot: slot.clone(),

@@ -1,10 +1,14 @@
 //! Original GPU translation of the L1 opaque surface and fixed studio reference.
 //! Appended to the existing viewport shader so camera/output conventions are shared.
 
-/// Position, normal, linear base colour and (metallic, roughness, IOR), three floats each, then
-/// the product look's detail: (pattern id + 0.25 + (coat IOR − 1) / 4, pattern strength, coat
-/// weight, coat roughness). See `GpuScene::pbr_tri_with`.
-pub const VERTEX_SIZE: usize = 64;
+/// A PBR vertex: position, normal, linear base colour and (metallic, roughness, IOR), three
+/// floats each. See `GpuScene::pbr_tri`.
+pub const VERTEX_SIZE: usize = 48;
+
+/// A PBR vertex with the product look's detail ([`VERTEX_SIZE`] bytes, then four floats: pattern
+/// id + 0.25 + (coat IOR − 1) / 4, pattern strength, coat weight, coat roughness). Only scenes
+/// that name a pattern or a coat carry them. See `GpuScene::pbr_tri_with`.
+pub const DETAILED_VERTEX_SIZE: usize = 64;
 
 /// The PBR pipeline's bind group for the product look's studio (`view::ibl`).
 pub const STUDIO_GROUP: u32 = 3;
@@ -23,7 +27,9 @@ struct PbrOut {
     @location(1) base: vec3<f32>,
     @location(2) wp: vec3<f32>,
     @location(3) parameters: vec3<f32>,
-    @location(4) detail: vec4<f32>,
+    // Flat: the coat's IOR rides in the fraction of the pattern float and is compared exactly,
+    // so it must not be interpolated (a triangle's three vertices carry the same detail).
+    @location(4) @interpolate(flat, either) detail: vec4<f32>,
 };
 
 fn pbr_unit(v: vec3<f32>) -> vec3<f32> {
@@ -37,14 +43,7 @@ fn pbr_encode(c: vec3<f32>) -> vec3<f32> {
     return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
 }
 
-@vertex
-fn vs_pbr(
-    @location(0) p: vec3<f32>,
-    @location(1) n: vec3<f32>,
-    @location(2) base: vec3<f32>,
-    @location(3) parameters: vec3<f32>,
-    @location(4) detail: vec4<f32>,
-) -> PbrOut {
+fn pbr_out(p: vec3<f32>, n: vec3<f32>, base: vec3<f32>, parameters: vec3<f32>, detail: vec4<f32>) -> PbrOut {
     var o: PbrOut;
     o.pos = u.vp * vec4<f32>(p, 1.0);
     o.n = n;
@@ -53,6 +52,24 @@ fn vs_pbr(
     o.parameters = parameters;
     o.detail = detail;
     return o;
+}
+
+// A plain PBR vertex (`pbr::VERTEX_SIZE`): no pattern (id 0) and no coat (weight 0, IOR 1).
+@vertex
+fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) base: vec3<f32>, @location(3) parameters: vec3<f32>) -> PbrOut {
+    return pbr_out(p, n, base, parameters, vec4<f32>(0.25, 0.0, 0.0, 1.0));
+}
+
+// A PBR vertex with the product look's detail (`pbr::DETAILED_VERTEX_SIZE`).
+@vertex
+fn vs_pbr_detailed(
+    @location(0) p: vec3<f32>,
+    @location(1) n: vec3<f32>,
+    @location(2) base: vec3<f32>,
+    @location(3) parameters: vec3<f32>,
+    @location(4) detail: vec4<f32>,
+) -> PbrOut {
+    return pbr_out(p, n, base, parameters, detail);
 }
 
 /// The AO prepass's depth of a PBR surface (drawn there only with the product look).
@@ -157,7 +174,9 @@ fn pbr_coated(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec3<f
 
 // A vertex's coat (weight, roughness, IOR) from its detail (`GpuScene::pbr_tri_with`).
 fn pbr_coat_of(detail: vec4<f32>) -> vec3<f32> {
-    let ior = clamp(1.0 + (fract(max(detail.x, 0.0)) - 0.25) * 4.0, 1.0, 3.0);
+    let raw = clamp(1.0 + (fract(max(detail.x, 0.0)) - 0.25) * 4.0, 1.0, 3.0);
+    // An index-matched coat is exactly 1 (no interface), as `clear_coat.rs` treats it.
+    let ior = select(raw, 1.0, abs(raw - 1.0) < 1e-4);
     return vec3<f32>(clamp(detail.z, 0.0, 1.0), clamp(detail.w, 0.045, 1.0), ior);
 }
 
@@ -237,10 +256,10 @@ const GRAIN_RELIEF: f32 = 0.002;
 
 struct PbrDetail { albedo: f32, n: vec3<f32>, };
 
-/// The look's detail parameters (the record's third vec4): weave pitch along world X and Y,
-/// ply thickness (mm) and world units per millimetre.
+/// The look's detail parameters: weave pitch along world X and Y, ply thickness (mm) and world
+/// units per millimetre.
 fn look_detail_params() -> vec4<f32> {
-    return u.product_lights[(u32(u.product_lights_meta.z) - 1u) * 4u + 2u];
+    return u.look_detail;
 }
 
 // An integer hash of a lattice point, in [0, 1].
@@ -358,7 +377,8 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
     let ambient = select(1.0, ao * pbr_coat_keep(coat, dot(n, v)), look);
     let lights = array<vec4<f32>, 3>(vec4<f32>(0.6, 0.0, 0.8, 3.0), vec4<f32>(-0.8, 0.0, 0.6, 1.0), vec4<f32>(0.0, -0.6, 0.8, 1.5));
     var radiance = vec3<f32>(0.0);
-    for (var k = 0u; k < 3u && u.product_lights_meta.x == 0.0; k += 1u) {
+    // The fixed studio lights only the default preview: the look's studio replaces it.
+    for (var k = 0u; k < 3u && u.product_lights_meta.x == 0.0 && !look; k += 1u) {
         let light = lights[k];
         radiance += pbr_coated(base, i.parameters, coat, n, v, light.xyz) * (light.w * max(dot(n, light.xyz), 0.0));
     }
@@ -367,7 +387,6 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
         let colour=u.product_lights[k*4u+1u];
         let axis=u.product_lights[k*4u+2u];
         let falloff=u.product_lights[k*4u+3u];
-        if source.w == PRODUCT_LOOK_KIND { continue; }
         if source.w == 4.0 {
             radiance += base*colour.xyz*(1.0-i.parameters.x)/3.141592653589793*ambient;
             continue;

@@ -1,12 +1,16 @@
 //! The optional AO depth prepass. Only opaque model and preview triangles participate (PBR
-//! surfaces too, with the product look, which occludes them): their depth is drawn once into a single-sample depth map the lit fragment samples for occlusion.
+//! surfaces too, with the product look, which occludes them): their depth is drawn once into a
+//! single-sample depth map the lit fragment samples for occlusion.
 //! The map is independent of the window's MSAA, and the depth runs the same way as the
 //! viewport's own buffer (see [`super::depth_compare`] and [`super::far_depth`]).
 //! Depth testing chooses the nearest surface; an R32Uint colour attachment stores that depth's
 //! bits for portable integer texel reads. GLSL cannot load from a depth texture, and float
 //! colour attachments are not available on every GL adapter.
 
-use super::{Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_layout, planned_layout, shared_layout, tri_layout};
+use super::{
+    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_detailed_layout, pbr_layout, planned_layout, shared_layout,
+    tri_layout,
+};
 
 pub(super) struct Resources {
     pub layout: wgpu::BindGroupLayout,
@@ -19,6 +23,17 @@ pub(super) struct Resources {
     instanced_pipeline: wgpu::RenderPipeline,
     instanced_flat_pipeline: wgpu::RenderPipeline,
     pbr_pipeline: wgpu::RenderPipeline,
+    pbr_detailed_pipeline: wgpu::RenderPipeline,
+}
+
+/// Where the prepass's vertices come from.
+#[derive(Clone, Copy)]
+enum Source {
+    Tris(TriSource),
+    /// PBR vertices, plain or with the product look's detail.
+    Pbr {
+        detailed: bool,
+    },
 }
 
 fn texture(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: [u32; 2]) -> (wgpu::TextureView, wgpu::TextureView, wgpu::BindGroup) {
@@ -81,20 +96,25 @@ impl Resources {
         let evaluated = [Some(planned_layout()), Some(color_layout())];
         let placed = [Some(shared_layout()), Some(instance_layout())];
         let pbr = [Some(pbr_layout())];
-        // `None`: the PBR surfaces' pipeline.
-        let pipeline = |source: Option<TriSource>| {
-            let fragment = source.map_or_else(|| "fs_ao_depth_pbr".to_string(), |s| s.fragment("fs_ao_depth"));
+        let pbr_detailed = [Some(pbr_detailed_layout())];
+        let pipeline = |source: Source| {
+            let (vertex, fragment) = match source {
+                Source::Tris(s) => (s.entry(), s.fragment("fs_ao_depth")),
+                Source::Pbr { detailed: false } => ("vs_pbr", "fs_ao_depth_pbr".to_string()),
+                Source::Pbr { detailed: true } => ("vs_pbr_detailed", "fs_ao_depth_pbr".to_string()),
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sc_ao_prepass"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module,
-                    entry_point: Some(source.map_or("vs_pbr", |s| s.entry())),
+                    entry_point: Some(vertex),
                     buffers: match source {
-                        Some(TriSource::Built) => &built[..],
-                        Some(TriSource::Planned) => &evaluated[..],
-                        Some(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
-                        None => &pbr[..],
+                        Source::Tris(TriSource::Built) => &built[..],
+                        Source::Tris(TriSource::Planned) => &evaluated[..],
+                        Source::Tris(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
+                        Source::Pbr { detailed: false } => &pbr[..],
+                        Source::Pbr { detailed: true } => &pbr_detailed[..],
                     },
                     compilation_options: Default::default(),
                 },
@@ -121,13 +141,26 @@ impl Resources {
                 cache: None,
             })
         };
-        let planned_pipeline = pipeline(Some(TriSource::Planned));
-        let instanced_pipeline = pipeline(Some(TriSource::Instanced));
-        let instanced_flat_pipeline = pipeline(Some(TriSource::InstancedFlat));
-        let pbr_pipeline = pipeline(None);
-        let pipeline = pipeline(Some(TriSource::Built));
+        let planned_pipeline = pipeline(Source::Tris(TriSource::Planned));
+        let instanced_pipeline = pipeline(Source::Tris(TriSource::Instanced));
+        let instanced_flat_pipeline = pipeline(Source::Tris(TriSource::InstancedFlat));
+        let pbr_pipeline = pipeline(Source::Pbr { detailed: false });
+        let pbr_detailed_pipeline = pipeline(Source::Pbr { detailed: true });
+        let pipeline = pipeline(Source::Tris(TriSource::Built));
         let (depth, values, bind) = texture(device, &layout, [1, 1]);
-        Self { layout, bind, depth, values, size: [1, 1], pipeline, planned_pipeline, instanced_pipeline, instanced_flat_pipeline, pbr_pipeline }
+        Self {
+            layout,
+            bind,
+            depth,
+            values,
+            size: [1, 1],
+            pipeline,
+            planned_pipeline,
+            instanced_pipeline,
+            instanced_flat_pipeline,
+            pbr_pipeline,
+            pbr_detailed_pipeline,
+        }
     }
 
     /// Draw the depth map when `radius` is positive; `pbr` adds the PBR surfaces (the product
@@ -201,11 +234,13 @@ impl Resources {
             for draw in batch.instanced.iter().filter(|d| d.look == super::InstanceLook::Opaque) {
                 draw.draw(&mut pass, &self.instanced_pipeline, &self.instanced_flat_pipeline, &uncounted);
             }
-            if let Some(surfaces) = batch.pbr.as_ref().filter(|_| pbr) {
-                pass.set_pipeline(&self.pbr_pipeline);
-                for (buffer, count) in &surfaces.parts {
-                    pass.set_vertex_buffer(0, buffer.slice(..));
-                    pass.draw(0..*count, 0..1);
+            for (surfaces, pipeline) in [(&batch.pbr, &self.pbr_pipeline), (&batch.pbr_detailed, &self.pbr_detailed_pipeline)] {
+                if let Some(surfaces) = surfaces.as_ref().filter(|_| pbr) {
+                    pass.set_pipeline(pipeline);
+                    for (buffer, count) in &surfaces.parts {
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..*count, 0..1);
+                    }
                 }
             }
         }

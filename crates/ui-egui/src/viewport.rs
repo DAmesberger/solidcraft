@@ -4230,6 +4230,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ao_samples = ao_samples(app, ui.ctx(), proj.vp.to_f32(), size_px);
         let cb = ViewportCallback(Frame {
             product_lights: None,
+            product_look: None,
             ssaa,
             ao_samples,
             product: false,
@@ -7537,6 +7538,7 @@ mod tests {
                 let e = proj.cam.eye().to_f32();
                 let frame = Frame {
                     product_lights: None,
+                    product_look: None,
                     product: false,
                     key: 1,
                     slot: slot.clone(),

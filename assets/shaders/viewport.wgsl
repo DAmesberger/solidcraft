@@ -20,6 +20,8 @@ struct U {
     sel: vec4<f32>,    // xyz a whole selected body's colour before lighting
     product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
+    look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
+    look_detail: vec4<f32>, // its pattern sizes: weave pitch x, y, ply thickness (mm), world units per mm
 };
 
 fn reversed() -> bool {
@@ -60,19 +62,15 @@ fn out_color(c: vec4<f32>) -> vec4<f32> {
     return c;
 }
 
-// The opt-in product look (`view::ProductLook`, docs/render-opaque-pbr.md): a product-light
-// record of this kind lights nothing; `product_lights_meta.z` is its slot + 1 (0: no look), and
-// its second vec4 holds exposure, studio intensity, studio rotation and the studio's id.
-const PRODUCT_LOOK_KIND: f32 = 6.0;
-
+// The opt-in product look (`Frame::product_look`, docs/render-opaque-pbr.md): `u.look.w` is 1
+// with it, 0 without.
 fn look_on() -> bool {
-    let slot = u.product_lights_meta.z;
-    return u.product_lights_meta.x > 0.0 && slot >= 1.0 && slot <= 21.0;
+    return u.look.w > 0.5;
 }
 
-/// The look's (exposure, intensity, rotation, studio); only when `look_on()`.
+/// The look's (exposure, studio intensity, studio rotation, 1); only when `look_on()`.
 fn look_params() -> vec4<f32> {
-    return u.product_lights[(u32(u.product_lights_meta.z) - 1u) * 4u + 1u];
+    return u.look;
 }
 
 /// Khronos PBR Neutral tone mapping: linear Rec. 709 in, [0, 1] out. Adapted from the Khronos
@@ -564,10 +562,10 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
     if (dot(n, v) < 0.0) { n = -n; }
-    if u.product_lights_meta.x>0.0 {
+    // The product look lights non-PBR faces with the frame's product lights only (no studio).
+    if u.product_lights_meta.x>0.0 || look_on() {
         var radiance=vec3<f32>(0.0);
         for (var k=0u;k<min(u32(u.product_lights_meta.y),21u);k+=1u) {
-            if u.product_lights[k*4u].w == PRODUCT_LOOK_KIND {continue;}
             if u.product_lights[k*4u].w == 4.0 {radiance+=to_linear(base.rgb)*u.product_lights[k*4u+1u].xyz/3.141592653589793;continue;}
             let sample=product_light_sample(k,i.wp);
             radiance+=to_linear(base.rgb)*sample[1]*(max(dot(n,sample[0]),0.0)/3.141592653589793);

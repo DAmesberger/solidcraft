@@ -51,7 +51,7 @@ impl StudioEnvironment {
 
     /// A studio of constant radiance `c` everywhere (the white furnace).
     pub(crate) fn furnace(c: f64) -> Self {
-        Self::from_radiance(super::StudioPreset::Product, |_| [c; 3])
+        Self::constant(c)
     }
 
     /// The studio's own (unbaked) radiance along `d`.

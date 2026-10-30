@@ -240,49 +240,52 @@ fn half_floats() {
     }
 }
 
+/// What the renderer draws of a look: hostile values clamped or replaced, never passed through.
 #[test]
-fn look_records() {
+fn looks_are_sanitized() {
     let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6, ..ProductLook::default() };
-    let record = look.record();
-    assert_eq!(record[3], PRODUCT_LOOK_KIND);
-    assert_eq!(ProductLook::from_record(&record), Some(look));
-    assert_eq!(ProductLook::from_record(&[0.0; 16]), None, "a directional light is not a look");
-    // Hostile values: clamped or replaced, never passed through.
+    assert_eq!(look.sanitized(), look);
+    assert_eq!(look.uniform(), [1.5, 0.6, 0.75, 1.0, ProductLook::WEAVE_7628[0], ProductLook::WEAVE_7628[1], ProductLook::PLY_7628, 1.0]);
     let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12, ..ProductLook::default() };
-    let tame = ProductLook::from_record(&wild.record()).unwrap();
     assert_eq!(
-        tame,
+        wild.sanitized(),
         ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE, ..ProductLook::default() }
     );
-    // Pattern sizes: zero (a record without them) is the default; others are clamped.
-    let mut sized = record;
-    sized[8] = 0.0;
-    sized[9] = f32::NAN;
-    sized[10] = 1e9;
-    sized[11] = -2.0;
-    let sized = ProductLook::from_record(&sized).unwrap();
+    // Pattern sizes: zero or less is the default; others are clamped.
+    let sized = ProductLook { weave_pitch: [0.0, f32::NAN], ply_thickness: 1e9, units_per_mm: -2.0, ..look }.sanitized();
     assert_eq!(sized.weave_pitch, ProductLook::WEAVE_7628);
     assert_eq!((sized.ply_thickness, sized.units_per_mm), (ProductLook::PATTERN_RANGE[1], 1.0));
     let custom = ProductLook { weave_pitch: [0.42, 0.44], ply_thickness: 0.1, units_per_mm: 1000.0, ..look };
-    assert_eq!(ProductLook::from_record(&custom.record()), Some(custom));
-    let mut odd = record;
-    odd[4] = -3.0;
-    odd[6] = -1.0;
-    odd[7] = 99.0;
-    let odd = ProductLook::from_record(&odd).unwrap();
+    assert_eq!(custom.sanitized(), custom);
+    let odd = ProductLook { exposure: -3.0, rotation: -1.0, ..look }.sanitized();
     assert_eq!(odd.exposure, 0.0);
     assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
-    assert_eq!(odd.studio, StudioPreset::Product, "an unknown studio is the default one");
-    // Found among the lights the shader reads, not past them.
-    let light = [0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let mut lights = vec![light; 3];
-    lights.push(record);
-    assert_eq!(ProductLook::find(&lights), Some((3, look)));
-    let mut far = vec![light; 21];
-    far.push(record);
-    assert_eq!(ProductLook::find(&far), None);
     for preset in StudioPreset::ALL {
         assert_eq!(StudioPreset::from_id(preset.id()), Some(preset));
+    }
+    assert_eq!(StudioPreset::from_id(99), None);
+}
+
+/// A bake in bounded steps (the web's way, a frame's share at a time) gives the same studio as one
+/// bake all at once, and each step does about the work it is given (whole rows).
+#[test]
+fn a_stepped_bake_is_the_whole_bake() {
+    let whole = StudioEnvironment::bake(StudioPreset::Contrast);
+    assert!(StudioBake::new(StudioPreset::Contrast).finish().is_none(), "nothing before the bake is done");
+    let mut bake = StudioBake::new(StudioPreset::Contrast);
+    let mut steps = 0;
+    while !bake.step(StudioBake::FRAME_WORK) {
+        steps += 1;
+        assert!(steps < 10_000, "the bake ends");
+    }
+    // The sharpest level and the rough ones in shares of a frame's work: many steps.
+    assert!(steps > 100, "{steps} steps");
+    assert!(bake.is_done() && bake.preset() == StudioPreset::Contrast);
+    let Some(stepped) = bake.finish() else { panic!("done") };
+    assert_eq!(stepped.uniform_bytes(), whole.uniform_bytes());
+    assert_eq!(stepped.levels.len(), whole.levels.len());
+    for (a, b) in stepped.levels.iter().zip(&whole.levels) {
+        assert_eq!((a.size, &a.texels), (b.size, &b.texels));
     }
 }
 
@@ -555,26 +558,35 @@ fn run_probe(
 fn vertex_detail(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> [f32; 4] {
     let mut scene = crate::view::GpuScene::default();
     scene.pbr_tri_with([0.0; 3], [0.0, 0.0, 1.0], surface, pattern, strength);
-    assert_eq!(scene.pbr.len(), crate::view::PBR_SIZE);
+    assert!(scene.pbr.is_empty());
+    assert_eq!(scene.pbr_detailed.len(), crate::view::PBR_DETAILED_SIZE);
     std::array::from_fn(|k| {
         let at = 48 + 4 * k;
-        f32::from_le_bytes([scene.pbr[at], scene.pbr[at + 1], scene.pbr[at + 2], scene.pbr[at + 3]])
+        f32::from_le_bytes([scene.pbr_detailed[at], scene.pbr_detailed[at + 1], scene.pbr_detailed[at + 2], scene.pbr_detailed[at + 3]])
     })
 }
 
-/// The PBR vertex: 64 bytes, its first 48 as before; `pbr_tri` names no pattern and carries the
-/// surface's coat, its IOR in the pattern float's fraction.
+/// The plain PBR vertex keeps its 48 bytes (the default preview's memory and upload bound are
+/// unchanged), and carries no coat; `pbr_tri_with` writes 64-byte vertices into a stream of their
+/// own, their first 48 bytes as `pbr_tri`'s, then the pattern and the coat, its IOR in the
+/// pattern float's fraction.
 #[test]
 fn pbr_vertices_carry_pattern_and_coat() {
     use solidcraft_geom::Vec3;
     use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
-    assert_eq!(crate::view::PBR_SIZE, 64);
+    assert_eq!((crate::view::PBR_SIZE, crate::view::PBR_DETAILED_SIZE), (48, 64));
     let Ok(plain) = OpaqueSurface::new(Vec3::new(0.2, 0.4, 0.6), 0.25, 0.5, 1.45) else { panic!("valid surface") };
-    let mut scene = crate::view::GpuScene::default();
-    scene.pbr_tri([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain);
-    let floats: Vec<f32> = scene.pbr.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-    assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.0, 1.0, 0.2, 0.4, 0.6, 0.25, 0.5, 1.45, 0.25, 0.0, 0.0, 1.0]);
     let Ok(coat) = ClearCoat::new(0.8, 0.12, 1.52) else { panic!("valid coat") };
+    let mut scene = crate::view::GpuScene::default();
+    scene.pbr_tri([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain.with_clear_coat(coat));
+    assert!(scene.pbr_detailed.is_empty());
+    let floats: Vec<f32> = scene.pbr.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+    assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.0, 1.0, 0.2, 0.4, 0.6, 0.25, 0.5, 1.45]);
+    scene.pbr_tri_with([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain, SurfacePattern::None, 0.0);
+    let detailed: Vec<f32> = scene.pbr_detailed.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+    assert_eq!(&detailed[..12], &floats[..]);
+    assert_eq!(&detailed[12..], &[0.25, 0.0, 0.0, 1.0], "no pattern, no coat: what `vs_pbr` gives a plain vertex");
+    assert!(crate::pbr::SOURCE.contains("vec4<f32>(0.25, 0.0, 0.0, 1.0)"), "vs_pbr's detail is the plain one");
     let detail = vertex_detail(plain.with_clear_coat(coat), SurfacePattern::SolderMaskOverWeave, 0.4);
     assert_eq!(detail[0].floor(), 3.0);
     assert!((1.0 + (detail[0].fract() - 0.25) * 4.0 - 1.52).abs() < 1e-5, "{detail:?}");
@@ -818,4 +830,39 @@ fn probe_detail(@builtin(global_invocation_id) id: vec3<u32>) {
     assert!(over.iter().zip(peel).all(|(o, p)| o[2] <= p[2] + 1e-6) && tilt(over) < tilt(peel), "the mask's peel at full strength");
     assert!(spread(grain) > 0.05 && (mean(grain) - 1.0).abs() < 0.05, "silkscreen grain: {} {}", spread(grain), mean(grain));
     assert!(got.iter().all(|g| g.iter().all(|c| c.is_finite()) && (g[0] * g[0] + g[1] * g[1] + g[2] * g[2] - 1.0).abs() < 1e-4));
+}
+
+/// The product look's PBR entry points translate to WebGL2's GLSL ES 3.00 (naga's GL backend,
+/// as wgpu's on the web): the flat detail varying and the studio's cube map included, so the
+/// look's shaders exist on WebGL2 (its four bind groups: the studio is group 3, the last).
+#[test]
+fn the_product_look_shaders_translate_for_webgl2() {
+    use naga::back::glsl;
+    let source = format!("{}\n{}", crate::view::SHADER, crate::pbr::SOURCE);
+    let module = match naga::front::wgsl::parse_str(&source) {
+        Ok(m) => m,
+        Err(e) => panic!("{}", e.emit_to_string(&source)),
+    };
+    let info = match naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default()).validate(&module) {
+        Ok(i) => i,
+        Err(e) => panic!("{e:?}"),
+    };
+    let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
+    for (stage, entry) in [
+        (naga::ShaderStage::Vertex, "vs_pbr"),
+        (naga::ShaderStage::Vertex, "vs_pbr_detailed"),
+        (naga::ShaderStage::Fragment, "fs_pbr"),
+        (naga::ShaderStage::Fragment, "fs_ao_depth_pbr"),
+    ] {
+        let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
+        let mut out = String::new();
+        let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
+            .and_then(|mut w| w.write().map(|_| ()));
+        assert!(written.is_ok(), "{entry}: {written:?}");
+        assert!(out.starts_with("#version 300 es"), "{entry}");
+        assert!(out.lines().any(|l| l.contains("flat") && l.contains("vec4")), "{entry}: the detail varying is flat");
+        if entry == "fs_pbr" {
+            assert!(out.contains("samplerCube"), "fs_pbr samples the studio's cube");
+        }
+    }
 }
