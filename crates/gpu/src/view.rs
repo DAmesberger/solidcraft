@@ -5384,7 +5384,18 @@ mod glass_tests {
             frame.product_lights = Some(vec![key]);
             frame.product_look = Some(look);
             let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
-            let (Some(l), Ok(f)) = (light.normalized(), surface.brdf(Vec3::Z, Vec3::Z, light.normalized().unwrap_or(Vec3::Z))) else {
+            // A direct light in the look is a softbox: the coat's lobe for it is widened by
+            // `LOOK_LIGHT_SPREAD` (0.1 in α), so the oracle draws that wider coat.
+            let lit = match coat {
+                Some((w, roughness, ior)) => {
+                    let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, (roughness * roughness + 0.1).sqrt(), ior) else {
+                        panic!("valid coat")
+                    };
+                    surface.with_clear_coat(c)
+                }
+                None => surface,
+            };
+            let (Some(l), Ok(f)) = (light.normalized(), lit.brdf(Vec3::Z, Vec3::Z, light.normalized().unwrap_or(Vec3::Z))) else {
                 panic!("valid BRDF")
             };
             let radiance = [f.x, f.y, f.z].map(|c| (c * 2.0 * l.z * 1.5) as f32);

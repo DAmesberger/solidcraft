@@ -241,14 +241,25 @@ const PATTERN_WEAVE: i32 = 1;
 const PATTERN_MASK: i32 = 2;
 const PATTERN_MASK_OVER_WEAVE: i32 = 3;
 const PATTERN_SILKSCREEN: i32 = 4;
-// The weave cell's mean brightness: (2/π)·Γ(3/4)/(√π·Γ(5/4)).
-const WEAVE_MEAN: f32 = 0.485588;
+// The weave's means over a cell (numerical, 2400² samples): the visible yarn's height and its
+// fibre striation.
+const WEAVE_MEAN: f32 = 0.779014;
+const WEAVE_FIBRE_MEAN: f32 = -0.003887;
 // Relative albedo swing of the weave at strength 1, and its relief (mm) on bare laminate.
-const WEAVE_CONTRAST: f32 = 0.6;
+const WEAVE_CONTRAST: f32 = 0.55;
 const WEAVE_RELIEF: f32 = 0.006;
-// Orange peel: two wavelengths (mm) and their relief (mm).
-const PEEL_WAVE: vec2<f32> = vec2<f32>(1.2, 0.35);
-const PEEL_RELIEF: vec2<f32> = vec2<f32>(0.012, 0.002);
+// A routed edge shows the plies as a subtle layering: its swing relative to a face's.
+const WEAVE_EDGE: f32 = 0.25;
+// Filament striations along each yarn: how many per yarn width, and their swing relative to
+// the yarn's crown.
+const WEAVE_FIBRES: f32 = 7.0;
+const WEAVE_FIBRE_CONTRAST: f32 = 0.3;
+// Orange peel: two long, gentle wavelengths (mm) and their relief (mm), so a gloss mask's
+// softbox reflection keeps its shape with only a slight waviness.
+const PEEL_WAVE: vec2<f32> = vec2<f32>(2.4, 0.9);
+const PEEL_RELIEF: vec2<f32> = vec2<f32>(0.006, 0.001);
+// The look's direct lights' angular half-size (rad) over two: the GGX α they add to a coat.
+const LOOK_LIGHT_SPREAD: f32 = 0.1;
 // Silkscreen grain: two cell sizes (mm), their relative albedo swing and relief (mm).
 const GRAIN_CELL: vec2<f32> = vec2<f32>(0.05, 0.16);
 const GRAIN_CONTRAST: f32 = 0.18;
@@ -284,21 +295,44 @@ fn pat_noise(p: vec2<f32>) -> f32 {
     return mix(mix(a, b, w.x), mix(d, e, w.x), w.y);
 }
 
-// One plain-weave cell at `p` (in yarn pitches), zero mean over a cell: the yarn on top is
-// crowned across its width and dives under at the cell's ends; over-under parity alternates
-// which family (along x or along y) is on top, cell by cell.
-fn pat_weave(p: vec2<f32>) -> f32 {
+// A yarn bundle's elliptic crown at `t` across it (−0.5..0.5 is its width): 1 on its axis, 0 at
+// its edges.
+fn pat_crown(t: f32) -> f32 {
+    return sqrt(max(1.0 - 4.0 * t * t, 0.0));
+}
+
+// A plain weave at `p` (in yarn pitches): warp yarns along x centred on each row, weft yarns
+// along y centred on each column, each rising over one crossing and dipping under the next, with
+// over-under parity alternating cell by cell. The visible yarn is the higher one, so each yarn
+// runs on continuously, the crossing yarn shows where it dips, and the gaps are only the
+// windows between four crossings. Returns the visible yarn's height and its filament
+// striations (running along it), both zero mean over a cell.
+fn pat_weave_parts(p: vec2<f32>) -> vec2<f32> {
     let cell = floor(p);
     let f = p - cell - vec2<f32>(0.5);
-    let c = max(cos(3.141592653589793 * f), vec2<f32>(0.0));
-    let s = sqrt(c);
-    let along_x = ((i32(cell.x) + i32(cell.y)) & 1) == 0;
-    return select(c.x * s.y, c.y * s.x, along_x) - WEAVE_MEAN;
+    let pi = 3.141592653589793;
+    let up_x = 0.5 + 0.5 * cos(pi * (p.x - 0.5 + cell.y));
+    let up_y = 0.5 - 0.5 * cos(pi * (p.y - 0.5 + cell.x));
+    let hx = pat_crown(f.y) * (0.6 + 0.4 * up_x);
+    let hy = pat_crown(f.x) * (0.6 + 0.4 * up_y);
+    let across = select(f.x, f.y, hx >= hy);
+    let fibre = cos(2.0 * pi * WEAVE_FIBRES * across) * pat_crown(across);
+    return vec2<f32>(max(hx, hy) - WEAVE_MEAN, fibre - WEAVE_FIBRE_MEAN);
+}
+
+fn pat_weave(p: vec2<f32>) -> f32 {
+    return pat_weave_parts(p).x;
 }
 
 // How much of a pattern of period `period` (mm) shows at a pixel footprint `fp` (mm).
 fn pat_fade(fp: f32, period: f32) -> f32 {
     return 1.0 - smoothstep(0.2, 0.6, fp / max(period, 1e-6));
+}
+
+// The weave's fade: its cells have sharp edges and its fibres are fine, so it is gone well
+// before its period reaches two pixels (no moiré at board distance).
+fn pat_weave_fade(fp: f32, period: f32) -> f32 {
+    return 1.0 - smoothstep(0.1, 0.3, fp / max(period, 1e-6));
 }
 
 // Value noise of lattice step `size` (mm) at `uv` (mm), faded by the footprint `fp`: its
@@ -331,11 +365,13 @@ fn look_detail(wp: vec3<f32>, n: vec3<f32>, footprint: vec3<f32>, detail: vec4<f
     if (id == PATTERN_WEAVE || id == PATTERN_MASK_OVER_WEAVE) {
         let along = abs(run.x) * k.x + abs(run.y) * k.y;
         let period = max(select(vec2<f32>(along, k.z), k.xy, top), vec2<f32>(1e-3));
-        let fade = pat_fade(fp, min(period.x, period.y));
+        let fade = pat_weave_fade(fp, min(period.x, period.y)) * select(WEAVE_EDGE, 1.0, top);
+        let fibres = pat_weave_fade(fp, min(period.x, period.y) / WEAVE_FIBRES) * WEAVE_FIBRE_CONTRAST;
         let p = uv / period;
-        let m = pat_weave(p);
+        let parts = pat_weave_parts(p);
+        let m = parts.x;
         let g = vec2<f32>(pat_weave(p + vec2<f32>(0.05, 0.0)) - m, pat_weave(p + vec2<f32>(0.0, 0.05)) - m) / (0.05 * period);
-        albedo += fade * strength * WEAVE_CONTRAST * m;
+        albedo += fade * strength * WEAVE_CONTRAST * (m + fibres * parts.y);
         if (id == PATTERN_WEAVE) { slope += fade * strength * WEAVE_RELIEF * g; }
     }
     if (id == PATTERN_MASK || id == PATTERN_MASK_OVER_WEAVE) {
@@ -369,12 +405,18 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
     if (look) {
         let detail = look_detail(i.wp, n, footprint, i.detail, look_detail_params());
         base = clamp(base * detail.albedo, vec3<f32>(0.0), vec3<f32>(1.0));
-        n = detail.n;
+        // Relief fades out toward grazing views, where it would only streak the reflections.
+        n = pbr_unit(mix(n, detail.n, smoothstep(0.05, 0.35, abs(dot(n, v)))));
         coat = pbr_coat_of(i.detail);
         // Occlusion darkens only the indirect light: the studio and the ambient kind.
         ao = occlusion(TOut(i.pos, i.n, vec4<f32>(base, 1.0), i.wp));
     }
     let ambient = select(1.0, ao * pbr_coat_keep(coat, dot(n, v)), look);
+    // In the look a direct light is a softbox, not a point: a coat's lobe for it widens by the
+    // light's angular size (Karis 2013, sphere-light roughness widening, mathematics only), so
+    // a gloss coat shows a soft highlight instead of a clipped dot. GGX stays normalised, so the
+    // light's energy is unchanged.
+    let lit_coat = select(coat, vec3<f32>(coat.x, sqrt(min(coat.y * coat.y + LOOK_LIGHT_SPREAD, 1.0)), coat.z), look);
     let lights = array<vec4<f32>, 3>(vec4<f32>(0.6, 0.0, 0.8, 3.0), vec4<f32>(-0.8, 0.0, 0.6, 1.0), vec4<f32>(0.0, -0.6, 0.8, 1.5));
     var radiance = vec3<f32>(0.0);
     // The fixed studio lights only the default preview: the look's studio replaces it.
@@ -392,7 +434,7 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
             continue;
         }
         let sample=product_light_sample(k,i.wp);
-        radiance += pbr_coated(base,i.parameters,coat,n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
+        radiance += pbr_coated(base,i.parameters,lit_coat,n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
     }
     if (look) {
         // The product look: the studio (occluded), exposure, PBR Neutral and a dithered encode.

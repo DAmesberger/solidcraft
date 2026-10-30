@@ -296,16 +296,30 @@ The look also draws three things the default preview leaves out:
   position in millimetres (`units_per_mm`), with no textures or UVs:
   `Fr4Weave` is a plain weave of two yarn families with over-under parity at
   `weave_pitch` (default glass style 7628: 44 × 31 ends per inch, so 0.577 × 0.819 mm; 0.173
-  mm thick, from Isola's published glass fabric data), varying the albedo by up to ±0.3 ×
-  strength and adding a small relief (6 µm × strength); on an edge (a normal within 45° of
-  horizontal) it runs along the edge and up through plies of `ply_thickness`.
-  `SolderMask` is orange peel, a normal-only waviness at 1.2 mm and 0.35 mm wavelengths
-  (12 µm and 2 µm relief). `SolderMaskOverWeave` is the same peel at full strength with the
+  mm thick, from Isola's published glass fabric data). Each cell's top yarn is a flattened
+  bundle (elliptic across its width, flat along its run, diving under over the cell's last
+  fifth) with filament striations along it (7 per yarn width, 0.3 of the crown's swing), so
+  the cloth reads as directional strands, not tiles. It varies the albedo by about ±0.2 ×
+  strength and adds a small relief (6 µm × strength); on an edge (a normal within 45° of
+  horizontal) it runs along the edge and up through plies of `ply_thickness`, at 0.4 of a
+  face's swing, so a routed edge is mostly plain with subtle layering.
+  `SolderMask` is orange peel, a normal-only waviness at 2.4 mm and 0.9 mm wavelengths
+  (6 µm and 1 µm relief, slopes of a few milliradians) so a gloss mask's softbox reflection
+  keeps its shape. `SolderMaskOverWeave` is the same peel at full strength with the
   weave showing through the albedo only. `Silkscreen` is grain at 0.05 mm and 0.16 mm cells
   (±18 % albedo, 2 µm relief). These sizes and amplitudes are visual estimates, not measured
   surface data. Each pattern has zero mean in the albedo and fades to it by the pixel's
   footprint (`fwidth` of the world position, taken in `fs_pbr` before any branch, so it is
-  valid WGSL on the web): fully shown at a footprint of a fifth of its period, gone at 0.6.
+  valid WGSL on the web): peel and grain are fully shown at a footprint of a fifth of their
+  period and gone at 0.6; the weave and its fibres, whose edges are sharper, are gone at 0.3
+  (well before two pixels per period, so no moiré). All relief fades out toward grazing views
+  (|n·v| from 0.35 down to 0.05), where it would only streak reflections.
+- **Softbox direct lights.** With the look, a direct product light is treated as a small
+  area light for a clear coat: the coat's GGX α for it grows by 0.1 (a light of about 0.2
+  rad half-angle; the sphere-light roughness widening of Karis 2013, *Real Shading in Unreal
+  Engine 4*, mathematics only). GGX stays normalised, so the light's energy is unchanged and
+  a gloss coat shows a soft highlight instead of a clipped dot. The studio's reflection is
+  unaffected.
 
 Still out of reach with the look: cast shadows, textures and board-space layer images,
 true subsurface or absorption in a coat, crisp rectangular highlights (the cube's

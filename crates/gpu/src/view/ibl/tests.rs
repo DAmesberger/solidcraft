@@ -823,7 +823,8 @@ fn probe_detail(@builtin(global_invocation_id) id: vec3<u32>) {
     assert!(spread(weave) > 0.2, "the weave shows: {}", spread(weave));
     assert!(tilt(weave) < 0.99999 && tilt(weave) > 0.99, "a small relief on bare laminate: {}", tilt(weave));
     assert!(peel.iter().all(|g| g[3] == 1.0), "orange peel keeps the colour");
-    assert!(tilt(peel) < 0.99999 && tilt(peel) > 0.995, "orange peel tilts the normal a little: {}", tilt(peel));
+    // Gentle: a gloss mask's softbox reflection keeps its shape (slopes of a few milliradians).
+    assert!(tilt(peel) < 0.9999995 && tilt(peel) > 0.99995, "orange peel tilts the normal a little: {}", tilt(peel));
     // Under a mask the weave shows in the colour only; the normal is the mask's own peel.
     assert!((mean(over) - 1.0).abs() < 0.01 && (spread(over) - spread(weave)).abs() < 1e-4, "weave shows through a mask");
     // The same peel at full strength (over the weave) and at half (on its own): twice the slope.
