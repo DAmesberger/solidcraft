@@ -2208,3 +2208,47 @@ fn a_parameter_change_solves_the_joints_once() {
     assert!(super::solve_counts::take().0 > 0);
     assert!(near(place(&s, "Bracket", Vec3::new(110.0, 210.0, 0.0)), Vec3::new(180.0, 50.0, 1.0)));
 }
+
+/// Joints made together (`joints`) place the parts as the same joints made one by one, in one
+/// step, and a bad entry makes none of them.
+#[test]
+fn joints_made_together_place_parts_as_one_by_one() {
+    let board = |s: &mut Session| {
+        part(s, "Board", [0.0, 0.0, -2.0]);
+        let g = occ(s, "Board");
+        run(s, "occurrence.ground", json!({"occurrence": g, "grounded": true}));
+        for k in 0..20 {
+            part(s, &format!("Pad{k}"), [-1.0, -1.0, 0.0]);
+        }
+        run(s, "component.activate", json!({"component": "root"}));
+    };
+    let joint = |s: &Session, k: usize| {
+        let at = |o: u64| json!({"occurrence": o, "point": [0, 0, 0], "z": [0, 0, 1], "x": [1, 0, 0]});
+        json!({"type": "planar", "name": format!("Hold{k}"), "a": at(occ(s, "Board")), "b": at(occ(s, &format!("Pad{k}"))),
+            "flip": true, "angle": 0, "values": [format!("{} mm", k * 3), format!("{} mm", k % 4), "15 deg"]})
+    };
+    let (mut one, mut together) = (Session::default(), Session::default());
+    board(&mut one);
+    board(&mut together);
+    for k in 0..20 {
+        let p = joint(&one, k);
+        run(&mut one, "joint.create", p);
+    }
+    let undo = together.undo.len();
+    let list: Vec<Value> = (0..20).map(|k| joint(&together, k)).collect();
+    let r = run(&mut together, "joint.create", json!({"joints": list}));
+    assert_eq!(r["joints"].as_array().map(Vec::len), Some(20), "{r}");
+    assert_eq!(together.undo.len(), undo + 1);
+    for k in 0..20 {
+        let name = format!("Pad{k}");
+        let (a, b) = (place(&one, &name, Vec3::new(1.0, 0.0, 0.0)), place(&together, &name, Vec3::new(1.0, 0.0, 0.0)));
+        assert!(near(a, b), "{name}: {a:?} vs {b:?}");
+    }
+    assert!(near(place(&together, "Pad5", Vec3::ZERO), Vec3::new(15.0, 1.0, 0.0)));
+    let doc = together.doc.clone();
+    let mut bad: Vec<Value> = (0..3).map(|k| joint(&together, k)).collect();
+    bad[2]["type"] = json!("bolted");
+    assert!(together.execute("joint.create", &json!({"joints": bad})).is_err());
+    assert!(together.execute("joint.create", &json!({"joints": [], "name": "x"})).is_err());
+    assert_eq!(together.doc, doc);
+}

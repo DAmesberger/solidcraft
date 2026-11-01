@@ -940,16 +940,35 @@ fn default_extrude_profiles(s: &Session, sketch: u64) -> ProfileSel {
     let Some(ss) = st.sketch(sketch) else { return ProfileSel::All };
     let drawn = solidcraft_sketch::find_drawn_profiles(&ss.sketch);
     let ps = if drawn.is_empty() { ss.profiles.clone() } else { drawn };
-    if ps.len() > 10_000 || ps.iter().all(|p| p.region.holes.is_empty()) {
+    // Every profile of a sketch at its size limit is looked at: a larger sketch can't be drawn,
+    // so no profile's holes are filled in by taking every profile.
+    if ps.len() > solidcraft_sketch::MAX_CURVES || ps.iter().all(|p| p.region.holes.is_empty()) {
         return ProfileSel::All;
     }
     // Each profile has the profiles directly inside it as holes, so the number of holes around a
-    // point of a profile's material is its nesting depth.
+    // point of a profile's material is its nesting depth. The holes are polygonised once and
+    // found by their boxes, so a sketch of thousands of holes (a drilled board) is not compared
+    // pair by pair.
+    let holes: Vec<(usize, solidcraft_geom::Ring<solidcraft_geom::Vec2>)> =
+        ps.iter().enumerate().flat_map(|(k, other)| other.region.holes.iter().map(move |hole| (k, hole.polyline(1e-3)))).collect();
+    let boxes = holes
+        .iter()
+        .map(|(_, ring)| {
+            ring.iter().fold(solidcraft_geom::Aabb2::EMPTY, |mut b, p| {
+                b.add(*p);
+                b
+            })
+        })
+        .collect();
+    let Some(index) = solidcraft_geom::BoxIndex::new(boxes) else { return ProfileSel::All };
     let material: Vec<_> = ps
         .iter()
         .filter(|p| {
             let probe = p.region.interior_point();
-            ps.iter().filter(|other| other.region.holes.iter().any(|hole| hole.contains(probe))).count() % 2 == 0
+            let mut around: Vec<usize> =
+                index.containing(probe).into_iter().filter_map(|h| holes.get(h)).filter(|(_, ring)| ring.contains(probe)).map(|(k, _)| *k).collect();
+            around.dedup();
+            around.len().is_multiple_of(2)
         })
         .collect();
     let all = solidcraft_sketch::without_text_counters(&ss.sketch, ps.clone());

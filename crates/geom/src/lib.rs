@@ -12,6 +12,7 @@
 mod aabb2;
 mod arcfit;
 pub mod blend;
+mod box_index;
 pub mod brep;
 pub mod bspline;
 mod bvh;
@@ -44,6 +45,7 @@ mod vec;
 pub use aabb2::Aabb2;
 pub use arcfit::MAX_FIT_PIECES;
 pub use blend::hermite_bezier;
+pub use box_index::BoxIndex;
 pub use bvh::{Bvh, MeshIndex};
 pub use chain::{Chain, Closed, Ends, Open, Path, Planar, Ring};
 pub use grid::Grid;

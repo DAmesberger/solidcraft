@@ -3584,6 +3584,41 @@ fn default_extrude_profiles_preserve_two_holes() {
     }
 }
 
+/// A plate drilled with more holes than the default profile choice once looked through (10,000:
+/// it then took every profile and filled the holes in) keeps every hole, and the holes are
+/// found by their boxes, not compared pair by pair.
+#[test]
+fn default_extrude_profiles_keep_every_hole_of_a_drilled_plate() {
+    // The faces of a plate drilled `columns` × `rows` times, extruded with the default profiles.
+    let plate = |columns: usize, rows: usize| {
+        let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+        let (w, h) = (columns as f64 + 2.0, rows as f64 + 2.0);
+        for [a, b] in [[[0.0, 0.0], [w, 0.0]], [[w, 0.0], [w, h]], [[w, h], [0.0, h]], [[0.0, h], [0.0, 0.0]]] {
+            dxf += &format!("0\nLINE\n8\n0\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n", a[0], a[1], b[0], b[1]);
+        }
+        for k in 0..columns * rows {
+            dxf += &format!("0\nCIRCLE\n8\n0\n10\n{}\n20\n{}\n40\n0.15\n", 1.5 + (k % columns) as f64, 1.5 + (k / columns) as f64);
+        }
+        dxf += "0\nENDSEC\n0\nEOF\n";
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY"}));
+        run(&mut s, "sketch.insert_dxf", json!({"text": dxf, "tolerance": 1e-6}));
+        run(&mut s, "sketch.finish", json!({}));
+        let started = std::time::Instant::now();
+        run(&mut s, "solid.extrude", json!({"distance": 1.6, "body_name": "Plate"}));
+        let st = s.model.state();
+        assert_eq!(st.bodies.len(), 1);
+        let faces = st.body("Plate").unwrap().body.face_count();
+        eprintln!("extrude of a plate with {} holes: {:?}", columns * rows, started.elapsed());
+        faces
+    };
+    let (bare, one) = (plate(0, 0), plate(1, 1));
+    let per_hole = one - bare;
+    assert!(per_hole >= 1);
+    // 10,100 holes: every one has its walls, none is filled in.
+    assert_eq!(plate(101, 100), bare + 10_100 * per_hole);
+}
+
 #[test]
 fn default_extrude_profiles_keep_even_depth_islands_and_separate_outlines() {
     let mut s = Session::default();

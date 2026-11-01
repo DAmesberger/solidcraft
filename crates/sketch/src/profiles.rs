@@ -1380,6 +1380,56 @@ fn same_region(a: &Region2, b: &Region2, tol: f64) -> bool {
     a.holes.len() == b.holes.len() && same_loop(&a.outer, &b.outer) && a.holes.iter().all(|h| b.holes.iter().any(|g| same_loop(h, g)))
 }
 
+/// Points filed in cells `tol` wide: the points within `tol` of a point lie in its cell or the
+/// eight around it, so finding them does not look at every point.
+struct PointCells {
+    tol: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Points too far out (or not finite) to file: looked at by every query.
+    loose: Vec<usize>,
+}
+
+impl PointCells {
+    fn new(points: impl Iterator<Item = Vec2>, tol: f64) -> PointCells {
+        let mut index = PointCells { tol: tol.max(1e-12), cells: std::collections::HashMap::new(), loose: Vec::new() };
+        for (i, p) in points.enumerate() {
+            match index.cell(p) {
+                Some(c) => index.cells.entry(c).or_default().push(i),
+                None => index.loose.push(i),
+            }
+        }
+        index
+    }
+
+    fn cell(&self, p: Vec2) -> Option<(i64, i64)> {
+        let (x, y) = ((p.x / self.tol).floor(), (p.y / self.tol).floor());
+        let fits = |v: f64| v.is_finite() && v.abs() < 1e15;
+        // In range of an i64 (checked just above), so the conversions are exact.
+        (fits(x) && fits(y)).then_some((x as i64, y as i64))
+    }
+
+    /// The points that may lie within `tol` of `p` (a superset), each once, in increasing order.
+    fn near(&self, p: Vec2) -> Vec<usize> {
+        let mut out = self.loose.clone();
+        match self.cell(p) {
+            Some((cx, cy)) => {
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        if let Some(v) = self.cells.get(&(cx + dx, cy + dy)) {
+                            out.extend_from_slice(v);
+                        }
+                    }
+                }
+            }
+            // A point that can't be filed is compared with every point.
+            None => out.extend(self.cells.values().flatten().copied()),
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 /// Union of regions that touch along shared boundary segments (one extrude of several adjacent
 /// profiles makes one body). Disjoint regions stay separate.
 pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
@@ -1400,23 +1450,25 @@ pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
     if segs.len() > MAX_EDGES {
         return regions.to_vec();
     }
-    // Drop pairs that run against each other (shared boundaries).
+    // Drop pairs that run against each other (shared boundaries). A segment run back over
+    // another ends where that one starts: only segments ending near its start are compared.
+    let ending = PointCells::new(segs.iter().map(Seg2::end), tol);
     let mut alive = vec![true; segs.len()];
     let mut shared = false;
     for i in 0..segs.len() {
         if !alive.get(i).copied().unwrap_or(false) {
             continue;
         }
-        for j in (i + 1)..segs.len() {
-            if alive.get(j).copied().unwrap_or(false)
-                && let (Some(a), Some(b)) = (segs.get(i), segs.get(j))
-                && same_seg(a, &b.reversed(), tol)
-            {
-                alive[i] = false;
-                alive[j] = false;
-                shared = true;
-                break;
-            }
+        let Some(a) = segs.get(i) else { continue };
+        let partner = ending
+            .near(a.start())
+            .into_iter()
+            .filter(|&j| j > i && alive.get(j).copied().unwrap_or(false))
+            .find(|&j| segs.get(j).is_some_and(|b| same_seg(a, &b.reversed(), tol)));
+        if let Some(j) = partner {
+            alive[i] = false;
+            alive[j] = false;
+            shared = true;
         }
     }
     if !shared {
@@ -1434,6 +1486,7 @@ pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
         _ => false,
     };
     let rest: Vec<Seg2> = segs.iter().zip(&alive).filter(|(_, a)| **a).map(|(s, _)| *s).collect();
+    let starting = PointCells::new(rest.iter().map(Seg2::start), tol);
     // Chain into loops, taking the sharpest left turn where several continue.
     let mut used = vec![false; rest.len()];
     let mut loops: Vec<Loop2> = Vec::new();
@@ -1457,7 +1510,9 @@ pub fn merge_regions(regions: &[Region2]) -> Vec<Region2> {
                 break;
             }
             let back = (-seg.end_tangent()).angle();
-            let next = (0..rest.len())
+            let next = starting
+                .near(end)
+                .into_iter()
                 .filter(|k| !used.get(*k).copied().unwrap_or(true) && rest.get(*k).is_some_and(|s| s.start().dist(end) <= tol))
                 .min_by(|x, y| {
                     let d = |k: usize| rest.get(k).map(|s| (back - s.start_tangent().angle()).rem_euclid(TAU)).unwrap_or(TAU);

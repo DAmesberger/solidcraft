@@ -101,7 +101,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::new("component.move_sketches", "Move Sketches to Component", move_sketches).icon("move").params("sketches: [ids or names], component"),
     CommandSpec::new("occurrence.copy", "Paste (Instance)", copy_occurrence).icon("copy")
-        .params("component (or occurrence): what to place again; path?: validates selected occurrence; parent?: component (default: the same parent); translate?: [x,y,z]; in_place?: bool (default false: the selected transform within the parent; true: where the selected placement is in the world, translate in world axes; a parent placed more than once is placed by parent_path?, else the active placement, and every instance gets the copy). Copies the selected effective transform, including pending moves"),
+        .params("component (or occurrence): what to place again; path?: validates selected occurrence; parent?: component (default: the same parent); translate?: [x,y,z]; translations?: [[x,y,z], …] (instead of translate, without in_place: one copy per offset, at most 100000, all in one step → occurrences: their ids in order); in_place?: bool (default false: the selected transform within the parent; true: where the selected placement is in the world, translate in world axes; a parent placed more than once is placed by parent_path?, else the active placement, and every instance gets the copy). Copies the selected effective transform, including pending moves"),
     CommandSpec::new("component.paste_new", "Paste New", paste_new).icon("paste").params("component: independently copy its nested definition graph and history, materials and styles; occurrence?, path?: selected source placement; parent?: component the copy goes in (default: the source placement's; not the component or one inside it); in_place?, parent_path?: as occurrence.copy; translate?: [x,y,z]. Reassigned external bodies become base geometry; retained external links and omitted boundary joints are reported"),
     CommandSpec::new("occurrence.move", "Move Occurrence", move_occurrence).icon("move")
         .params("occurrence; path?: exact placement; space?: local|world (default local); translate?: [x,y,z]; axis?: [x,y,z], angle?: radians or \"30 deg\", origin?: [x,y,z]; matrix?: [12 or 16 numbers] (instead of translate/axis/angle/origin: a rigid move as a row-major 3x4 rotation-and-translation or 4x4 matrix, flat or as rows; one that is a rotation only up to rounding is orthonormalised, a scale, shear or mirror is refused); tolerance?: largest accepted |RᵀR − I| (default 1e-9, at most 1e-3); capture?: bool (default true; false keeps it pending until Capture Position); move_grounded?: bool (default false: a grounded occurrence refuses; true moves it and it stays grounded). Nested occurrence definitions remain shared"),
@@ -489,6 +489,9 @@ pub(super) fn copy_occurrence(s: &mut Session, p: &Value) -> Result<Value> {
         occurrence_path(s, p, src.id, cmd)?;
     }
     let parent = if p.get("parent").is_some() { component(s, p, "parent", cmd)? } else { src.parent };
+    if let Some(list) = p.get("translations") {
+        return copy_occurrences(s, p, &src, comp, parent, list);
+    }
     let t = move_vector(p, "translate", Vec3::ZERO, true, cmd)?;
     let m = if bool_(p, "in_place") == Some(true) {
         placing::in_place(s, &occurrence_path(s, p, src.id, cmd)?, parent, placing::parent_path(p, cmd)?.as_deref(), t, cmd)?
@@ -501,6 +504,35 @@ pub(super) fn copy_occurrence(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let id = s.doc_mut().add_occurrence(comp, parent, m)?;
     Ok(json!({"occurrence": id, "component": comp}))
+}
+
+/// Most copies one `occurrence.copy` makes from `translations` (a design holds at most this many
+/// occurrences).
+const MAX_COPIES: usize = 100_000;
+
+/// `occurrence.copy` with `translations`: one copy of `src` per offset, in one step.
+fn copy_occurrences(s: &mut Session, p: &Value, src: &solidcraft_doc::Occurrence, comp: u64, parent: u64, list: &Value) -> Result<Value> {
+    let cmd = "occurrence.copy";
+    if p.get("translate").is_some() || bool_(p, "in_place") == Some(true) {
+        return Err(bad(cmd, "give `translations` without `translate` or `in_place`"));
+    }
+    let list = list
+        .as_array()
+        .filter(|a| !a.is_empty() && a.len() <= MAX_COPIES)
+        .ok_or_else(|| bad(cmd, format!("`translations` must list 1..{MAX_COPIES} offsets")))?;
+    let base = *s.pending_moves.get(&src.id).unwrap_or(&src.transform);
+    let mut transforms = Vec::with_capacity(list.len());
+    for v in list {
+        let t = vec3(v).filter(|t| t.is_finite() && [t.x, t.y, t.z].iter().all(|x| x.abs() <= 1e9));
+        let t = t.ok_or_else(|| bad(cmd, "each translation must be three finite numbers within the supported range"))?;
+        let m = solidcraft_doc::mat_mul(&translation(t), &base);
+        if !valid_position(&m) {
+            return Err(bad(cmd, "copy transform exceeds supported numeric range"));
+        }
+        transforms.push(m);
+    }
+    let ids = s.doc_mut().add_occurrences(comp, parent, &transforms)?;
+    Ok(json!({"occurrences": ids, "component": comp}))
 }
 
 fn paste_new(s: &mut Session, p: &Value) -> Result<Value> {
