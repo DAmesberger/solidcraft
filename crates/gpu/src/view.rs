@@ -376,6 +376,36 @@ impl SharedTris {
         })
     }
 
+    /// The shared vertices as detailed PBR vertices ([`PBR_DETAILED_SIZE`] each) in `look`, for
+    /// the same indices.
+    pub fn detailed(&self, look: PbrInstanceLook) -> Vec<u8> {
+        let material = look.floats();
+        let n = self.vertices.len() / SHARED_SIZE;
+        let mut out = Vec::with_capacity(n * PBR_DETAILED_SIZE);
+        for v in 0..n {
+            let (p, normal) = self.vertex(v as u32);
+            for x in p.iter().chain(&normal).chain(&material) {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// The triangles unshared as detailed PBR vertices in `look` (three per triangle, each lit
+    /// with the normal [`SharedTris::corners`] gives it).
+    pub fn detailed_unshared(&self, look: PbrInstanceLook) -> Vec<u8> {
+        let material = look.floats();
+        let mut out = Vec::with_capacity(self.indices.len() * PBR_DETAILED_SIZE);
+        for t in self.corners() {
+            for (p, n) in t {
+                for x in p.iter().chain(&n).chain(&material) {
+                    out.extend_from_slice(&x.to_le_bytes());
+                }
+            }
+        }
+        out
+    }
+
     /// The triangles unshared ([`SHARED_SIZE`] bytes per corner, three per triangle): for a mesh
     /// too large for one buffer.
     fn unshared(&self) -> Vec<u8> {
@@ -401,6 +431,36 @@ pub enum InstanceLook {
     Faded,
     /// With the see-through bodies ([`GpuScene::glass`]): far sides, then near sides.
     Glass,
+    /// Opaque, through the PBR pipeline with the product look's detail, as
+    /// [`GpuScene::pbr_detailed`] draws its vertices: every placement in this one material (the
+    /// placements' palette indices are not drawn). Only the model scene's own meshes draw so.
+    Pbr(PbrInstanceLook),
+}
+
+impl InstanceLook {
+    /// Drawn see-through (blended after the opaque surfaces, placements back to front).
+    pub fn see_through(self) -> bool {
+        matches!(self, InstanceLook::Faded | InstanceLook::Glass)
+    }
+}
+
+/// The PBR material an [`InstanceLook::Pbr`] mesh is drawn in: the last ten floats of a
+/// [`PBR_DETAILED_SIZE`] vertex (linear base colour, (metallic, roughness, IOR) and the detail),
+/// as their bits so it can name its triangles on the GPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PbrInstanceLook([u32; 10]);
+
+impl PbrInstanceLook {
+    /// `surface` with a procedural `pattern` at `strength`, encoded as
+    /// [`GpuScene::pbr_tri_with`] encodes a vertex's.
+    pub fn new(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> PbrInstanceLook {
+        PbrInstanceLook(GpuScene::pbr_material(surface, pattern, strength).map(f32::to_bits))
+    }
+
+    /// The material's floats, in vertex order.
+    pub fn floats(&self) -> [f32; 10] {
+        self.0.map(f32::from_bits)
+    }
 }
 
 /// Triangles drawn at several places: a part placed by many occurrences keeps one copy of its
@@ -552,7 +612,7 @@ impl GpuScene {
         }
         for m in std::mem::take(&mut self.instanced) {
             match m.look {
-                InstanceLook::Opaque => m.expand_into(&mut out.tris),
+                InstanceLook::Opaque | InstanceLook::Pbr(_) => m.expand_into(&mut out.tris),
                 InstanceLook::Faded => m.expand_into(&mut out.trans),
                 InstanceLook::Glass => m.expand_into(&mut out.glass),
             }
@@ -830,14 +890,18 @@ impl GpuScene {
         pattern: SurfacePattern,
         strength: f32,
     ) {
-        let base = surface.base_color().to_f32();
-        let parameters = Self::pbr_parameters(surface);
-        let (weight, roughness, ior) = surface.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
-        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
-        let detail = [pattern.id() as f32 + 0.25 + (ior - 1.0) / 4.0, strength, weight, roughness];
-        for value in p.into_iter().chain(n).chain(base).chain(parameters).chain(detail) {
+        for value in p.into_iter().chain(n).chain(Self::pbr_material(surface, pattern, strength)) {
             self.pbr_detailed.extend_from_slice(&value.to_le_bytes());
         }
+    }
+
+    /// The ten floats after a detailed PBR vertex's position and normal ([`GpuScene::pbr_tri_with`]).
+    fn pbr_material(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> [f32; 10] {
+        let [r, g, b] = surface.base_color().to_f32();
+        let [metallic, rough, index] = Self::pbr_parameters(surface);
+        let (weight, roughness, ior) = surface.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
+        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+        [r, g, b, metallic, rough, index, pattern.id() as f32 + 0.25 + (ior - 1.0) / 4.0, strength, weight, roughness]
     }
     pub fn tri(&mut self, p: [f32; 3], n: [f32; 3], c: PaletteIndex) {
         for v in p.iter().chain(&n) {
@@ -1191,6 +1255,10 @@ impl PlannedDraw {
     }
 }
 
+/// Names an instanced mesh's triangles on the GPU: their address, and the material of a PBR
+/// mesh (whose vertices carry it).
+type TrisKey = (usize, Option<PbrInstanceLook>);
+
 /// An [`InstancedMesh`]'s triangles on the GPU (kept while its key comes back).
 enum SharedGpu {
     /// Shared vertices and their indices.
@@ -1200,7 +1268,12 @@ enum SharedGpu {
 }
 
 impl SharedGpu {
-    fn new(device: &wgpu::Device, tris: &SharedTris) -> Option<SharedGpu> {
+    /// `tris` on the GPU: their shared vertices ([`SHARED_SIZE`]), or with `pbr` as detailed PBR
+    /// vertices in that material ([`SharedTris::detailed`]).
+    fn new(device: &wgpu::Device, tris: &SharedTris, pbr: Option<PbrInstanceLook>) -> Option<SharedGpu> {
+        if let Some(look) = pbr {
+            return Self::detailed(device, tris, look);
+        }
         let limit = device.limits().max_buffer_size;
         let index_bytes = (tris.indices.len() * 4) as u64;
         if tris.vertices.is_empty() || tris.indices.is_empty() {
@@ -1218,6 +1291,37 @@ impl SharedGpu {
             indices: buffer("sc_instanced_indices", &indices, wgpu::BufferUsages::INDEX),
             count: u32::try_from(tris.indices.len()).unwrap_or(u32::MAX),
         })
+    }
+
+    /// `tris` as detailed PBR vertices in `look`: shared and indexed when smooth, each corner its
+    /// own (lit with its triangle's normal) when flat or too large for one buffer.
+    fn detailed(device: &wgpu::Device, tris: &SharedTris, look: PbrInstanceLook) -> Option<SharedGpu> {
+        if tris.vertices.is_empty() || tris.indices.is_empty() {
+            return None;
+        }
+        let limit = device.limits().max_buffer_size;
+        let vertices = tris.detailed(look);
+        let index_bytes = (tris.indices.len() * 4) as u64;
+        if tris.flat || vertices.len() as u64 > limit || index_bytes > limit {
+            return upload(device, "sc_pbr_instanced_unshared", &tris.detailed_unshared(look), PBR_DETAILED_SIZE).map(SharedGpu::Unshared);
+        }
+        let indices: Vec<u8> = tris.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+        let buffer = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
+        };
+        Some(SharedGpu::Indexed {
+            vertices: buffer("sc_pbr_instanced_vertices", &vertices, wgpu::BufferUsages::VERTEX),
+            indices: buffer("sc_pbr_instanced_indices", &indices, wgpu::BufferUsages::INDEX),
+            count: u32::try_from(tris.indices.len()).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// Bytes on the GPU.
+    fn bytes(&self) -> u64 {
+        match self {
+            SharedGpu::Indexed { vertices, indices, .. } => vertices.size() + indices.size(),
+            SharedGpu::Unshared(batch) => batch.parts.iter().map(|(b, _)| b.size()).sum(),
+        }
     }
 }
 
@@ -1703,7 +1807,8 @@ struct Batches {
     selected_instanced: Vec<InstancedDraw>,
     /// The instanced meshes' triangles (and their levels) on the GPU, by the address of the
     /// triangles they were uploaded from (held, so it stays theirs).
-    instanced_tris: std::collections::HashMap<usize, (Arc<SharedTris>, Arc<SharedGpu>)>,
+    /// A PBR mesh's are kept by its material too ([`InstanceLook::Pbr`]).
+    instanced_tris: std::collections::HashMap<TrisKey, (Arc<SharedTris>, Arc<SharedGpu>)>,
     /// Evaluated chunks by their plans' addresses, holding the plans so the addresses stay
     /// theirs: a chunk whose plans are unchanged is not evaluated again when the scene is rebuilt.
     resident: std::collections::HashMap<Vec<usize>, (Vec<Arc<solidcraft_geom::tess::TessPlan>>, Arc<crate::GpuMesh>)>,
@@ -1742,14 +1847,17 @@ impl Batches {
                 Some((tess, encoder)) => self.planned(device, tess, encoder, &sc.planned),
                 None => Vec::new(),
             };
-            self.instanced = self.instanced(device, &sc.instanced);
+            // One set of kept triangles for the three lists, so a mesh in any of them keeps its
+            // buffers from the last scene in any of them.
+            let mut kept = std::mem::take(&mut self.instanced_tris);
+            self.instanced = self.instanced(device, &mut kept, &sc.instanced);
             self.hover_planned = sc.hover_planned;
             self.selected_planned = sc.selected_planned;
             self.hover_blocks = sc.hover_blocks;
             self.selected_blocks = sc.selected_blocks;
             self.recoloured = sc.recoloured;
-            self.hover_instanced = self.instanced(device, &sc.hover_instanced);
-            self.selected_instanced = self.instanced(device, &sc.selected_instanced);
+            self.hover_instanced = self.instanced(device, &mut kept, &sc.hover_instanced);
+            self.selected_instanced = self.instanced(device, &mut kept, &sc.selected_instanced);
             let mut kept = std::mem::take(&mut self.blocks);
             let mut order = Vec::with_capacity(sc.blocks.len());
             let mut geometry = 0;
@@ -1821,8 +1929,13 @@ impl Batches {
 
     /// The instanced meshes on the GPU: triangles uploaded once per key (kept while the key comes
     /// back with the same bytes), placements every time.
-    fn instanced(&mut self, device: &wgpu::Device, meshes: &[InstancedMesh]) -> Vec<InstancedDraw> {
-        let mut kept = std::mem::take(&mut self.instanced_tris);
+    /// `kept` holds the last scene's triangles not yet taken again.
+    fn instanced(
+        &mut self,
+        device: &wgpu::Device,
+        kept: &mut std::collections::HashMap<TrisKey, (Arc<SharedTris>, Arc<SharedGpu>)>,
+        meshes: &[InstancedMesh],
+    ) -> Vec<InstancedDraw> {
         let mut out = Vec::with_capacity(meshes.len());
         for m in meshes {
             let count = u32::try_from(m.count()).unwrap_or(u32::MAX);
@@ -1832,12 +1945,19 @@ impl Batches {
             let placements = m.instances.get(..count as usize * INSTANCE_SIZE).unwrap_or_default().to_vec();
             let mut levels = Vec::with_capacity(1 + m.levels.len());
             for (i, (tris, error)) in std::iter::once((&m.tris, 0.0f32)).chain(m.levels.iter().map(|(t, e)| (t, *e))).enumerate() {
-                let key = Arc::as_ptr(tris) as usize;
+                let pbr = match m.look {
+                    InstanceLook::Pbr(look) => Some(look),
+                    _ => None,
+                };
+                let key = (Arc::as_ptr(tris) as usize, pbr);
                 let gpu = match kept.remove(&key).or_else(|| self.instanced_tris.remove(&key)).filter(|(b, _)| Arc::ptr_eq(b, tris)) {
                     Some(t) => t,
-                    None => match SharedGpu::new(device, tris) {
+                    None => match SharedGpu::new(device, tris, pbr) {
                         Some(g) => {
-                            self.uploads.geometry += (tris.vertices.len() + tris.indices.len() * 4) as u64;
+                            self.uploads.geometry += match pbr {
+                                Some(_) => g.bytes(),
+                                None => (tris.vertices.len() + tris.indices.len() * 4) as u64,
+                            };
                             (tris.clone(), Arc::new(g))
                         }
                         None => continue,
@@ -1905,7 +2025,7 @@ impl Batches {
                 .collect();
             // See-through placements back to front (by their box's centre), so each blends over
             // what lies behind it.
-            if d.look != InstanceLook::Opaque {
+            if d.look.see_through() {
                 let depth = |i: u32| {
                     let p = d.placements.get(i as usize * INSTANCE_SIZE..(i as usize + 1) * INSTANCE_SIZE).unwrap_or_default();
                     let rows = [0, 1, 2].map(|r| [f(p, 16 * r), f(p, 16 * r + 4), f(p, 16 * r + 8), f(p, 16 * r + 12)]);
@@ -2072,6 +2192,8 @@ pub struct Renderer {
     tri_hl_instanced_flat: wgpu::RenderPipeline,
     pbr: wgpu::RenderPipeline,
     pbr_detailed: wgpu::RenderPipeline,
+    /// Detailed PBR vertices of shared triangles at each placement ([`InstanceLook::Pbr`]).
+    pbr_instanced: wgpu::RenderPipeline,
     trans: wgpu::RenderPipeline,
     /// Glass: far sides (front faces culled), then near sides (back faces culled).
     glass_far: wgpu::RenderPipeline,
@@ -2401,6 +2523,13 @@ fn shared_layout() -> wgpu::VertexBufferLayout<'static> {
 /// An instanced mesh's placements ([`INSTANCE_SIZE`]), one per instance.
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Uint32];
+    wgpu::VertexBufferLayout { array_stride: INSTANCE_SIZE as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &A }
+}
+
+/// A PBR instanced mesh's placements ([`INSTANCE_SIZE`]): the rows of the move only, after the
+/// detailed PBR vertex's locations (the palette index is not read).
+fn pbr_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    const A: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
     wgpu::VertexBufferLayout { array_stride: INSTANCE_SIZE as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &A }
 }
 
@@ -2960,16 +3089,11 @@ impl Renderer {
             bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
             immediate_size: 0,
         });
-        let pbr_pipeline = |vertex: &str, layout: wgpu::VertexBufferLayout<'static>| {
+        let pbr_pipeline = |vertex: &str, layouts: &[Option<wgpu::VertexBufferLayout<'static>>]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sc_pbr"),
                 layout: Some(&pbr_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some(vertex),
-                    buffers: &[Some(layout)],
-                    compilation_options: Default::default(),
-                },
+                vertex: wgpu::VertexState { module: &module, entry_point: Some(vertex), buffers: layouts, compilation_options: Default::default() },
                 primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
                 depth_stencil: opaque(),
                 multisample: wgpu::MultisampleState { count: t.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
@@ -2984,7 +3108,14 @@ impl Renderer {
             })
         };
         // Plain PBR vertices, and those with the product look's detail.
-        let pbr = || (pbr_pipeline("vs_pbr", pbr_layout()), pbr_pipeline("vs_pbr_detailed", pbr_detailed_layout()));
+        // Plain PBR vertices, those with the product look's detail, and those placed per instance.
+        let pbr = || {
+            (
+                pbr_pipeline("vs_pbr", &[Some(pbr_layout())]),
+                pbr_pipeline("vs_pbr_detailed", &[Some(pbr_detailed_layout())]),
+                pbr_pipeline("vs_pbr_instanced", &[Some(pbr_detailed_layout()), Some(pbr_instance_layout())]),
+            )
+        };
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -3031,7 +3162,7 @@ impl Renderer {
             let (line, line_hidden) = lines.join();
             let (overlay, guide_line) = lines_all.join();
             let (ss_blit, copy_blit, ss_filter, ss_blit_look, ss_filter_look) = blits.join();
-            let (pbr, pbr_detailed) = pbr.join();
+            let (pbr, pbr_detailed, pbr_instanced) = pbr.join();
             let (depth_reset, section_reset) = resets.join();
             let oit = oit.join();
             Renderer {
@@ -3095,6 +3226,7 @@ impl Renderer {
                 tri_hl_instanced_flat,
                 pbr,
                 pbr_detailed,
+                pbr_instanced,
                 trans,
                 glass_far,
                 glass_near,
@@ -3242,7 +3374,7 @@ impl Batches {
         self.glass.is_some()
             || self.trans.is_some()
             || self.planned.iter().any(|d| d.class != TriClass::Opaque)
-            || self.instanced.iter().any(|d| d.look != InstanceLook::Opaque)
+            || self.instanced.iter().any(|d| d.look.see_through())
             || self.block_order.iter().any(|k| self.blocks.get(k).is_some_and(|b| b.glass.is_some() || b.faded.is_some()))
     }
 
@@ -3797,6 +3929,11 @@ impl Renderer {
         pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(product_look(cb).map(|look| look.studio)), &[]);
         tris(pass, &res.pbr, &m.pbr);
         tris(pass, &res.pbr_detailed, &m.pbr_detailed);
+        // PBR meshes drawn at their placements, through the same lighting (their detailed
+        // vertices carry the material); flat levels are unshared, lit by their own normals.
+        for d in m.instanced.iter().filter(|d| matches!(d.look, InstanceLook::Pbr(_))) {
+            d.draw(pass, &res.pbr_instanced, &res.pbr_instanced, tally);
+        }
         if !cb.product {
             for (_, b) in res.clouds.values() {
                 pass.set_pipeline(&res.point);
@@ -3946,7 +4083,7 @@ impl Renderer {
                 tally.triangles(d.mesh.index_count, 1);
             }
         }
-        for d in m.instanced.iter().filter(|d| d.look != InstanceLook::Opaque) {
+        for d in m.instanced.iter().filter(|d| d.look.see_through()) {
             d.draw(pass, &p.instanced, &p.instanced_flat, tally);
         }
     }
@@ -5444,6 +5581,116 @@ mod glass_tests {
         let lit = draw(&mut r, 62, 0.0, vec![key], direct);
         let lit_occluded = draw(&mut r, 63, 4.0, vec![key], direct);
         assert_eq!(lit, lit_occluded, "direct light is not occluded");
+    }
+
+    /// A block (4 × 4, 3 high; its top's corners lean their normals outward unless `flat`) whose
+    /// lowest corner is at `at`: each face's own corners, outward.
+    fn block_mesh(at: [f64; 3], flat: bool) -> solidcraft_geom::Mesh {
+        let mut mesh = solidcraft_geom::Mesh::default();
+        let [x0, y0, z0] = at;
+        let (x1, y1, z1) = (x0 + 4.0, y0 + 4.0, z0 + 3.0);
+        let mut quad = |corners: [[f64; 3]; 4], normal: [f64; 3], lean: bool| {
+            let first = mesh.positions.len() as u32;
+            for c in corners {
+                let n = if lean {
+                    let (cx, cy) = (x0 + 2.0, y0 + 2.0);
+                    Vec3::new((c[0] - cx) * 0.1, (c[1] - cy) * 0.1, 1.0).normalized().unwrap_or(Vec3::Z)
+                } else {
+                    Vec3::new(normal[0], normal[1], normal[2])
+                };
+                mesh.positions.push(Vec3::new(c[0], c[1], c[2]));
+                mesh.normals.push(n);
+            }
+            mesh.triangles.push([first, first + 1, first + 2]);
+            mesh.triangles.push([first, first + 2, first + 3]);
+        };
+        quad([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], [0.0, 0.0, 1.0], !flat);
+        quad([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], [0.0, -1.0, 0.0], false);
+        quad([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], [1.0, 0.0, 0.0], false);
+        quad([[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]], [0.0, 1.0, 0.0], false);
+        quad([[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]], [-1.0, 0.0, 0.0], false);
+        mesh
+    }
+
+    /// A PBR mesh drawn at a placement ([`InstanceLook::Pbr`]) draws as the same triangles
+    /// written moved into the detailed PBR stream: the material, its clear coat and pattern, the
+    /// studio and the occlusion it casts on the floor all go through the same lighting, shared
+    /// (indexed) triangles and flat (unshared) ones alike.
+    #[test]
+    fn a_pbr_instanced_mesh_draws_as_its_detailed_vertices() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+        let (Ok(floor), Ok(copper), Ok(coat)) = (
+            solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.36, 0.32, 0.17), 0.0, 0.6, 1.5),
+            solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.95, 0.64, 0.54), 1.0, 0.3, 1.5),
+            solidcraft_render::clear_coat::ClearCoat::new(1.0, 0.1, 1.52),
+        ) else {
+            panic!("valid surfaces")
+        };
+        let block = copper.with_clear_coat(coat);
+        let look = PbrInstanceLook::new(block, SurfacePattern::SolderMask, 0.8);
+        let mut number = 80;
+        for flat in [false, true] {
+            let mut scene = detailed_scene(floor, SurfacePattern::Fr4Weave, 1.0);
+            let mut instanced = scene.clone();
+            // In the stream at (-2, -2, 0); instanced from (5, 5, 0), moved by (-7, -7, 0).
+            let placed = block_mesh([-2.0, -2.0, 0.0], flat);
+            for t in &placed.triangles {
+                for i in t {
+                    let (p, n) = (placed.positions[*i as usize].to_f32(), placed.normals[*i as usize].to_f32());
+                    scene.pbr_tri_with(p, n, block, SurfacePattern::SolderMask, 0.8);
+                }
+            }
+            let tris = Arc::new(SharedTris::new(&block_mesh([5.0, 5.0, 0.0], flat)));
+            assert_eq!(tris.flat, flat);
+            let mut mesh = InstancedMesh { key: 1, tris, instances: Vec::new(), look: InstanceLook::Pbr(look), levels: Vec::new() };
+            mesh.place([[1.0, 0.0, 0.0, -7.0], [0.0, 1.0, 0.0, -7.0], [0.0, 0.0, 1.0, 0.0]], PaletteIndex(0));
+            instanced.instanced.push(mesh);
+            let mut pictures = Vec::new();
+            for scene in [scene, instanced] {
+                let mut frame = Frame { key: number, ao_radius: 4.0, ..test_frame(scene, 1.0) };
+                frame.product_look = Some(ProductLook::default());
+                number += 1;
+                pictures.push(render_frame(&mut r, &device, &queue, &frame, true));
+            }
+            let (written, drawn) = (inner_pixels(&pictures[0]), inner_pixels(&pictures[1]));
+            let off = written.iter().zip(&drawn).filter(|(a, b)| !close(**a, **b, 2)).count();
+            assert!(off <= 2, "flat {flat}: {off} pixels differ");
+            // The block shows (it is not the floor) and darkens the floor beside it.
+            assert!(!close(pixel(&pictures[1], 32, 32), pixel(&pictures[1], 59, 59), 8));
+        }
+    }
+
+    /// The material of a PBR instanced mesh is what [`GpuScene::pbr_tri_with`] writes after a
+    /// vertex's position and normal, and its triangles go up as detailed vertices.
+    #[test]
+    fn a_pbr_instance_look_is_a_detailed_vertex_s_material() {
+        let (Ok(surface), Ok(coat)) = (
+            solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.2, 0.5, 0.1), 0.0, 0.4, 1.5),
+            solidcraft_render::clear_coat::ClearCoat::new(1.0, 0.06, 1.52),
+        ) else {
+            panic!("valid surface")
+        };
+        let surface = surface.with_clear_coat(coat);
+        let mut scene = GpuScene::default();
+        scene.pbr_tri_with([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], surface, SurfacePattern::SolderMaskOverWeave, 0.7);
+        let written: Vec<f32> = scene.pbr_detailed.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+        let look = PbrInstanceLook::new(surface, SurfacePattern::SolderMaskOverWeave, 0.7);
+        assert_eq!(&written[6..], &look.floats()[..]);
+        let tris = SharedTris::new(&block_mesh([0.0, 0.0, 0.0], false));
+        let shared = tris.detailed(look);
+        assert_eq!(shared.len(), tris.vertices.len() / SHARED_SIZE * PBR_DETAILED_SIZE);
+        assert_eq!(tris.detailed_unshared(look).len(), tris.indices.len() * PBR_DETAILED_SIZE);
+        // Merged for counting, its placements are opaque triangles.
+        let mut mesh = InstancedMesh { key: 2, tris: Arc::new(tris), instances: Vec::new(), look: InstanceLook::Pbr(look), levels: Vec::new() };
+        mesh.place([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], PaletteIndex(0));
+        let triangles = mesh.tris.indices.len() / 3;
+        let merged = GpuScene { instanced: vec![mesh], ..GpuScene::default() }.merged();
+        assert_eq!(merged.tris.len(), triangles * 3 * TRI_SIZE);
+        assert!(!InstanceLook::Pbr(look).see_through());
     }
 
     /// With the product look a pattern shows where its period spans pixels, and fades to the plain
