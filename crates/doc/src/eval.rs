@@ -1189,13 +1189,17 @@ impl ModelState {
     /// to the budget keep only its last few states, so setting a parameter back recomputed what
     /// had dropped out.
     fn added_bytes(&self, before: &ModelState) -> usize {
+        // Looked up by key, not compared pair by pair: a design of thousands of bodies is
+        // evaluated a feature at a time, each state charged against the one before it.
+        let shapes: std::collections::HashSet<(usize, usize)> = before.bodies.iter().map(|o| o.body.shape_key()).collect();
         let bodies: usize = self
             .bodies
             .iter()
-            .filter(|b| !before.bodies.iter().any(|o| o.body.same_shape(&b.body)))
+            .filter(|b| !shapes.contains(&b.body.shape_key()))
             .map(|b| if b.bytes > 0 { b.bytes } else { b.body.retained_bytes() })
             .sum();
-        let sketches: usize = self.sketches.iter().filter(|s| !before.sketches.iter().any(|o| Arc::ptr_eq(o, s))).map(|s| s.retained_bytes()).sum();
+        let kept: std::collections::HashSet<*const SolvedSketch> = before.sketches.iter().map(Arc::as_ptr).collect();
+        let sketches: usize = self.sketches.iter().filter(|s| !kept.contains(&Arc::as_ptr(s))).map(|s| s.retained_bytes()).sum();
         bodies + sketches + self.sheets.len() * 4096 + self.threads.len() * 192 + self.construct.len() * 192
     }
 
@@ -8420,7 +8424,13 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
         return st.clone();
     }
     let mut placed_now = PlacedBodies::default();
-    let comp_of_feature = |id: u64| doc.feature(id).map(|f| f.component).unwrap_or(0);
+    // Looked up once, not by a walk through the timeline or the occurrences for each placement.
+    let feature_components: std::collections::HashMap<u64, u64> = doc.features.iter().rev().map(|f| (f.id, f.component)).collect();
+    let comp_of_feature = |id: u64| feature_components.get(&id).copied().unwrap_or(0);
+    let mut first_occurrence: std::collections::HashMap<u64, &crate::Occurrence> = std::collections::HashMap::new();
+    for o in &doc.occurrences {
+        first_occurrence.entry(o.component).or_insert(o);
+    }
     let first_path = |comp: u64| -> Vec<u64> {
         let mut path = Vec::new();
         let mut c = comp;
@@ -8428,7 +8438,7 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             if c == 0 {
                 break;
             }
-            let Some(o) = doc.occurrence_of(c) else { break };
+            let Some(o) = first_occurrence.get(&c) else { break };
             path.insert(0, o.id);
             c = o.parent;
         }
@@ -8443,7 +8453,26 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
     let mut jobs = Vec::new();
     let owners = doc.model_body_components(st);
     let names = crate::WorldNames::new(doc, st);
-    let bodies_of = |comp: u64| st.bodies.iter().zip(&owners).filter(move |(_, owner)| **owner == comp).map(|(b, _)| b);
+    // Each component's bodies, sketches and constructions, found once: looking through every
+    // body for each placement cost a board of thousands of placed parts the square of their number.
+    let mut by_owner: std::collections::HashMap<u64, Vec<&ModelBody>> = std::collections::HashMap::new();
+    for (b, owner) in st.bodies.iter().zip(&owners) {
+        by_owner.entry(*owner).or_default().push(b);
+    }
+    let bodies_of = |comp: u64| by_owner.get(&comp).into_iter().flatten().copied();
+    let mut sketches_of: std::collections::HashMap<u64, Vec<&Arc<SolvedSketch>>> = std::collections::HashMap::new();
+    for sk in &st.sketches {
+        sketches_of.entry(comp_of_feature(sk.feature)).or_default().push(sk);
+    }
+    let mut constructs_of: std::collections::HashMap<u64, Vec<&crate::construct::Construct>> = std::collections::HashMap::new();
+    for c in &st.construct {
+        constructs_of.entry(comp_of_feature(c.feature)).or_default().push(c);
+    }
+    let mut threads_of: std::collections::HashMap<u64, Vec<_>> = std::collections::HashMap::new();
+    for t in &st.threads {
+        let comp = st.body(&t.body).map(|body| doc.model_body_component(body)).unwrap_or_else(|| comp_of_feature(t.feature));
+        threads_of.entry(comp).or_default().push(t);
+    }
     for (comp, path, m) in &placements {
         for b in bodies_of(*comp) {
             let bm = body_matrix(b, m);
@@ -8494,7 +8523,7 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             out.bodies.push(placed);
         }
         if primary {
-            for s in st.sketches.iter().filter(|s| comp_of_feature(s.feature) == comp) {
+            for &s in sketches_of.get(&comp).into_iter().flatten() {
                 if ident {
                     // In place: shared as it is.
                     out.sketches.push(s.clone());
@@ -8517,17 +8546,13 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             // The component's construction planes, axes and points where it is placed: once the
             // design has a component the root's constructions are built in this state
             // (`construction_state`), and one built on another finds it here by name.
-            for c in st.construct.iter().filter(|c| comp_of_feature(c.feature) == comp) {
+            for &c in constructs_of.get(&comp).into_iter().flatten() {
                 let geom = if ident { c.geom.clone() } else { c.geom.placed(&m) };
                 out.construct.push(crate::construct::Construct { geom, ..c.clone() });
             }
         }
         // Unlike editable sketch guides, cosmetic surfaces belong to every occurrence.
-        for t in st
-            .threads
-            .iter()
-            .filter(|t| st.body(&t.body).map(|body| doc.model_body_component(body)).unwrap_or_else(|| comp_of_feature(t.feature)) == comp)
-        {
+        for &t in threads_of.get(&comp).into_iter().flatten() {
             let mut t2 = t.clone();
             t2.body = names.name(&t.body, comp, &path);
             let frame = st.body(&t.body).and_then(|body| doc.model_body_offset(body)).map(|offset| crate::mat_mul(&m, offset)).unwrap_or(m);

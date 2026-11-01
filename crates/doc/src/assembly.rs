@@ -332,6 +332,12 @@ impl Document {
     /// A branch stops past [`MAX_PLACEMENT_DEPTH`] levels, the walk past [`MAX_PLACEMENTS`] placements.
     pub fn placements(&self) -> Vec<(u64, Vec<u64>, Mat)> {
         let mut out = vec![(0, Vec::new(), IDENTITY)];
+        // Each component's occurrences in design order, found once: looking through every
+        // occurrence for each placed component cost a design of thousands of them the square.
+        let mut children: std::collections::HashMap<u64, Vec<&crate::Occurrence>> = std::collections::HashMap::new();
+        for o in &self.occurrences {
+            children.entry(o.parent).or_default().push(o);
+        }
         let mut stack: Vec<(u64, Vec<u64>, Mat)> = vec![(0, Vec::new(), IDENTITY)];
         while let Some((comp, path, m)) = stack.pop() {
             if out.len() > MAX_PLACEMENTS {
@@ -341,7 +347,7 @@ impl Document {
             if path.len() > MAX_PLACEMENT_DEPTH {
                 continue;
             }
-            for o in self.occurrences.iter().filter(|o| o.parent == comp) {
+            for &o in children.get(&comp).into_iter().flatten() {
                 let mut p = path.clone();
                 p.push(o.id);
                 let w = mat_mul(&m, &o.transform);

@@ -451,6 +451,10 @@ pub struct Session {
     /// The command running now is one [`DEFERRABLE`] while evaluation is put off: the feature it
     /// adds is evaluated with the rest at [`Session::evaluate_deferred`].
     pub(crate) deferring: bool,
+    /// The command running now is a light edit of a batch of put-off evaluation (see
+    /// [`Session::execute`]): should it fail, the batch goes back to where it began, so the
+    /// command may change the design in place instead of editing a copy of it.
+    pub(crate) light: bool,
 }
 
 /// Commands that only add to the design without reading the evaluated model, which a batch of
@@ -460,9 +464,11 @@ const DEFERRABLE: &[&str] = &["component.activate", "component.create", "documen
 /// Whether a command with these parameters only adds to the design without reading the evaluated
 /// model, so a batch of [`Session::defer_evaluation`] puts its evaluation off: a [`DEFERRABLE`]
 /// command, or a profile drawn from numbers alone (a sketch on an origin plane and a polyline of
-/// number points in it). Finishing the sketch and extruding it read the sketch's evaluated
-/// profiles, so they evaluate what is pending first; anything naming geometry of the model (a
-/// face, a snapped or projected point) reads the model too.
+/// number points in it), finishing that sketch, and extruding every profile of a sketch into a
+/// new body (`profiles: "all"`, a distance and names alone). An extrude that leaves its profiles
+/// to the default reads the sketch's evaluated profiles (to keep a drawn hole a hole), and one
+/// that joins, cuts or reaches a face reads the model's bodies, so they evaluate what is pending
+/// first; so does anything naming geometry of the model (a face, a snapped or projected point).
 fn deferrable(id: &str, p: &Value) -> bool {
     let only = |keys: &[&str]| p.as_object().is_some_and(|o| o.keys().all(|k| keys.contains(&k.as_str())));
     match id {
@@ -476,6 +482,15 @@ fn deferrable(id: &str, p: &Value) -> bool {
                 && p.get("points")
                     .and_then(Value::as_array)
                     .is_some_and(|points| points.iter().all(|q| q.as_array().is_some_and(|q| q.len() == 2 && q.iter().all(Value::is_number))))
+        }
+        "sketch.finish" => only(&[]),
+        "solid.extrude" => {
+            let plain = |key: &str| p.get(key).is_some_and(|v| v.is_number() || v.is_string());
+            only(&["sketch", "distance", "operation", "profiles", "name", "body_name"])
+                && plain("sketch")
+                && plain("distance")
+                && p.get("operation").and_then(Value::as_str) == Some("new")
+                && p.get("profiles").and_then(Value::as_str).is_some_and(|v| v.eq_ignore_ascii_case("all"))
         }
         _ => DEFERRABLE.contains(&id),
     }
@@ -652,6 +667,7 @@ impl Session {
             crash_journal: false,
             deferred: None,
             deferring: false,
+            light: false,
         }
     }
 
@@ -1302,6 +1318,9 @@ impl Session {
         // back to where the batch began instead, should it fail (as the batch's evaluation
         // does). Not while commands are journalled for crash recovery, which replays from them.
         let light = self.deferring && spec.undoable && !crash::enabled() && frames::Nested::idle();
+        if light {
+            self.light = true;
+        }
         let before_doc = match &self.deferred {
             Some(d) if light => d.start.doc.clone(),
             _ => self.doc.clone(),
@@ -1385,6 +1404,9 @@ impl Session {
         // test: it is saved with the design and has an undo step of its own.
         let hidden = self.visibility != before.visibility;
         self.deferring = false;
+        if light {
+            self.light = false;
+        }
         let result = match r {
             // A light edit that failed: the batch goes back to where it began and ends.
             Err(e) if light => {
@@ -1607,6 +1629,7 @@ impl Session {
             crash_journal: false,
             deferred: None,
             deferring: false,
+            light: false,
         }
     }
 

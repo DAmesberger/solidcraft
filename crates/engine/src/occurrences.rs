@@ -490,13 +490,42 @@ impl Session {
     /// Selected authoring placement, or the compatible first-placement frame.
     pub fn active_component_frame(&self) -> Mat {
         if let Some(path) = &self.active_occurrence_path
-            && let Ok(p) = self.occurrence_placement(path)
-            && p.component == self.active_component
+            && let Some((component, world)) = self.occurrence_world(path)
+            && component == self.active_component
         {
-            return p.world;
+            return world;
         }
         let path = self.doc.first_path(self.active_component);
-        self.occurrence_placement(&path).map(|p| p.world).unwrap_or(IDENTITY)
+        self.occurrence_world(&path).map(|(_, world)| world).unwrap_or(IDENTITY)
+    }
+
+    /// The component an occurrence path leads to and its world transform, as
+    /// [`Self::occurrence_placement`] finds them, without the bodies there: every command that
+    /// adds geometry asks for the active component's frame, and building the placement index
+    /// (every occurrence's bodies) anew for it after each edit cost a design of thousands of
+    /// occurrences the square of their number. `None` where `occurrence_placement` fails.
+    fn occurrence_world(&self, path: &[u64]) -> Option<(u64, Mat)> {
+        if path.is_empty() || path.len() > 64 {
+            return None;
+        }
+        let mut component = 0;
+        let mut world = IDENTITY;
+        let mut seen = std::collections::BTreeSet::new();
+        for id in path {
+            if !seen.insert(*id) {
+                return None;
+            }
+            let o = self.doc.occurrences.iter().find(|o| o.id == *id && o.parent == component)?;
+            if !self.doc.components.iter().any(|c| c.id == o.component) {
+                return None;
+            }
+            world = mat_mul(&world, self.pending_moves.get(id).unwrap_or(&o.transform));
+            if world.iter().flatten().any(|x| !x.is_finite()) {
+                return None;
+            }
+            component = o.component;
+        }
+        Some((component, world))
     }
 
     pub fn occurrence_visible(&self, path: &[u64]) -> bool {

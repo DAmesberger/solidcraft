@@ -3656,11 +3656,53 @@ fn a_batch_puts_off_profiles_drawn_from_numbers() {
         ("sketch.create", json!({"plane": "XY", "face": [0, 0, 1]})),
         ("sketch.create", json!({"plane": "Face 1"})),
         ("sketch.line", json!({"points": [[0, 0], ["w", 0]]})),
-        ("sketch.finish", json!({})),
         ("solid.extrude", json!({"sketch": 3, "distance": 1, "operation": "new"})),
+        ("solid.extrude", json!({"sketch": 3, "distance": 1, "operation": "join", "profiles": "all"})),
+        ("solid.extrude", json!({"sketch": 3, "distance": 1, "operation": "new", "profiles": [0]})),
+        ("solid.extrude", json!({"sketch": 3, "through_all": true, "operation": "new", "profiles": "all"})),
+        ("solid.extrude", json!({"face": [0, 0, 1], "distance": 1, "operation": "new", "profiles": "all"})),
     ] {
         assert!(!deferrable(id, &p), "{id} {p}");
     }
+}
+
+/// Profiles extruded whole into new bodies (`profiles: "all"`) are put off with the sketches
+/// they come from: a batch of twenty is evaluated once at its end, and makes the bodies and
+/// volume the same commands one by one make.
+#[test]
+fn a_batch_puts_off_extruding_whole_profiles() {
+    let build = |s: &mut Session| {
+        for k in 0..20 {
+            let x = k as f64 * 4.0;
+            run(s, "component.create", json!({"name": format!("Track {k}")}));
+            let sketch = run(s, "sketch.create", json!({"plane": "XY", "offset": 0.5, "name": format!("Track {k} sketch")}));
+            run(s, "sketch.line", json!({"points": [[x, 0], [x + 3.0, 0], [x + 3.0, 1], [x, 1]], "closed": true}));
+            run(s, "sketch.finish", json!({}));
+            run(
+                s,
+                "solid.extrude",
+                json!({"sketch": sketch["sketch"], "distance": 0.1, "operation": "new", "profiles": "all", "name": format!("Track {k}"), "body_name": format!("Track {k}")}),
+            );
+            run(s, "component.activate", json!({"component": 0}));
+        }
+    };
+    let mut one = Session::default();
+    build(&mut one);
+    let mut batch = Session::default();
+    let evaluations = batch.evaluations;
+    batch.defer_evaluation().unwrap();
+    build(&mut batch);
+    batch.evaluate_deferred().unwrap();
+    assert_eq!(batch.evaluations - evaluations, 1);
+    let names = |s: &Session| s.model.state().bodies.iter().map(|b| (b.name.clone(), (b.body.size() * 1e9).round())).collect::<Vec<_>>();
+    assert_eq!(names(&batch).len(), 20);
+    assert_eq!(names(&batch), names(&one));
+    assert!((volume(&mut batch) - volume(&mut one)).abs() < 1e-9);
+    assert!(deferrable("sketch.finish", &json!({})));
+    assert!(deferrable(
+        "solid.extrude",
+        &json!({"sketch": 3, "distance": "t", "operation": "new", "profiles": "all", "name": "A", "body_name": "A"})
+    ));
 }
 
 /// A program building a large design puts evaluation off: its components, boxes and parameters

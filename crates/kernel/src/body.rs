@@ -630,6 +630,13 @@ impl Body {
     }
 
     /// The very same shape (shared solid or mesh), whatever its colour, paint or face splits.
+    /// What [`Body::same_shape`] compares, as a key: two bodies have the same shape exactly
+    /// when their keys are equal, so a set of keys finds one among thousands without comparing
+    /// each pair.
+    pub fn shape_key(&self) -> (usize, usize) {
+        (std::sync::Arc::as_ptr(&self.solid) as usize, self.mesh.as_ref().map_or(0, |m| std::sync::Arc::as_ptr(m) as usize))
+    }
+
     pub fn same_shape(&self, other: &Body) -> bool {
         std::sync::Arc::ptr_eq(&self.solid, &other.solid)
             && match (&self.mesh, &other.mesh) {
