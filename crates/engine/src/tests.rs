@@ -3619,6 +3619,50 @@ fn default_extrude_profiles_keep_every_hole_of_a_drilled_plate() {
     assert_eq!(plate(101, 100), bare + 10_100 * per_hole);
 }
 
+/// In a batch of put-off evaluation, profiles drawn from numbers on an origin plane are put off
+/// too, and the bodies extruded from them are what commands one by one build; a command naming
+/// the model's geometry (a sketch on a face), finishing a sketch or extruding it evaluates what
+/// is pending first.
+#[test]
+fn a_batch_puts_off_profiles_drawn_from_numbers() {
+    let build = |s: &mut Session| {
+        for k in 0..20 {
+            let x = k as f64 * 4.0;
+            run(s, "component.create", json!({"name": format!("Track {k}")}));
+            let sketch = run(s, "sketch.create", json!({"plane": "XY", "offset": 0.5, "name": format!("Track {k} sketch")}));
+            run(s, "sketch.line", json!({"points": [[x, 0], [x + 3.0, 0], [x + 3.0, 1], [x, 1]], "closed": true}));
+            run(s, "sketch.finish", json!({}));
+            run(
+                s,
+                "solid.extrude",
+                json!({"sketch": sketch["sketch"], "distance": 0.1, "operation": "new", "name": format!("Track {k}"), "body_name": format!("Track {k}")}),
+            );
+            run(s, "component.activate", json!({"component": 0}));
+        }
+    };
+    let mut one = Session::default();
+    build(&mut one);
+    let mut batch = Session::default();
+    let evaluations = batch.evaluations;
+    batch.defer_evaluation().unwrap();
+    build(&mut batch);
+    batch.evaluate_deferred().unwrap();
+    assert!(batch.evaluations - evaluations < one.evaluations, "{} evaluations", batch.evaluations - evaluations);
+    let names = |s: &Session| s.model.state().bodies.iter().map(|b| (b.name.clone(), (b.body.size() * 1e9).round())).collect::<Vec<_>>();
+    assert_eq!(names(&batch), names(&one));
+    assert!((volume(&mut batch) - volume(&mut one)).abs() < 1e-9);
+    // Not put off: a profile naming a model face, or extruded onto a body.
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY", "face": [0, 0, 1]})),
+        ("sketch.create", json!({"plane": "Face 1"})),
+        ("sketch.line", json!({"points": [[0, 0], ["w", 0]]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"sketch": 3, "distance": 1, "operation": "new"})),
+    ] {
+        assert!(!deferrable(id, &p), "{id} {p}");
+    }
+}
+
 /// A program building a large design puts evaluation off: its components, boxes and parameters
 /// go in without an evaluation each, a command that reads the model evaluates what is pending
 /// first, and the batch ends evaluated as the same commands one by one leave the design, in

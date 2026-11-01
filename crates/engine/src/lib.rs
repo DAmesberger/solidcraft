@@ -457,6 +457,30 @@ pub struct Session {
 /// [`Session::defer_evaluation`] runs without evaluating the model before or after them.
 const DEFERRABLE: &[&str] = &["component.activate", "component.create", "document.metadata.set", "parameters.add", "parameters.import", "solid.box"];
 
+/// Whether a command with these parameters only adds to the design without reading the evaluated
+/// model, so a batch of [`Session::defer_evaluation`] puts its evaluation off: a [`DEFERRABLE`]
+/// command, or a profile drawn from numbers alone (a sketch on an origin plane and a polyline of
+/// number points in it). Finishing the sketch and extruding it read the sketch's evaluated
+/// profiles, so they evaluate what is pending first; anything naming geometry of the model (a
+/// face, a snapped or projected point) reads the model too.
+fn deferrable(id: &str, p: &Value) -> bool {
+    let only = |keys: &[&str]| p.as_object().is_some_and(|o| o.keys().all(|k| keys.contains(&k.as_str())));
+    match id {
+        "sketch.create" => {
+            only(&["plane", "offset", "name"])
+                && p.get("plane").and_then(Value::as_str).is_some_and(|plane| ["XY", "XZ", "YZ"].contains(&plane))
+                && p.get("offset").is_none_or(|v| v.is_number() || v.is_string())
+        }
+        "sketch.line" => {
+            only(&["points", "closed"])
+                && p.get("points")
+                    .and_then(Value::as_array)
+                    .is_some_and(|points| points.iter().all(|q| q.as_array().is_some_and(|q| q.len() == 2 && q.iter().all(Value::is_number))))
+        }
+        _ => DEFERRABLE.contains(&id),
+    }
+}
+
 /// A batch of commands whose evaluation is put off ([`Session::defer_evaluation`]).
 #[derive(Clone, Debug)]
 struct Deferred {
@@ -874,8 +898,9 @@ impl Session {
     /// Put off evaluating the model after every command until [`Session::evaluate_deferred`], for
     /// a program that builds a large design in many commands (a circuit board of hundreds of
     /// parts): each evaluation reads every feature again, so commands one by one cost the square
-    /// of their number. Commands that only add ([`DEFERRABLE`]: components, boxes, parameters,
-    /// metadata) run on the model as it was and their features are evaluated together later;
+    /// of their number. Commands that only add ([`deferrable`]: components, boxes, parameters,
+    /// metadata, and profiles drawn from numbers on an origin plane) run
+    /// on the model as it was and their features are evaluated together later;
     /// any other command first evaluates what is pending, as it reads the model. The batch is
     /// one undo step. A command that fails leaves the design as it was before that command, as
     /// always, except an edit put off (a deferrable command that changes the design): that
@@ -1264,7 +1289,7 @@ impl Session {
         if frames::Nested::idle()
             && let Some(d) = &mut self.deferred
         {
-            let defer = DEFERRABLE.contains(&spec.id) && live.is_none();
+            let defer = deferrable(spec.id, params) && live.is_none();
             if d.dirty && !defer {
                 d.dirty = false;
                 self.refresh();
