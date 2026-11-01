@@ -230,7 +230,8 @@ fn insert(s: &mut Session, p: &Value, cmd: &str, svg: bool) -> Result<Value> {
         Vec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos) + off
     };
     let ((curves, texts), info) = edit(s, p, cmd, false, |sk, _| {
-        let (cs, texts) = add_geometry(sk, &geom, &f, k, tol)?;
+        // Thousands of curves at once: their ids are indexed while they go in.
+        let (cs, texts) = sk.bulk(|sk| add_geometry(sk, &geom, &f, k, tol))?;
         Ok((ids_of(sk, &cs), texts))
     })?;
     // Text becomes sketch text.

@@ -148,6 +148,41 @@ pub(crate) fn triangulate(boundary: &[[f64; 2]], loops: &[std::ops::Range<usize>
     Some((extra, tris))
 }
 
+/// Triangulate the region bounded by `loops` (ranges of `boundary`, each closed) with no point
+/// added: the constrained Delaunay triangulation of the loops, bulk loaded (a plane face with
+/// thousands of holes in one pass). Triangles counter-clockwise, indices into `boundary`;
+/// `None` when two points coincide or a loop crosses itself or another.
+pub(crate) fn triangulate_loops(boundary: &[[f64; 2]], loops: &[std::ops::Range<usize>]) -> Option<Vec<[u32; 3]>> {
+    if boundary.iter().flatten().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let points: Vec<Point2<f64>> = boundary.iter().map(|p| spade::mitigate_underflow(Point2::new(p[0], p[1]))).collect();
+    let mut sides: Vec<[usize; 2]> = Vec::with_capacity(boundary.len());
+    for r in loops {
+        let n = r.len();
+        if n < 3 || r.end > boundary.len() {
+            return None;
+        }
+        sides.extend((0..n).map(|k| [r.start + k, r.start + (k + 1) % n]));
+    }
+    let mut crossed = false;
+    let cdt = Cdt::try_bulk_load_cdt(points, sides, |_| crossed = true).ok()?;
+    // A point dropped as a duplicate would renumber the rest.
+    if crossed || cdt.num_vertices() != boundary.len() {
+        return None;
+    }
+    let region = region(&cdt);
+    let mut tris = Vec::new();
+    for face in cdt.inner_faces() {
+        if !region.get(face.index()).copied().unwrap_or(false) {
+            continue;
+        }
+        let [a, b, c] = face.vertices().map(|v| u32::try_from(v.fix().index()).ok());
+        tris.push([a?, b?, c?]);
+    }
+    Some(tris)
+}
+
 /// The band between a face's boundary `loops` (ranges of the first `n` points of `points`) and
 /// the staircase around a block of grid cells inside it (`stairs`, sides between grid points
 /// of `points`): a constrained Delaunay triangulation of both with no point added, keeping the

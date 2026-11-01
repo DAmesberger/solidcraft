@@ -733,9 +733,36 @@ pub struct Sketch {
     /// Next number per id prefix (`l` → l1, l2…).
     #[serde(default)]
     counters: std::collections::BTreeMap<String, u64>,
+    /// The ids taken, while [`Sketch::bulk`] runs.
+    #[serde(skip)]
+    taken: TakenIds,
     /// Display options (Sketch Palette).
     #[serde(default, skip_serializing_if = "is_default_view")]
     pub view: SketchView,
+}
+
+/// Every id a sketch holds, kept while one edit adds many items ([`Sketch::bulk`]), so that a
+/// new id is checked in constant time instead of against every item. Transient: never saved,
+/// copied with the sketch or compared.
+#[derive(Default)]
+struct TakenIds(Option<std::collections::HashSet<String>>);
+
+impl Clone for TakenIds {
+    fn clone(&self) -> Self {
+        TakenIds(None)
+    }
+}
+
+impl PartialEq for TakenIds {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for TakenIds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TakenIds")
+    }
 }
 
 fn is_default_view(v: &SketchView) -> bool {
@@ -760,12 +787,62 @@ impl Sketch {
             freeform_offsets: Vec::new(),
             wires: Vec::new(),
             counters: Default::default(),
+            taken: TakenIds::default(),
             view: SketchView::default(),
+        }
+    }
+
+    /// Run `f`, an edit adding many points, curves or constraints, with every id indexed: each
+    /// new id is then checked in constant time (one by one, adding N items compares N² ids, which
+    /// for an imported drawing of ten thousand holes took seconds). Ids come out as without it.
+    /// Fails with [`SketchError::Duplicate`], whatever `f` returned, if the edit left two items
+    /// with one id that the sketch did not have before.
+    pub fn bulk<R, E: From<SketchError>>(&mut self, f: impl FnOnce(&mut Sketch) -> std::result::Result<R, E>) -> std::result::Result<R, E> {
+        let taken: std::collections::HashSet<String> = self.ids().map(str::to_owned).collect();
+        let unique = taken.len() == self.ids().count();
+        self.taken = TakenIds(Some(taken));
+        let r = f(self);
+        self.taken = TakenIds(None);
+        let mut seen = std::collections::HashSet::new();
+        if unique && let Some(id) = self.ids().find(|id| !seen.insert(*id)) {
+            return Err(SketchError::Duplicate(id.into()).into());
+        }
+        r
+    }
+
+    /// Every id the sketch's items hold.
+    fn ids(&self) -> impl Iterator<Item = &str> {
+        self.points
+            .iter()
+            .map(|p| p.id.as_str())
+            .chain(self.curves.iter().map(|c| c.id.as_str()))
+            .chain(self.constraints.iter().map(|c| c.id.as_str()))
+            .chain(self.patterns.iter().map(|p| p.id.as_str()))
+            .chain(self.links.iter().map(|l| l.id.as_str()))
+            .chain(self.wires.iter().map(|w| w.id.as_str()))
+            .chain(
+                self.offsets
+                    .iter()
+                    .filter_map(|r| r.topology.as_ref())
+                    .flat_map(|t| std::iter::once(t.id.as_str()).chain(t.roles.iter().map(|r| r.output.as_str()))),
+            )
+    }
+
+    /// Record `id` as taken while [`Sketch::bulk`] runs.
+    fn claim(&mut self, id: &str) {
+        if let Some(taken) = &mut self.taken.0 {
+            taken.insert(id.to_owned());
         }
     }
 
     /// A new unused id with the given prefix (`l` → `l3`).
     pub fn fresh(&mut self, prefix: &str) -> Result<String> {
+        let id = self.fresh_unclaimed(prefix)?;
+        self.claim(&id);
+        Ok(id)
+    }
+
+    fn fresh_unclaimed(&mut self, prefix: &str) -> Result<String> {
         let mut n = self.counters.get(prefix).copied().unwrap_or(0);
         n = n.checked_add(1).ok_or_else(|| SketchError::Invalid("sketch identity counter exhausted".into()))?;
         let first = format!("{prefix}{n}");
@@ -813,6 +890,9 @@ impl Sketch {
         Err(SketchError::TooLarge)
     }
     pub(crate) fn id_taken(&self, id: &str) -> bool {
+        if let Some(taken) = &self.taken.0 {
+            return taken.contains(id);
+        }
         self.points.iter().any(|p| p.id == id)
             || self.curves.iter().any(|c| c.id == id)
             || self.constraints.iter().any(|c| c.id == id)
@@ -845,7 +925,10 @@ impl Sketch {
         let id = match id {
             Some(i) if self.id_taken(i) => return Err(SketchError::Duplicate(i.into())),
             Some("") => return Err(SketchError::Invalid("empty id".into())),
-            Some(i) => i.to_string(),
+            Some(i) => {
+                self.claim(i);
+                i.to_string()
+            }
             None => self.fresh("p")?,
         };
         self.points.push(SPoint { id, pos: p, fixed: false, link: None, exprs: None });
@@ -856,7 +939,10 @@ impl Sketch {
         match id {
             Some(i) if self.id_taken(i) => Err(SketchError::Duplicate(i.into())),
             Some("") => Err(SketchError::Invalid("empty id".into())),
-            Some(i) => Ok(i.into()),
+            Some(i) => {
+                self.claim(i);
+                Ok(i.into())
+            }
             None => self.fresh(prefix),
         }
     }

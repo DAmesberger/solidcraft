@@ -257,10 +257,10 @@ pub const DISPLAY_ANGLE: f64 = std::f64::consts::PI / 9.0;
 /// facet: at [`DISPLAY_ANGLE`] and the application's tolerance of 1/1000 of the body, a radius
 /// under about 1/15000 of the body gets fewer facets than the angle asks for, and one under
 /// a millionth of it only those of the chord tolerance.
-const DISPLAY_ANGLE_FLOOR: f64 = 1e-3;
+pub(crate) const DISPLAY_ANGLE_FLOOR: f64 = 1e-3;
 
 /// The finest angle a display mesh is divided by (one degree).
-const MIN_DISPLAY_ANGLE: f64 = std::f64::consts::PI / 180.0;
+pub(crate) const MIN_DISPLAY_ANGLE: f64 = std::f64::consts::PI / 180.0;
 
 /// Triangulate each shell (not the solid: truck's solid constructor panics on the open or
 /// non-manifold shells an import can produce). Boundaries that lie on their surface only within
@@ -547,6 +547,8 @@ fn polyline_mid(pts: &[Vec3]) -> (Vec3, f64) {
 thread_local! {
     /// Solids [`Body::new`] meshed on this thread to orient them (tests count the work an import does).
     pub(crate) static ORIENTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Extrusions [`Body::new_swept`] oriented from their start cap on this thread.
+    pub(crate) static SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Solids `rephase_revolved` searched on this thread.
     pub(crate) static REPHASED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -671,6 +673,32 @@ impl Body {
             meshes: None,
             phased: true,
         })
+    }
+
+    /// Like [`Body::new`], for the solid a planar face `start` makes swept straight along `sweep`
+    /// (an extrusion): the solid lies on the sweep's side of its start cap, so it faces outward
+    /// exactly when that cap faces against the sweep. Read from the cap instead of meshing the
+    /// solid, which for a plate of thousands of holes took seconds. Any other solid is oriented
+    /// as [`Body::new`] orients it.
+    pub(crate) fn new_swept(solid: Solid, start: mt::FaceID, sweep: Vec3) -> Result<Body> {
+        let cap = guard("swept orientation", || {
+            Ok(solid.face_iter().find(|f| f.id() == start).and_then(|f| match f.oriented_surface() {
+                mt::Surface::Plane(p) => {
+                    let n = p.normal();
+                    Vec3::new(n.x, n.y, n.z).normalized()
+                }
+                _ => None,
+            }))
+        })?;
+        let Some(normal) = cap.zip(sweep.normalized()).map(|(n, d)| n.dot(d)).filter(|c| c.abs() > 1.0 - 1e-9) else {
+            return Body::new(solid);
+        };
+        if solid.boundaries().is_empty() {
+            return Err(KernelError::Failed("empty result".into()));
+        }
+        #[cfg(test)]
+        SWEPT.with(|n| n.set(n.get() + 1));
+        Body::placed_as_is(rephase_revolved(solid), normal > 0.0, None)
     }
 
     /// Like [`Body::new`], for a solid made by placing an already-oriented body (see
@@ -1596,6 +1624,10 @@ impl Body {
         }
         if self.is_mesh() {
             return self.flagged(self.tessellate(tol)?);
+        }
+        // A large straight prism (a drilled plate) is meshed from its rims.
+        if let Some(m) = crate::prism_mesh::display_mesh(self, tol, angle) {
+            return Ok(m);
         }
         self.flagged(self.tessellate_within(tol, angle, false)?)
     }

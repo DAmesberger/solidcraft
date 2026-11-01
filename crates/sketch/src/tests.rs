@@ -1396,3 +1396,44 @@ fn a_fillet_folded_through_flat_is_refused_like_a_fold() {
     }
     assert!(refused.is_some_and(|s| (7..=9).contains(&s)), "refused at {refused:?}");
 }
+
+/// Many points and curves added in one bulk edit get the ids they get one by one, an id given
+/// inside the edit is not handed out again, and a duplicate it leaves fails the edit.
+#[test]
+fn a_bulk_edit_hands_out_the_ids_of_one_by_one() {
+    let draw = |sk: &mut Sketch| -> Result<Vec<String>, SketchError> {
+        let mut ids = Vec::new();
+        for k in 0..200 {
+            let c = sk.add_point(v(k as f64, 0.0), None)?;
+            let i = sk.add_circle(v(k as f64, 0.0), 0.3, Some(c), None)?;
+            ids.push(sk.curves[i].id.clone());
+        }
+        // An id that the counter reaches later: taken now, never handed out again.
+        sk.add_point(v(-1.0, -1.0), Some("p450"))?;
+        for k in 0..100 {
+            sk.add_point(v(k as f64, 5.0), None)?;
+        }
+        ids.extend(sk.points.iter().map(|p| p.id.clone()));
+        Ok(ids)
+    };
+    let mut one = Sketch::new();
+    let alone = draw(&mut one).unwrap();
+    let mut many = Sketch::new();
+    let bulk = many.bulk(draw).unwrap();
+    assert_eq!(bulk, alone);
+    assert_eq!(many, one);
+    let unique: std::collections::HashSet<&String> = bulk.iter().collect();
+    assert_eq!(unique.len(), bulk.len());
+    // Outside the edit the sketch checks ids as before.
+    assert!(matches!(many.add_point(v(0.0, 9.0), Some("p450")), Err(SketchError::Duplicate(_))));
+    // An edit that leaves two items of one id fails.
+    let mut sk = Sketch::new();
+    let r: Result<(), SketchError> = sk.bulk(|sk| {
+        sk.add_point(v(0.0, 0.0), Some("x"))?;
+        if let Some(p) = sk.points.last_mut() {
+            p.id = "origin".into();
+        }
+        Ok(())
+    });
+    assert!(matches!(r, Err(SketchError::Duplicate(id)) if id == "origin"));
+}

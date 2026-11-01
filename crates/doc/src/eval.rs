@@ -5011,10 +5011,15 @@ fn centered_extrude(
     // Fit cap surfaces in their own coordinates. Fitting a distant world-space
     // wire can tilt an otherwise exact planar cap through numeric cancellation.
     // A side drawn in collinear pieces is one face (#1788).
-    let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start, end)?;
-    if *plane == Plane::XY {
+    // A plane that is XY raised along Z (an offset sketch plane, a box's top face) extrudes in
+    // place: the very body built on XY and moved up, without rebuilding every face and its
+    // history to move it (seconds for a drilled board's laminate).
+    if plane.x == Plane::XY.x && plane.y == Plane::XY.y && plane.origin.x == 0.0 && plane.origin.y == 0.0 {
+        let z = plane.origin.z;
+        let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start + z, end + z)?;
         return Ok(bodies.into_iter().map(|body| roles.tool(body, None)).collect());
     }
+    let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start, end)?;
     let n = plane.normal();
     let m = [
         [plane.x.x, plane.x.y, plane.x.z, 0.0],

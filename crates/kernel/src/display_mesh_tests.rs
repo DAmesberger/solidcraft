@@ -6,7 +6,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use solidcraft_geom::{Loop2, Mesh, Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
 
-use super::{Body, DISPLAY_ANGLE};
+use super::{Body, DISPLAY_ANGLE, ORIENTED, SWEPT};
 use crate::{FaceSurface, extrude, face_surface};
 
 /// The chord tolerance the application draws a body with.
@@ -413,5 +413,153 @@ fn outline_bounds_hold_the_display_mesh() {
             assert!(lo <= m_lo + slack && hi >= m_hi - slack, "outline {outline:?} holds the mesh {mesh:?}");
         }
         assert!(outline.diagonal() <= mesh.diagonal() * 1.5, "and is not much larger");
+    }
+}
+
+/// A plate with `holes` round holes of radius 0.15 on a 1.27 mm grid, 0.3 thick: the laminate
+/// slab of a drilled circuit board.
+fn drilled_slab(holes: usize, outline: Loop2) -> (Body, Vec<Vec2>) {
+    let cols = 40usize;
+    let centres: Vec<Vec2> = (0..holes).map(|k| Vec2::new(3.0 + (k % cols) as f64 * 1.27, 3.0 + (k / cols) as f64 * 1.27)).collect();
+    let holes = centres.iter().map(|c| Loop2::circle(*c, 0.15).reversed()).collect();
+    (extrude(&Plane::XY, &[Region2 { outer: outline, holes }], 0.0, 0.3).unwrap().pop().unwrap(), centres)
+}
+
+/// The reference mesher's display mesh, with its edges flagged.
+fn reference(b: &Body, tol: f64) -> Mesh {
+    b.flagged(b.tessellate_within(tol, DISPLAY_ANGLE, false).unwrap()).unwrap()
+}
+
+#[test]
+fn a_large_prism_is_meshed_from_its_rims_as_the_reference_mesher_meshes_it() {
+    // A slab of 300 holes (crowded: its caps get a coarser angle) and one of 1000 (crowded
+    // further), each wider than the faces below which the reference mesher is kept.
+    for holes in [300, 1000] {
+        let (b, centres) = drilled_slab(holes, rect(60.0, 3.0 + (holes / 40 + 1) as f64 * 1.27 + 3.0));
+        assert!(b.face_count() >= crate::prism_mesh::MIN_FACES);
+        let tol = display_tol(&b);
+        let fast = crate::prism_mesh::display_mesh(&b, tol, DISPLAY_ANGLE).expect("a straight prism");
+        let slow = reference(&b, tol);
+        // The same faces, edges, flags and division of every rim; the same triangles.
+        assert_eq!(fast.edge_faces, slow.edge_faces, "{holes} holes");
+        assert_eq!((&fast.seams, &fast.smooth_edges, &fast.sharp_edges), (&slow.seams, &slow.smooth_edges, &slow.sharp_edges));
+        assert_eq!(fast.seams.iter().filter(|s| **s).count(), 2 * holes, "each hole's two halves meet in seams");
+        for (a, r) in fast.edges.iter().zip(&slow.edges) {
+            assert_eq!(a.len(), r.len());
+            assert!(a.iter().zip(r).all(|(p, q)| p.dist(*q) < 1e-9));
+        }
+        for z in [0.0, 0.3] {
+            let ((n, widest), (m, reference)) = (rim(&fast, centres[0], 0.15, z), rim(&slow, centres[0], 0.15, z));
+            assert!(n == m && (widest - reference).abs() < 1e-9, "{n} segments of up to {widest}, {m} of up to {reference}");
+        }
+        assert_eq!(fast.triangles.len(), slow.triangles.len());
+        assert_eq!(fast.tri_face.iter().max(), slow.tri_face.iter().max());
+        assert_eq!(open_sides(&fast, 1e-6), 0);
+        assert!((mesh_volume(&fast) - mesh_volume(&slow)).abs() < 1e-6 * mesh_volume(&slow));
+        let (f, s) = (fast.bounds(), slow.bounds());
+        assert!(f.min.dist(s.min) < 1e-9 && f.max.dist(s.max) < 1e-9);
+        // Outward: every triangle turns the way its corners' normals point.
+        for t in &fast.triangles {
+            let [a, c, d] = t.map(|k| fast.positions[k as usize]);
+            let n = (c - a).cross(d - a);
+            assert!(n.dot(fast.normals[t[0] as usize]) > 0.0);
+        }
+        // `reference_display_mesh_angular` is this mesh.
+        assert_eq!(b.reference_display_mesh_angular(tol, DISPLAY_ANGLE).unwrap().positions, fast.positions);
+    }
+}
+
+#[test]
+fn rims_joined_tangentially_keep_their_flags() {
+    // A rounded outline (quarter arcs tangent to its sides) around slots (two half circles
+    // joined by lines): lines meeting arcs without a crease, arcs of one circle meeting.
+    let r = 2.0;
+    let (w, h) = (60.0, 60.0);
+    let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
+    let arc = |c: (f64, f64), start: f64| Seg2::Arc { center: Vec2::new(c.0, c.1), radius: r, start, sweep: FRAC_PI_2 };
+    let outer = Loop2 {
+        segs: vec![
+            line((r, 0.0), (w - r, 0.0)),
+            arc((w - r, r), -FRAC_PI_2),
+            line((w, r), (w, h - r)),
+            arc((w - r, h - r), 0.0),
+            line((w - r, h), (r, h)),
+            arc((r, h - r), FRAC_PI_2),
+            line((0.0, h - r), (0.0, r)),
+            arc((r, r), PI),
+        ],
+    };
+    assert!(outer.signed_area() > 0.0);
+    let slot = |x: f64, y: f64| {
+        let (a, b) = (Vec2::new(x, y), Vec2::new(x + 1.0, y));
+        Loop2 {
+            segs: vec![
+                Seg2::Line { a: Vec2::new(x, y - 0.2), b: Vec2::new(x + 1.0, y - 0.2) },
+                Seg2::Arc { center: b, radius: 0.2, start: -FRAC_PI_2, sweep: PI },
+                Seg2::Line { a: Vec2::new(x + 1.0, y + 0.2), b: Vec2::new(x, y + 0.2) },
+                Seg2::Arc { center: a, radius: 0.2, start: FRAC_PI_2, sweep: PI },
+            ],
+        }
+    };
+    let holes: Vec<Loop2> = (0..100).map(|k| slot(5.0 + (k % 10) as f64 * 5.0, 5.0 + (k / 10) as f64 * 5.0).reversed()).collect();
+    let b = extrude(&Plane::XY, &[Region2 { outer, holes }], 0.0, 1.6).unwrap().pop().unwrap();
+    assert!(b.face_count() >= crate::prism_mesh::MIN_FACES);
+    let tol = display_tol(&b);
+    let fast = crate::prism_mesh::display_mesh(&b, tol, DISPLAY_ANGLE).expect("a straight prism");
+    let slow = reference(&b, tol);
+    assert_eq!(fast.edge_faces, slow.edge_faces);
+    assert_eq!((&fast.seams, &fast.smooth_edges, &fast.sharp_edges), (&slow.seams, &slow.smooth_edges, &slow.sharp_edges));
+    assert_eq!(fast.edges.iter().map(Vec::len).collect::<Vec<_>>(), slow.edges.iter().map(Vec::len).collect::<Vec<_>>());
+    assert_eq!(open_sides(&fast, 1e-6), 0);
+    assert!((mesh_volume(&fast) - mesh_volume(&slow)).abs() < 1e-6 * mesh_volume(&slow));
+}
+
+#[test]
+fn a_board_slab_of_thousands_of_holes_is_meshed_closed_with_round_enough_holes() {
+    // 4000 holes: every cap is crowded down to the chord tolerance alone, where the reference
+    // mesher leaves each half circle one segment (a hole of no area); each gets two here.
+    let (b, centres) = drilled_slab(4000, rect(60.0, 3.0 + 101.0 * 1.27 + 3.0));
+    let tol = display_tol(&b);
+    let m = b.reference_display_mesh_angular(tol, DISPLAY_ANGLE).unwrap();
+    assert_eq!(open_sides(&m, 1e-6), 0);
+    for c in [centres[0], centres[3999]] {
+        assert_eq!(rim(&m, c, 0.15, 0.3).0, 4, "a hole is four segments round");
+    }
+    assert_eq!(m.seams.iter().filter(|s| **s).count(), 2 * 4000);
+    // Its volume is the plate's less the holes' (as the four-sided holes leave them).
+    let square = 2.0 * 0.15 * 0.15;
+    let plate = 60.0 * (6.0 + 101.0 * 1.27) * 0.3;
+    assert!((mesh_volume(&m) - (plate - 4000.0 * square * 0.3)).abs() < 1e-6 * plate);
+}
+
+#[test]
+fn small_or_unstraight_bodies_keep_the_reference_mesh() {
+    // Below the face count, and a body that is no straight prism (a cylinder's caps are its only
+    // planes, but a revolved or tapered side is no wall along them).
+    let (few, _) = drilled_slab(20, rect(60.0, 10.0));
+    assert!(crate::prism_mesh::display_mesh(&few, display_tol(&few), DISPLAY_ANGLE).is_none());
+    let disc = Region2 { outer: Loop2::circle(Vec2::ZERO, 4.0), holes: vec![] };
+    let cone = crate::extrude_tapered(&Plane::XY, &disc, 6.0, 1.0, -0.3).unwrap();
+    assert!(crate::prism_mesh::display_mesh(&cone, 0.01, DISPLAY_ANGLE).is_none());
+}
+
+#[test]
+fn an_extrusion_is_oriented_from_its_start_cap_without_meshing() {
+    let flipped = Plane::new(Vec3::new(1.0, 2.0, 3.0), Vec3::X, -Vec3::Y).unwrap();
+    let tilted = Plane::new(Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0).normalized().unwrap(), Vec3::Y).unwrap();
+    let (_, centres) = drilled_slab(150, rect(1.0, 1.0));
+    let holes: Vec<Loop2> = centres.iter().map(|c| Loop2::circle(*c, 0.15).reversed()).collect();
+    let region = Region2 { outer: rect(60.0, 20.0), holes };
+    assert!(4 + 2 * centres.len() >= crate::prism_mesh::MIN_FACES, "a large profile");
+    for plane in [Plane::XY, flipped, tilted] {
+        for (start, end) in [(0.0, 2.0), (2.0, 0.0), (-1.0, 0.5)] {
+            let (oriented, swept) = (ORIENTED.with(std::cell::Cell::get), SWEPT.with(std::cell::Cell::get));
+            let b = extrude(&plane, std::slice::from_ref(&region), start, end).unwrap().pop().unwrap();
+            assert_eq!(ORIENTED.with(std::cell::Cell::get), oriented, "no coarse mesh to orient it");
+            assert_eq!(SWEPT.with(std::cell::Cell::get), swept + 1);
+            let v = crate::measure(&b).unwrap().volume;
+            let exact = region.area() * (end - start).abs();
+            assert!((v - exact).abs() < 1e-3 * exact, "{plane:?} {start}..{end}: {v} for {exact}");
+        }
     }
 }

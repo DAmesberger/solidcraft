@@ -224,19 +224,22 @@ fn extrude_with(plane: &Plane, regions: &[Region2], start: f64, end: f64, whole_
         let numbered = if whole_sides { pieces.map_loops(|l| l.merged_lines(continues_straight)) } else { pieces.clone() };
         // A joined side's source is its first piece, a segment of the profile as drawn (the side
         // lies along it): the sketch curve it is certified and named by, as when it stood alone.
+        // Only a joined side looks for it (looking for every side compared every side with every
+        // piece: seconds for a plate of thousands of holes).
         let first_piece = |side: &ProfileEdge| {
-            pieces
-                .loops()
-                .flat_map(|l| l.lp.segs.iter())
-                .copied()
-                .find(|piece| side.numbers.len() > 1 && piece.start() == side.segment.start())
-                .unwrap_or(side.segment)
+            if side.numbers.len() <= 1 {
+                return side.segment;
+            }
+            pieces.loops().flat_map(|l| l.lp.segs.iter()).copied().find(|piece| piece.start() == side.segment.start()).unwrap_or(side.segment)
         };
         let profile = region_wires(&base, &numbered)?;
         let wires = wires_of(&profile);
         let f = guard("extrude profile", || builder::try_attach_plane(&wires).map_err(|e| KernelError::Invalid(format!("profile: {e}"))))?;
         let solid: Solid = guard("extrude", || Ok(builder::tsweep(&f, v3(n * (hi - lo)))))?;
-        let body = Body::new(solid)?;
+        // A large profile (a drilled plate) is oriented from its start cap; a small one by the
+        // coarse mesh that also counts the faces it misses, as it always was.
+        let segments = r.outer.segs.len() + r.holes.iter().map(|h| h.segs.len()).sum::<usize>();
+        let body = if segments >= crate::prism_mesh::MIN_FACES { Body::new_swept(solid, f.id(), n)? } else { Body::new(solid)? };
         // tsweep retains each actual input boundary edge on its generated side: one pass over
         // the faces matches topology identity (never face order, surface samples or
         // centroids) for both the face sources and the history. The profile face is the start

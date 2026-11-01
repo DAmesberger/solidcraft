@@ -1069,11 +1069,30 @@ pub fn eval_params(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, Value
 
 /// [`eval_params`], worked out.
 fn eval_params_uncached(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, Value>, BTreeMap<String, String>) {
-    let mut done: BTreeMap<String, Value> = BTreeMap::new();
-    let mut errors: BTreeMap<String, String> = BTreeMap::new();
     let index: BTreeMap<&str, &ParamDef> = params.iter().map(|p| (p.name.as_str(), p)).collect();
-    struct Ctx<'a> {
-        index: BTreeMap<&'a str, &'a ParamDef>,
+    let lookup = |name: &str| index.get(name).map(|p| std::borrow::Cow::Borrowed(*p));
+    eval_params_named(&lookup, params.iter().map(|p| p.name.as_str()), doc_len)
+}
+
+/// The values of the parameters `names` and of those they refer to, worked out as
+/// [`eval_params`] works out every parameter (a parameter's value depends only on the ones it
+/// refers to); `lookup` gives a parameter's definition by name. What an expression naming a few
+/// parameters of a large design needs, without every parameter of it.
+pub fn eval_params_for<'a>(
+    lookup: &dyn Fn(&str) -> Option<std::borrow::Cow<'a, ParamDef>>,
+    names: &[String],
+    doc_len: f64,
+) -> BTreeMap<String, Value> {
+    eval_params_named(lookup, names.iter().map(String::as_str), doc_len).0
+}
+
+fn eval_params_named<'a, 'n>(
+    lookup: &dyn Fn(&str) -> Option<std::borrow::Cow<'a, ParamDef>>,
+    names: impl IntoIterator<Item = &'n str>,
+    doc_len: f64,
+) -> (BTreeMap<String, Value>, BTreeMap<String, String>) {
+    struct Ctx<'a, 'l> {
+        lookup: &'l dyn Fn(&str) -> Option<std::borrow::Cow<'a, ParamDef>>,
         done: BTreeMap<String, Value>,
         errors: BTreeMap<String, String>,
         stack: Vec<String>,
@@ -1086,7 +1105,7 @@ fn eval_params_uncached(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, 
         if let Some(e) = cx.errors.get(name) {
             return Err(DocError::Expr(format!("`{name}` has an error: {e}")));
         }
-        let Some(p) = cx.index.get(name).copied() else {
+        let Some(p) = (cx.lookup)(name) else {
             return Err(DocError::Expr(format!("unknown parameter `{name}`")));
         };
         if let Some(at) = cx.stack.iter().position(|s| s == name) {
@@ -1116,8 +1135,8 @@ fn eval_params_uncached(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, 
             Some(e) => Err(e),
             // Most parameters are named feature inputs with a literal value ("10 mm"): those are
             // worked out once (per thread) rather than parsed again on every evaluation.
-            None if vals.is_empty() => eval_constant(p, cx.doc_len),
-            None => eval_def(p, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))), cx.doc_len),
+            None if vals.is_empty() => eval_constant(&p, cx.doc_len),
+            None => eval_def(&p, &|n| vals.get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`"))), cx.doc_len),
         };
         match &r {
             Ok(v) => {
@@ -1130,10 +1149,10 @@ fn eval_params_uncached(params: &[ParamDef], doc_len: f64) -> (BTreeMap<String, 
         }
         r
     }
-    let mut cx = Ctx { index, done: std::mem::take(&mut done), errors: std::mem::take(&mut errors), stack: Vec::new(), doc_len };
-    for p in params {
+    let mut cx = Ctx { lookup, done: BTreeMap::new(), errors: BTreeMap::new(), stack: Vec::new(), doc_len };
+    for name in names {
         cx.stack.clear();
-        let _ = visit(&p.name, &mut cx);
+        let _ = visit(name, &mut cx);
     }
     (cx.done, cx.errors)
 }
