@@ -72,6 +72,25 @@ fn vs_pbr_detailed(
     return pbr_out(p, n, base, parameters, detail);
 }
 
+// A detailed PBR vertex of shared triangles (`pbr::DETAILED_VERTEX_SIZE`) at one placement: the
+// rows of its rigid move (a point's x, y and z are each row's dot product with (p, 1)).
+@vertex
+fn vs_pbr_instanced(
+    @location(0) p: vec3<f32>,
+    @location(1) n: vec3<f32>,
+    @location(2) base: vec3<f32>,
+    @location(3) parameters: vec3<f32>,
+    @location(4) detail: vec4<f32>,
+    @location(5) r0: vec4<f32>,
+    @location(6) r1: vec4<f32>,
+    @location(7) r2: vec4<f32>,
+) -> PbrOut {
+    let q = vec4<f32>(p, 1.0);
+    let moved = vec3<f32>(dot(r0, q), dot(r1, q), dot(r2, q));
+    let turned = vec3<f32>(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n));
+    return pbr_out(moved, turned, base, parameters, detail);
+}
+
 /// The AO prepass's depth of a PBR surface (drawn there only with the product look).
 @fragment
 fn fs_ao_depth_pbr(i: PbrOut, @builtin(front_facing) front: bool) -> AoDepth {

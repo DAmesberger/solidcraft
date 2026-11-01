@@ -8,8 +8,8 @@
 //! colour attachments are not available on every GL adapter.
 
 use super::{
-    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_detailed_layout, pbr_layout, planned_layout, shared_layout,
-    tri_layout,
+    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_detailed_layout, pbr_instance_layout, pbr_layout,
+    planned_layout, shared_layout, tri_layout,
 };
 
 pub(super) struct Resources {
@@ -24,6 +24,7 @@ pub(super) struct Resources {
     instanced_flat_pipeline: wgpu::RenderPipeline,
     pbr_pipeline: wgpu::RenderPipeline,
     pbr_detailed_pipeline: wgpu::RenderPipeline,
+    pbr_instanced_pipeline: wgpu::RenderPipeline,
 }
 
 /// Where the prepass's vertices come from.
@@ -34,6 +35,8 @@ enum Source {
     Pbr {
         detailed: bool,
     },
+    /// Detailed PBR vertices of shared triangles at each placement.
+    PbrInstanced,
 }
 
 fn texture(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: [u32; 2]) -> (wgpu::TextureView, wgpu::TextureView, wgpu::BindGroup) {
@@ -97,11 +100,13 @@ impl Resources {
         let placed = [Some(shared_layout()), Some(instance_layout())];
         let pbr = [Some(pbr_layout())];
         let pbr_detailed = [Some(pbr_detailed_layout())];
+        let pbr_placed = [Some(pbr_detailed_layout()), Some(pbr_instance_layout())];
         let pipeline = |source: Source| {
             let (vertex, fragment) = match source {
                 Source::Tris(s) => (s.entry(), s.fragment("fs_ao_depth")),
                 Source::Pbr { detailed: false } => ("vs_pbr", "fs_ao_depth_pbr".to_string()),
                 Source::Pbr { detailed: true } => ("vs_pbr_detailed", "fs_ao_depth_pbr".to_string()),
+                Source::PbrInstanced => ("vs_pbr_instanced", "fs_ao_depth_pbr".to_string()),
             };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sc_ao_prepass"),
@@ -115,6 +120,7 @@ impl Resources {
                         Source::Tris(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
                         Source::Pbr { detailed: false } => &pbr[..],
                         Source::Pbr { detailed: true } => &pbr_detailed[..],
+                        Source::PbrInstanced => &pbr_placed[..],
                     },
                     compilation_options: Default::default(),
                 },
@@ -146,6 +152,7 @@ impl Resources {
         let instanced_flat_pipeline = pipeline(Source::Tris(TriSource::InstancedFlat));
         let pbr_pipeline = pipeline(Source::Pbr { detailed: false });
         let pbr_detailed_pipeline = pipeline(Source::Pbr { detailed: true });
+        let pbr_instanced_pipeline = pipeline(Source::PbrInstanced);
         let pipeline = pipeline(Source::Tris(TriSource::Built));
         let (depth, values, bind) = texture(device, &layout, [1, 1]);
         Self {
@@ -160,6 +167,7 @@ impl Resources {
             instanced_flat_pipeline,
             pbr_pipeline,
             pbr_detailed_pipeline,
+            pbr_instanced_pipeline,
         }
     }
 
@@ -241,6 +249,11 @@ impl Resources {
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         pass.draw(0..*count, 0..1);
                     }
+                }
+            }
+            if pbr {
+                for draw in batch.instanced.iter().filter(|d| matches!(d.look, super::InstanceLook::Pbr(_))) {
+                    draw.draw(&mut pass, &self.pbr_instanced_pipeline, &self.pbr_instanced_pipeline, &uncounted);
                 }
             }
         }
