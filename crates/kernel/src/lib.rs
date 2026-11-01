@@ -115,6 +115,7 @@ mod prism;
 mod prism_curve;
 mod prism_local;
 mod prism_measure;
+mod prism_mesh;
 pub mod profile;
 pub mod provenance;
 mod record;

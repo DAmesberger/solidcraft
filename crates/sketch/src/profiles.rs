@@ -1188,12 +1188,20 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     let areas: Vec<f64> = loops.iter().map(|(l, _, _, _)| l.signed_area().abs()).collect();
     let boxes: Vec<solidcraft_geom::Aabb2> = loops.iter().map(|(l, _, _, _)| l.polyline(1e-3).bounds()).collect();
     let inside_box = |j: usize, p: Vec2| boxes.get(j).is_some_and(|b| b.contains(p));
+    // The loops whose boxes hold a point, found in a grid of the boxes (every loop against every
+    // other was a drilled board's ten thousand holes squared).
+    let index = solidcraft_geom::BoxIndex::new(boxes.clone());
     let mut parent_of: Vec<Option<usize>> = vec![None; loops.len()];
     for (i, (li, _, ci, _)) in loops.iter().enumerate() {
         let probe = li.segs.first().map(Seg2::mid).unwrap_or_default();
         let ai = areas.get(i).copied().unwrap_or(0.0);
         let mut best: Option<(f64, usize)> = None;
-        for (j, (lj, _, cj, _)) in loops.iter().enumerate() {
+        let candidates: Vec<usize> = match &index {
+            Some(index) => index.containing(probe),
+            None => (0..loops.len()).collect(),
+        };
+        for j in candidates {
+            let Some((lj, _, cj, _)) = loops.get(j) else { continue };
             let aj = areas.get(j).copied().unwrap_or(0.0);
             if i == j || ci == cj || aj <= ai || !inside_box(j, probe) || best.is_some_and(|(ba, _)| aj >= ba) {
                 continue;

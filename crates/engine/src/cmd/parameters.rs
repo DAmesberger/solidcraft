@@ -321,9 +321,15 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "parameters.add";
     let name = param_name(cmd, p)?.to_string();
     let e = expr_arg(p, "expression").or_else(|| expr_arg(p, "value")).ok_or_else(|| bad(cmd, "`expression` must be a number or text"))?;
-    let solved = s.solved_sketches();
-    s.doc_mut().add_user_param(&name, &e, str_(p, "unit"), str_(p, "comment"))?;
-    s.settle_value_edit(&solved)?;
+    // In a batch of put-off evaluation (`Session::defer_evaluation`) a new parameter waits for
+    // the batch's evaluation: no feature or sketch can have used a name that was not there.
+    if s.deferring {
+        s.doc_mut().add_user_param(&name, &e, str_(p, "unit"), str_(p, "comment"))?;
+    } else {
+        let solved = s.solved_sketches();
+        s.doc_mut().add_user_param(&name, &e, str_(p, "unit"), str_(p, "comment"))?;
+        s.settle_value_edit(&solved)?;
+    }
     if let Some(f) = bool_(p, "favorite") {
         s.doc_mut().set_favorite(&name, f)?;
     }

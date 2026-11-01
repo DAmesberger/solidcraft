@@ -3619,6 +3619,67 @@ fn default_extrude_profiles_keep_every_hole_of_a_drilled_plate() {
     assert_eq!(plate(101, 100), bare + 10_100 * per_hole);
 }
 
+/// A program building a large design puts evaluation off: its components, boxes and parameters
+/// go in without an evaluation each, a command that reads the model evaluates what is pending
+/// first, and the batch ends evaluated as the same commands one by one leave the design, in
+/// one undo step.
+#[test]
+fn a_batch_of_put_off_evaluation_builds_what_commands_one_by_one_build() {
+    let build = |s: &mut Session| {
+        run(s, "parameters.add", json!({"name": "w", "expression": "4 mm"}));
+        for k in 0..30 {
+            run(s, "component.create", json!({"name": format!("Part {k}")}));
+            run(s, "solid.box", json!({"corner": [k as f64 * 10.0, 0, 0], "length": "w", "width": 3, "height": 2, "body_name": format!("Box {k}")}));
+            run(s, "component.activate", json!({"component": 0}));
+        }
+        // A command that reads the model: the boxes above are there for it.
+        run(s, "sketch.create", json!({"plane": "XY", "offset": 2}));
+        run(s, "sketch.circle.center", json!({"center": [1, 1], "radius": 0.5}));
+        run(s, "sketch.finish", json!({}));
+        run(s, "solid.extrude", json!({"distance": 1, "body_name": "Peg"}));
+    };
+    let mut one = Session::default();
+    build(&mut one);
+    let mut batch = Session::default();
+    let evaluations = batch.evaluations;
+    batch.defer_evaluation().unwrap();
+    assert!(batch.defer_evaluation().is_err(), "one batch at a time");
+    build(&mut batch);
+    batch.evaluate_deferred().unwrap();
+    assert!(!batch.evaluation_deferred());
+    assert!(batch.evaluations - evaluations < 15, "{} evaluations", batch.evaluations - evaluations);
+    let names = |s: &Session| s.model.state().bodies.iter().map(|b| (b.name.clone(), (b.body.size() * 1e9).round())).collect::<Vec<_>>();
+    assert_eq!(names(&batch), names(&one));
+    assert_eq!(batch.doc.features.len(), one.doc.features.len());
+    assert!((volume(&mut batch) - volume(&mut one)).abs() < 1e-9);
+    // The batch is one undo step.
+    run(&mut batch, "edit.undo", json!({}));
+    assert!(batch.doc.features.is_empty() && batch.model.state().bodies.is_empty());
+}
+
+/// A feature a batch adds that fails returns the design to where the batch began, at the
+/// batch's evaluation; an edit put off that fails does so at once. Either way the batch ends.
+#[test]
+fn a_failed_batch_leaves_the_design_as_it_began() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "body_name": "Kept"}));
+    let before = s.doc.clone();
+    s.defer_evaluation().unwrap();
+    run(&mut s, "solid.box", json!({"corner": [10, 0, 0], "length": 5, "width": 5, "height": 5}));
+    // A box whose size is fine as an expression but none as a body.
+    run(&mut s, "solid.box", json!({"corner": [20, 0, 0], "length": 0, "width": 5, "height": 5}));
+    assert!(s.evaluate_deferred().is_err());
+    assert_eq!(*s.doc, *before);
+    assert_eq!(s.model.state().bodies.len(), 1);
+    assert!(!s.evaluation_deferred());
+    s.defer_evaluation().unwrap();
+    run(&mut s, "solid.box", json!({"corner": [10, 0, 0], "length": 5, "width": 5, "height": 5}));
+    assert!(s.execute("solid.box", &json!({"length": "nowhere", "width": 5, "height": 5})).is_err());
+    assert_eq!(*s.doc, *before);
+    assert!(!s.evaluation_deferred());
+    assert_eq!(s.model.state().bodies.len(), 1);
+}
+
 #[test]
 fn default_extrude_profiles_keep_even_depth_islands_and_separate_outlines() {
     let mut s = Session::default();

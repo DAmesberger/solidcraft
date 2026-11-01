@@ -779,6 +779,23 @@ fn add_feature_in(s: &mut Session, p: &Value, kind: FeatureKind, world: bool) ->
         f.body_names = names.clone();
     }
     s.active_sketch = None;
+    // In a batch of put-off evaluation the feature is evaluated with the rest at its end
+    // (`Session::evaluate_deferred`), which reports it if it fails; the reply names it only.
+    if s.deferring {
+        let fname = s.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
+        let reply = FeatureResult {
+            feature: id,
+            name: fname,
+            bodies: Vec::new(),
+            created_bodies: Vec::new(),
+            changed_bodies: Vec::new(),
+            removed_bodies: Vec::new(),
+            warning: None,
+            ms: None,
+            param_warnings: Vec::new(),
+        };
+        return serde_json::to_value(reply).map_err(|e| EngineError::Other(e.to_string()));
+    }
     s.refresh();
     // A feature that makes more bodies than it was given names (a multi-profile extrude with one
     // `body_name`) has the rest numbered after the first by the evaluator: `Ribs`, `Ribs (2)`,
@@ -938,7 +955,11 @@ fn cut_scope(s: &Session, p: &Value, operation: Operation, sketch: u64, face_bod
 fn default_extrude_profiles(s: &Session, sketch: u64) -> ProfileSel {
     let st = s.model.state();
     let Some(ss) = st.sketch(sketch) else { return ProfileSel::All };
-    let drawn = solidcraft_sketch::find_drawn_profiles(&ss.sketch);
+    // Without linked references (texts aside) the drawn profiles are the solved sketch's own,
+    // which its evaluation found already (finding them again took a drilled board's sketch
+    // as long as solving it).
+    let referenced = ss.sketch.links.iter().any(|l| l.kind != solidcraft_sketch::LinkKind::Text);
+    let drawn = if referenced { solidcraft_sketch::find_drawn_profiles(&ss.sketch) } else { ss.profiles.clone() };
     let ps = if drawn.is_empty() { ss.profiles.clone() } else { drawn };
     // Every profile of a sketch at its size limit is looked at: a larger sketch can't be drawn,
     // so no profile's holes are filled in by taking every profile.
