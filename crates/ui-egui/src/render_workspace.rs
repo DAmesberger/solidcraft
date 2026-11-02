@@ -2209,6 +2209,7 @@ fn paint_product(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, camera
         let slot = app.render_workspace.slot.clone();
         let callback = ViewportCallback(Frame {
             product_lights: Some(light::preview(app)?),
+            product_look: None,
             product: true,
             upload_error: Some(app.render_workspace.upload_error.clone()),
             key,

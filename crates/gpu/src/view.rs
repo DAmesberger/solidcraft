@@ -19,15 +19,22 @@ use wgpu::util::DeviceExt;
 mod ao;
 mod clouds;
 pub use clouds::{CloudFilter, CloudStyle, ColorMode, DOT_SIZE, Dot, FILTERS, GpuCloud, cloud_dot};
+mod ibl;
 #[cfg(not(target_arch = "wasm32"))]
 mod msaa_check;
 mod oit;
+
+pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset, SurfacePattern};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
 
 /// Triangle vertex: position (3 × f32), normal (3 × f32), palette index (u32).
 pub const TRI_SIZE: usize = 28;
+/// Opaque PBR vertex: position, normal, linear base colour, (metallic, roughness, IOR).
 pub const PBR_SIZE: usize = pbr::VERTEX_SIZE;
+/// Opaque PBR vertex with the product look's detail (pattern and clear coat): [`PBR_SIZE`] bytes
+/// and four floats more. Only [`GpuScene::pbr_tri_with`] writes them.
+pub const PBR_DETAILED_SIZE: usize = pbr::DETAILED_VERTEX_SIZE;
 /// Line instance: a, b (3 × f32 each), palette index (u32), width in pixels (f32).
 pub const LINE_SIZE: usize = 32;
 /// Placement of an [`InstancedMesh`]: the rows of its rigid move (3 × 4 f32; a point's x, y and z
@@ -153,8 +160,9 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 }
 /// The shader's `U`: the view-projection matrix, 10 `vec4`s (the tenth carries the ambient
 /// occlusion radius), the 8 analysis colours, their flags, the depth direction and the two
-/// whole-body highlight colours, the product lights, and the sky (`uniform_bytes`).
-const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64 + 16;
+/// whole-body highlight colours, the product lights, the product look's two `vec4`s and the sky
+/// (`uniform_bytes`).
+const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64 + 32 + 16;
 
 /// A body drawn from its display plan, evaluated on the GPU: the plan, and a palette index per
 /// face (the plan's face numbering; faces past the end take the last index).
@@ -458,8 +466,11 @@ pub struct GpuScene {
     pub palette: Arc<Palette>,
     /// Opaque triangles. A zero normal draws the colour flat (unlit).
     pub tris: Vec<u8>,
-    /// Opaque product PBR vertices; linear base color and explicit optical parameters.
+    /// Opaque product PBR vertices ([`PBR_SIZE`] each); linear base color and explicit optical
+    /// parameters.
     pub pbr: Vec<u8>,
+    /// Opaque product PBR vertices with the product look's detail ([`PBR_DETAILED_SIZE`] each).
+    pub pbr_detailed: Vec<u8>,
     /// Translucent triangles (alpha from the colour), drawn after the opaque ones without
     /// writing depth.
     pub trans: Vec<u8>,
@@ -792,11 +803,42 @@ impl BlockBuilder {
 }
 
 impl GpuScene {
+    /// A vertex of an opaque PBR surface ([`PBR_SIZE`] bytes into [`GpuScene::pbr`]): its base
+    /// colour and optical parameters, with no pattern and no clear coat (the default preview has
+    /// no coating, docs/render-opaque-pbr.md; [`GpuScene::pbr_tri_with`] carries both).
     pub fn pbr_tri(&mut self, p: [f32; 3], n: [f32; 3], surface: solidcraft_render::surface::OpaqueSurface) {
-        let base = surface.base_color().to_f32();
-        let parameters = [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32];
-        for value in p.into_iter().chain(n).chain(base).chain(parameters) {
+        for value in p.into_iter().chain(n).chain(surface.base_color().to_f32()).chain(Self::pbr_parameters(surface)) {
             self.pbr.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+
+    fn pbr_parameters(surface: solidcraft_render::surface::OpaqueSurface) -> [f32; 3] {
+        [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32]
+    }
+
+    /// A vertex of an opaque PBR surface with the product look's detail ([`PBR_DETAILED_SIZE`]
+    /// bytes into [`GpuScene::pbr_detailed`]): a procedural `pattern` at `strength` (clamped to
+    /// [0, 1]) and the surface's clear coat. Both are drawn only with the product look; without
+    /// it the vertex draws as [`GpuScene::pbr_tri`]'s. The vertex's last four floats are (pattern
+    /// id + 0.25 + (coat IOR − 1) / 4, strength, coat weight, coat roughness): the fraction
+    /// carries the coat's IOR. Under a coat, a base that has no interface of its own (a pigmented
+    /// layer beneath the lacquer) takes IOR 1, so the air-to-coat reflection is counted once, by
+    /// the coat. A triangle's three vertices must carry the same detail (it is not interpolated).
+    pub fn pbr_tri_with(
+        &mut self,
+        p: [f32; 3],
+        n: [f32; 3],
+        surface: solidcraft_render::surface::OpaqueSurface,
+        pattern: SurfacePattern,
+        strength: f32,
+    ) {
+        let base = surface.base_color().to_f32();
+        let parameters = Self::pbr_parameters(surface);
+        let (weight, roughness, ior) = surface.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
+        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
+        let detail = [pattern.id() as f32 + 0.25 + (ior - 1.0) / 4.0, strength, weight, roughness];
+        for value in p.into_iter().chain(n).chain(base).chain(parameters).chain(detail) {
+            self.pbr_detailed.extend_from_slice(&value.to_le_bytes());
         }
     }
     pub fn tri(&mut self, p: [f32; 3], n: [f32; 3], c: PaletteIndex) {
@@ -935,6 +977,8 @@ pub const AO_SAMPLES_MOVING: u32 = 8;
 pub struct Frame {
     /// Bounded unshadowed product-light preview. None retains the fixed studio.
     pub product_lights: Option<Vec<[f32; 16]>>,
+    /// The opt-in product look of PBR surfaces ([`ProductLook`]; None: the default preview).
+    pub product_look: Option<ProductLook>,
     /// Product preview uses its own batches, retaining the Design viewport's uploads.
     pub product: bool,
     /// Product preview only: receives a GPU error raised by its geometry upload.
@@ -1608,6 +1652,7 @@ struct Batches {
     key: Option<u64>,
     tris: Option<Batch>,
     pbr: Option<Batch>,
+    pbr_detailed: Option<Batch>,
     trans: Option<Batch>,
     shadow: Option<Batch>,
     glass: Option<Batch>,
@@ -1701,6 +1746,7 @@ impl Batches {
             };
             self.tris = own("sc_tris", &sc.tris, TRI_SIZE);
             self.pbr = own("sc_pbr", &sc.pbr, PBR_SIZE);
+            self.pbr_detailed = own("sc_pbr_detailed", &sc.pbr_detailed, PBR_DETAILED_SIZE);
             self.trans = own("sc_trans", &sc.trans, TRI_SIZE);
             self.shadow = own("sc_shadow", &sc.shadow, TRI_SIZE);
             let own_lines = own("sc_lines", &sc.lines, LINE_SIZE);
@@ -2019,6 +2065,7 @@ pub struct Renderer {
     tri_hl_instanced: wgpu::RenderPipeline,
     tri_hl_instanced_flat: wgpu::RenderPipeline,
     pbr: wgpu::RenderPipeline,
+    pbr_detailed: wgpu::RenderPipeline,
     trans: wgpu::RenderPipeline,
     /// Glass: far sides (front faces culled), then near sides (back faces culled).
     glass_far: wgpu::RenderPipeline,
@@ -2070,6 +2117,12 @@ pub struct Renderer {
     /// The same filter into an offscreen texture of its own (no depth, one sample): the picture
     /// [`Renderer::cached`] keeps for still frames.
     ss_filter: wgpu::RenderPipeline,
+    /// The same two filters for a frame with the product look ([`ProductLook`]): they dither the
+    /// filtered picture again.
+    ss_blit_look: wgpu::RenderPipeline,
+    ss_filter_look: wgpu::RenderPipeline,
+    /// The product look's studios, the PBR pipeline's group [`pbr::STUDIO_GROUP`].
+    studios: ibl::Studios,
     /// The frame drawn offscreen at the viewport's own size (for the see-through surfaces' order-
     /// independent transparency), copied as it is.
     copy_blit: wgpu::RenderPipeline,
@@ -2235,12 +2288,42 @@ fn fs_copy(i: O) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs(i: O) -> @location(0) vec4<f32> {
+    return filtered(i);
+}
+fn filtered(i: O) -> vec4<f32> {
     let d = vec2<f32>(dpdx(i.uv.x), dpdy(i.uv.y)) * 0.25;
     let a = textureSampleLevel(src, smp, i.uv + vec2<f32>(-d.x, -d.y), 0.0);
     let b = textureSampleLevel(src, smp, i.uv + vec2<f32>(d.x, -d.y), 0.0);
     let c = textureSampleLevel(src, smp, i.uv + vec2<f32>(-d.x, d.y), 0.0);
     let e = textureSampleLevel(src, smp, i.uv + vec2<f32>(d.x, d.y), 0.0);
     return (a + b + c + e) * 0.25;
+}
+// The product look (`ProductLook`): the filtered picture re-dithered by ±1 LSB (triangular), so
+// the 2 × 2 mean does not cancel the scene's dither into bands; `fs_look_linear` for an sRGB
+// target, whose own encode follows (dithered in the encoded values all the same).
+fn look_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+fn look_dither(p: vec2<f32>) -> f32 {
+    return (look_noise(p) + look_noise(vec2<f32>(p.y, p.x) + vec2<f32>(19.0, 47.0)) - 1.0) / 255.0;
+}
+fn encode(c: vec3<f32>) -> vec3<f32> {
+    return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
+}
+fn decode(c: vec3<f32>) -> vec3<f32> {
+    return select(c / 12.92, pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c > vec3<f32>(0.04045));
+}
+@fragment
+fn fs_look(i: O) -> @location(0) vec4<f32> {
+    let c = filtered(i);
+    // Premultiplied: a pixel stays within its coverage (the background stays clear).
+    return vec4<f32>(clamp(c.rgb + vec3<f32>(look_dither(i.pos.xy)), vec3<f32>(0.0), vec3<f32>(c.a)), c.a);
+}
+@fragment
+fn fs_look_linear(i: O) -> @location(0) vec4<f32> {
+    let c = filtered(i);
+    let e = clamp(encode(max(c.rgb, vec3<f32>(0.0))) + vec3<f32>(look_dither(i.pos.xy)), vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(min(decode(e), vec3<f32>(c.a)), c.a);
 }
 "#;
 
@@ -2282,13 +2365,20 @@ fn tri_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout { array_stride: TRI_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
-/// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
-/// at [`crate::NORMAL_OFFSET`] (each padded to four floats).
+/// A plain PBR vertex ([`PBR_SIZE`]): position, normal, base colour, optical parameters.
 fn pbr_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3];
     wgpu::VertexBufferLayout { array_stride: PBR_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
+/// A PBR vertex with the product look's detail ([`PBR_DETAILED_SIZE`]).
+fn pbr_detailed_layout() -> wgpu::VertexBufferLayout<'static> {
+    const A: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3, 4 => Float32x4];
+    wgpu::VertexBufferLayout { array_stride: PBR_DETAILED_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
+}
+
+/// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
+/// at [`crate::NORMAL_OFFSET`] (each padded to four floats).
 fn planned_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 2] = [
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
@@ -2813,12 +2903,15 @@ impl Renderer {
             })
         };
         let pass_depth = window_depth(wgpu::CompareFunction::Always);
+        let look_filter = if t.format.is_srgb() { "fs_look_linear" } else { "fs_look" };
         let blits = || {
             (
                 blit("fs", window.samples.max(1), pass_depth.clone()),
                 blit("fs_copy", window.samples.max(1), pass_depth.clone()),
                 // Into the cached picture's own texture: no depth, one sample.
                 blit("fs", 1, None),
+                blit(look_filter, window.samples.max(1), pass_depth.clone()),
+                blit(look_filter, 1, None),
             )
         };
         let oit = || oit::Pipelines::new(device, &module, &layout, t.format, t.depth, t.samples);
@@ -2884,7 +2977,39 @@ impl Renderer {
                 solid("sc_tris_hl_instanced_flat", "fs_tri", None, highlight_depth(t.depth), TriSource::InstancedFlat),
             )
         };
-        let pbr = || pipeline("sc_pbr", "vs_pbr", "fs_pbr", pbr_layout(), opaque(), None);
+        // The PBR pipeline reads the product look's studio (group 3); groups 1 and 2 are the solid
+        // pipelines', bound for them before the PBR draw.
+        let studios = ibl::Studios::new(device);
+        let pbr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sc_pbr"),
+            bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
+            immediate_size: 0,
+        });
+        let pbr_pipeline = |vertex: &str, layout: wgpu::VertexBufferLayout<'static>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("sc_pbr"),
+                layout: Some(&pbr_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(vertex),
+                    buffers: &[Some(layout)],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: opaque(),
+                multisample: wgpu::MultisampleState { count: t.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_pbr"),
+                    targets: &[Some(wgpu::ColorTargetState { format: t.format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        // Plain PBR vertices, and those with the product look's detail.
+        let pbr = || (pbr_pipeline("vs_pbr", pbr_layout()), pbr_pipeline("vs_pbr_detailed", pbr_detailed_layout()));
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -2930,7 +3055,8 @@ impl Renderer {
             let ((glass_far_flat, glass_near_flat, trans_flat), tri_hl_instanced_flat) = see_through_flat.join();
             let (line, line_hidden) = lines.join();
             let (overlay, guide_line) = lines_all.join();
-            let (ss_blit, copy_blit, ss_filter) = blits.join();
+            let (ss_blit, copy_blit, ss_filter, ss_blit_look, ss_filter_look) = blits.join();
+            let (pbr, pbr_detailed) = pbr.join();
             let (depth_reset, section_reset, section_clear) = resets.join();
             let oit = oit.join();
             Renderer {
@@ -2945,6 +3071,9 @@ impl Renderer {
                 max_texture: device.limits().max_texture_dimension_2d,
                 ss_blit,
                 ss_filter,
+                ss_blit_look,
+                ss_filter_look,
+                studios,
                 copy_blit,
                 ss_scaled: false,
                 oit,
@@ -2990,7 +3119,8 @@ impl Renderer {
                 tri_hl_selected_built,
                 tri_hl_instanced,
                 tri_hl_instanced_flat,
-                pbr: pbr.join(),
+                pbr,
+                pbr_detailed,
                 trans,
                 glass_far,
                 glass_near,
@@ -3286,15 +3416,21 @@ fn can_reuse(ss_ready: bool, cached: Option<u64>, key: u64) -> bool {
     ss_ready && cached == Some(key)
 }
 
+/// The frame's opt-in product look, as drawn ([`ProductLook::sanitized`]).
+fn product_look(cb: &Frame) -> Option<ProductLook> {
+    cb.product_look.map(ProductLook::sanitized)
+}
+
 /// Everything the drawn picture depends on: the scene keys and camera, the viewport's size, the
-/// section, images, analysis, accessibility map, ambient occlusion and the theme's hover and
-/// selection tints. The same key draws the same picture (pipelines and shaders are fixed for the
-/// renderer).
+/// section, images, analysis, accessibility map, ambient occlusion, the product look and the
+/// theme's hover and selection tints. The same key draws the same picture (pipelines and shaders
+/// are fixed for the renderer; installing a studio forgets the kept picture).
 pub fn frame_key(cb: &Frame) -> u64 {
     use std::hash::Hash as _;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cb.product.hash(&mut h);
     cb.product_lights.as_ref().map(|lights| lights.iter().take(21).map(|light| light.map(f32::to_bits)).collect::<Vec<_>>()).hash(&mut h);
+    product_look(cb).map(|look| (look.studio, look.uniform().map(f32::to_bits))).hash(&mut h);
     cb.key.hash(&mut h);
     cb.sketch_key.hash(&mut h);
     cb.hl_key.hash(&mut h);
@@ -3359,13 +3495,15 @@ impl Renderer {
             // A still frame shows the picture as it is; the first one filters it down once.
             let filter = res.ss_scaled && res.cached.is_none();
             if filter {
-                res.cache_picture(device, encoder, cb.size_px);
+                res.cache_picture(device, encoder, cb.size_px, product_look(cb).is_some());
             }
             // The scene isn't drawn again: `paint`'s blit (and that filter) is all this frame draws.
             res.ss_stats = DrawStats { draw_calls: u32::from(filter), ..DrawStats::default() };
             return;
         }
         res.cached = None;
+        // The product look's studio is never baked here (it would stall the window): until a
+        // client installs it (`set_studio_environment`), the look draws without it.
         if cb.product {
             // A large product scene can exceed what the device will allocate. Its upload runs under
             // its own error scopes, so the failure reaches the preview instead of the device's
@@ -3424,7 +3562,9 @@ impl Renderer {
             res.access_version = a.version;
         }
         let ao_binds = [scene_bind(&res.model, &res.bind), scene_bind(&res.preview, &res.bind)];
-        res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview]);
+        // PBR surfaces join the depth map only with the product look (the only frames that occlude them).
+        let look = product_look(cb).is_some();
+        res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview], look);
         // Images: upload new or changed textures, drop removed ones, rebuild the quads.
         res.textures.retain(|id, _| cb.images.iter().any(|i| i.id == *id));
         res.quads.clear();
@@ -3495,7 +3635,8 @@ impl Renderer {
                 pass.set_pipeline(&self.copy_blit);
                 pass.set_bind_group(0, &cached.bind, &[]);
             } else {
-                pass.set_pipeline(if self.ss_scaled { &self.ss_blit } else { &self.copy_blit });
+                let filter = if product_look(frame).is_some() { &self.ss_blit_look } else { &self.ss_blit };
+                pass.set_pipeline(if self.ss_scaled { filter } else { &self.copy_blit });
                 pass.set_bind_group(0, &ss.bind, &[]);
             }
             pass.draw(0..3, 0..1);
@@ -3537,6 +3678,23 @@ impl Renderer {
     /// The target the pipelines draw into.
     pub fn target(&self) -> GpuTarget {
         self.target
+    }
+
+    /// Install a studio for frames whose [`ProductLook`] names its preset, replacing that preset's
+    /// studio. The renderer never bakes one: bake it off the window thread with
+    /// [`StudioEnvironment::bake`] (tens of milliseconds in an optimised build), or in bounded
+    /// steps over frames with [`StudioBake`] where there are no threads (the web). Until it is
+    /// installed, the look draws without its studio (the frame's product lights only).
+    pub fn set_studio_environment(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, env: &StudioEnvironment) {
+        self.studios.install(device, queue, env);
+        // A picture kept from before shows the old studio.
+        self.ss_key = None;
+        self.cached = None;
+    }
+
+    /// Whether `preset`'s studio is installed.
+    pub fn has_studio_environment(&self, preset: StudioPreset) -> bool {
+        self.studios.has(preset)
     }
 
     /// Evaluate planned bodies with `later`'s pipeline once it has compiled (#4860).
@@ -3710,7 +3868,9 @@ impl Renderer {
             }
         }
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
+        pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(product_look(cb).map(|look| look.studio)), &[]);
         tris(pass, &res.pbr, &m.pbr);
+        tris(pass, &res.pbr_detailed, &m.pbr_detailed);
         if !cb.product {
             res.clouds.paint(pass, &res.cloud_pipes, tally);
         }
@@ -3863,7 +4023,7 @@ impl Renderer {
     /// Filter the supersampled picture down to the viewport's own pixels once, into the texture
     /// [`Renderer::cached`] keeps: still frames then blit it as it is instead of filtering it every
     /// time.
-    fn cache_picture(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, size_px: [f32; 2]) {
+    fn cache_picture(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, size_px: [f32; 2], look: bool) {
         let Some(ss) = &self.ss else { return };
         let [w, h] = size_px;
         if !(w >= 1.0 && h >= 1.0) || self.no_cache {
@@ -3915,7 +4075,7 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.ss_filter);
+            pass.set_pipeline(if look { &self.ss_filter_look } else { &self.ss_filter });
             pass.set_bind_group(0, &ss.bind, &[]);
             pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
             pass.draw(0..3, 0..1);
@@ -4173,6 +4333,8 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
         let light = cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]);
         v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
     }
+    // The product look ([`ProductLook::uniform`]; all zero without it).
+    v.extend(cb.product_look.map_or([0.0; 8], |look| look.uniform()));
     v.extend(cb.sky.map(|value| if value.is_finite() { value } else { 0.0 }));
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
@@ -4192,6 +4354,8 @@ pub fn analysis_colors(c: &solidcraft_render::AnalysisColors) -> [f32; 36] {
 
 #[cfg(test)]
 mod tests {
+    use super::{ProductLook, StudioPreset};
+
     /// A placed box is kept while any of it may be in view, and left out only when it lies
     /// wholly past one side of the view: in an orthographic view and a perspective one, behind
     /// the eye too.
@@ -4409,12 +4573,51 @@ mod tests {
         assert_ne!(super::frame_key(&frame), previous);
     }
 
+    /// The product look rides in the two `vec4`s between the light records and the sky, sanitised
+    /// (all zero without it), and takes none of the 21 light slots: the lights are written as
+    /// without it.
+    #[test]
+    fn product_look_in_the_uniform() {
+        let floats = |f: &super::Frame| -> Vec<f32> {
+            super::uniform_bytes(f, 64.0, 64.0, false, false).as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+        };
+        let look_at = super::UNIFORM_SIZE as usize / 4 - 12;
+        // The meta vec4 sits right before the 21 light records.
+        let meta = look_at - 21 * 16 - 4;
+        let light = [0.6, 0.0, 0.8, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mut f = cached_frame();
+        f.product_lights = Some(vec![light; 2]);
+        let plain = floats(&f);
+        assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
+        assert_eq!(&plain[meta + 4..meta + 20], &light);
+        assert_eq!(&plain[look_at..look_at + 8], &[0.0; 8], "no look");
+        let wild = ProductLook {
+            exposure: f32::INFINITY,
+            studio: StudioPreset::Contrast,
+            rotation: f32::NAN,
+            intensity: -2.0,
+            weave_pitch: [0.0, f32::NAN],
+            ply_thickness: 1e9,
+            units_per_mm: -1.0,
+        };
+        f.product_look = Some(wild);
+        let v = floats(&f);
+        assert_eq!(&v[..look_at], &plain[..look_at], "the lights and everything else as without the look");
+        let tame = [1.0, 0.0, 0.0, 1.0, ProductLook::DEFAULT_WEAVE_PITCH[0], ProductLook::DEFAULT_WEAVE_PITCH[1], ProductLook::PATTERN_RANGE[1], 1.0];
+        assert_eq!(&v[look_at..look_at + 8], &tame);
+        assert_eq!(wild.sanitized().studio, StudioPreset::Contrast);
+        // Without product lights the look is on all the same.
+        f.product_lights = None;
+        assert_eq!(&floats(&f)[look_at..look_at + 8], &tame);
+    }
+
     /// A frame with a fixed picture, and a key that names everything it shows.
     fn cached_frame() -> super::Frame {
         use std::sync::{Arc, Mutex};
         let slot = || Arc::new(Mutex::new(None));
         super::Frame {
             product_lights: None,
+            product_look: None,
             product: false,
             upload_error: None,
             key: 1,
@@ -4505,6 +4708,29 @@ mod tests {
         ] {
             assert_ne!(base, changed, "{what} must draw again");
         }
+        // The opt-in product look: turning it on and each of its settings draws again.
+        let lights = |look: Option<ProductLook>| {
+            let mut f = cached_frame();
+            f.product_lights = Some(vec![[0.6, 0.0, 0.8, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]);
+            f.product_look = look;
+            super::frame_key(&f)
+        };
+        let off = lights(None);
+        let on = ProductLook::default();
+        for (what, changed) in [
+            ("product look", lights(Some(on))),
+            ("exposure", lights(Some(ProductLook { exposure: 2.0, ..on }))),
+            ("studio", lights(Some(ProductLook { studio: StudioPreset::Soft, ..on }))),
+            ("studio rotation", lights(Some(ProductLook { rotation: 0.5, ..on }))),
+            ("studio intensity", lights(Some(ProductLook { intensity: 0.5, ..on }))),
+            ("weave pitch", lights(Some(ProductLook { weave_pitch: [0.42, 0.44], ..on }))),
+            ("ply thickness", lights(Some(ProductLook { ply_thickness: 0.1, ..on }))),
+            ("units per millimetre", lights(Some(ProductLook { units_per_mm: 0.001, ..on }))),
+        ] {
+            assert_ne!(off, changed, "{what} must draw again");
+            assert!(what == "product look" || changed != lights(Some(on)), "{what} must draw again");
+        }
+        assert_eq!(off, lights(None), "the same lights without a look draw the same picture");
         // The comparison a frame makes: only a frame drawn into a texture has a picture to blit,
         // and only the picture with the same content is shown again.
         assert!(super::can_reuse(true, Some(base), base));
@@ -4516,11 +4742,13 @@ mod tests {
     /// Derivatives and implicit-lod sampling run only in uniform control flow: browsers' WGSL
     /// compilers (Tint) reject them after a branch, and the whole viewport shader then fails,
     /// a black screen on the web (naga accepts it). Every fragment entry point makes such calls
-    /// (directly or through a helper) before its first branch or return.
+    /// (directly or through a helper) before its first branch or return; the PBR source appended
+    /// to the viewport shader (`pbr::SOURCE`, with the product look's studio) included.
     #[test]
     fn derivatives_only_in_uniform_control_flow() {
         // Without comments (their words are not code).
-        let src: String = super::SHADER.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let shader = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+        let src: String = shader.lines().map(|l| l.split("//").next().unwrap_or("")).collect::<Vec<_>>().join("\n");
         let src = src.as_str();
         let derivs = ["dpdx(", "dpdy(", "fwidth(", "textureSample("];
         // Functions: name -> body.
@@ -4575,7 +4803,7 @@ mod tests {
             }
             if !*frag {
                 // A helper: its own derivatives must come before any branch or return in it.
-                let first = ["if (", "return", "discard"].iter().filter_map(|k| body.find(k)).min().unwrap_or(usize::MAX);
+                let first = first_branch(body);
                 for d in derivs {
                     if let Some(i) = body.find(d) {
                         assert!(i < first, "{n}: {d} after a branch");
@@ -4583,11 +4811,27 @@ mod tests {
                 }
                 continue;
             }
-            let first = ["if (", "return", "discard"].iter().filter_map(|k| body.find(k)).min().unwrap_or(usize::MAX);
+            let first = first_branch(body);
             for c in calls {
                 assert!(c < first, "fragment {n}: a derivative after a branch or return: {}", &body[c..(c + 40).min(body.len())]);
             }
         }
+        // The PBR source is scanned too: its fragment takes the pixel footprint the product look's
+        // patterns fade by, before its first branch.
+        let pbr = fns.iter().find(|(n, _, frag)| n == "fs_pbr" && *frag).map(|(_, body, _)| body.as_str()).unwrap_or("");
+        assert!(pbr.find("fwidth(").is_some_and(|c| c < first_branch(pbr)), "fs_pbr takes its footprint first");
+    }
+
+    /// Where a WGSL body first branches, loops or returns (`if` with or without parentheses,
+    /// `for`, `loop`, `while`, `switch`, `select` excluded: it evaluates both sides).
+    fn first_branch(body: &str) -> usize {
+        let words = ["if (", "if ", "for (", "loop", "while", "switch", "return", "discard", "continue", "break"];
+        words
+            .iter()
+            .flat_map(|w| body.match_indices(w).map(|(i, _)| i).collect::<Vec<_>>())
+            .filter(|&i| i == 0 || !body[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+            .min()
+            .unwrap_or(usize::MAX)
     }
 }
 
@@ -4803,6 +5047,7 @@ mod glass_tests {
         let none = || Arc::new(Mutex::new(None));
         let frame = Frame {
             product_lights: None,
+            product_look: None,
             product: false,
             upload_error: None,
             key: 1,
@@ -4979,6 +5224,7 @@ mod glass_tests {
         let none = || Arc::new(Mutex::new(None));
         Frame {
             product_lights: None,
+            product_look: None,
             product: false,
             upload_error: None,
             key: 1,
@@ -5008,6 +5254,340 @@ mod glass_tests {
             ao_samples: crate::view::AO_SAMPLES,
             sky: [0.0; 4],
             ssaa,
+        }
+    }
+
+    /// `preset`'s studio, baked once for all the tests (off the renderer, as a client bakes it).
+    fn studio(preset: StudioPreset) -> StudioEnvironment {
+        static BAKED: [std::sync::OnceLock<StudioEnvironment>; 3] = [const { std::sync::OnceLock::new() }; 3];
+        let slot = BAKED.get(preset.id() as usize).unwrap_or(&BAKED[0]);
+        slot.get_or_init(|| StudioEnvironment::bake(preset)).clone()
+    }
+
+    /// A PBR square over the whole fixed view, facing the viewer (+Z).
+    fn pbr_scene(base: Vec3, metallic: f64, roughness: f64, ior: f64) -> Option<GpuScene> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok()?;
+        let mut scene = GpuScene::default();
+        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
+            scene.pbr_tri(p, [0.0, 0.0, 1.0], surface);
+        }
+        Some(scene)
+    }
+
+    /// The default preview's pixel for `surface` facing the viewer: the shared surface BRDF from
+    /// the CPU (f64) under `lights` (direction, relative radiance), per-channel Reinhard, sRGB.
+    fn reinhard_pixel(base: Vec3, metallic: f64, roughness: f64, ior: f64, lights: &[(Vec3, Vec3)]) -> Option<[u8; 3]> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok()?;
+        let mut radiance = Vec3::ZERO;
+        for (direction, colour) in lights {
+            let l = direction.normalized()?;
+            let f = surface.brdf(Vec3::Z, Vec3::Z, l).ok()?;
+            let cosine = l.z.max(0.0);
+            radiance += Vec3::new(f.x * colour.x, f.y * colour.y, f.z * colour.z) * cosine;
+        }
+        let encode = |c: f64| {
+            let m = c / (1.0 + c);
+            let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+            (e * 255.0).round().clamp(0.0, 255.0) as u8
+        };
+        Some([encode(radiance.x), encode(radiance.y), encode(radiance.z)])
+    }
+
+    /// The pixels inside the square (away from the frame's edge), RGB.
+    fn inner_pixels(bytes: &[u8]) -> Vec<[u8; 3]> {
+        const SIZE: usize = 64;
+        let mut out = Vec::new();
+        for y in 8..SIZE - 8 {
+            for x in 8..SIZE - 8 {
+                let i = (y * SIZE + x) * 4;
+                if let Some(p) = bytes.get(i..i + 3) {
+                    out.push([p[0], p[1], p[2]]);
+                }
+            }
+        }
+        out
+    }
+
+    fn close(a: [u8; 3], b: [u8; 3], tolerance: u8) -> bool {
+        a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tolerance)
+    }
+
+    /// Without the product look, the PBR preview is the one documented in
+    /// docs/render-opaque-pbr.md: the fixed studio (or the frame's product lights) through the
+    /// shared BRDF, per-channel Reinhard, one sRGB encode and no dither — every pixel of a flat
+    /// square the same, matching the CPU. A look record changes the picture; one with no studio
+    /// is the same lights through PBR Neutral, with a ±1 LSB dither.
+    #[test]
+    fn the_pbr_preview_is_unchanged_without_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let fixed = [
+            (Vec3::new(0.6, 0.0, 0.8), Vec3::new(3.0, 3.0, 3.0)),
+            (Vec3::new(-0.8, 0.0, 0.6), Vec3::new(1.0, 1.0, 1.0)),
+            (Vec3::new(0.0, -0.6, 0.8), Vec3::new(1.5, 1.5, 1.5)),
+        ];
+        let key = [0.3, -0.2, 0.93, 0.0, 2.0, 1.8, 1.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let key_light = [(Vec3::new(0.3, -0.2, 0.93), Vec3::new(2.0, 1.8, 1.6))];
+        let surfaces =
+            [(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.5, 1.5), (Vec3::new(0.95, 0.64, 0.54), 1.0, 0.3, 1.5), (Vec3::new(0.1, 0.45, 0.18), 0.0, 0.25, 1.0)];
+        for (key_number, (base, metallic, roughness, ior)) in (10..).zip(surfaces) {
+            let Some(scene) = pbr_scene(base, metallic, roughness, ior) else { panic!("valid surface") };
+            // Each surface is a new scene (the renderer keeps a scene while its key stays).
+            let test_frame = |scene: GpuScene, ssaa: f32| Frame { key: key_number, ..test_frame(scene, ssaa) };
+            for (lights, expected_lights) in [(None, &fixed[..]), (Some(vec![key]), &key_light[..])] {
+                let mut frame = test_frame(scene.clone(), 1.0);
+                frame.product_lights = lights.clone();
+                let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+                let Some(expected) = reinhard_pixel(base, metallic, roughness, ior, expected_lights) else { panic!("valid BRDF") };
+                let first = pixels.first().copied().unwrap_or_default();
+                assert!(pixels.iter().all(|p| *p == first), "the default preview has no dither: {base:?} {lights:?}");
+                assert!(close(first, expected, 2), "{base:?}, metallic {metallic}, roughness {roughness}: {first:?} against {expected:?}");
+            }
+            // The look, with no studio and exposure 1: the same radiance through PBR Neutral, dithered.
+            let mut frame = test_frame(scene.clone(), 1.0);
+            frame.product_lights = Some(vec![key]);
+            frame.product_look = Some(ProductLook { intensity: 0.0, ..ProductLook::default() });
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            let Some(surface) = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok() else { panic!("valid surface") };
+            let Ok(f) = surface.brdf(Vec3::Z, Vec3::Z, Vec3::new(0.3, -0.2, 0.93).normalized().unwrap_or(Vec3::Z)) else { panic!("valid BRDF") };
+            let cosine = Vec3::new(0.3, -0.2, 0.93).normalized().map_or(1.0, |l| l.z);
+            let radiance = [f.x * 2.0 * cosine, f.y * 1.8 * cosine, f.z * 1.6 * cosine].map(|c| c as f32);
+            let mapped = super::ibl::pbr_neutral(radiance);
+            let expected = mapped.map(|m| {
+                let m = f64::from(m);
+                let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+                (e * 255.0).round().clamp(0.0, 255.0) as u8
+            });
+            assert!(pixels.iter().all(|p| close(*p, expected, 2)), "{base:?}: PBR Neutral {expected:?}, got e.g. {:?}", pixels.first());
+            let distinct: std::collections::BTreeSet<[u8; 3]> = pixels.iter().copied().collect();
+            assert!(distinct.len() > 1, "the look dithers a flat surface");
+            // A look naming a studio that is not installed draws without it: the renderer never
+            // bakes one (that would stall the window).
+            frame.product_look = Some(ProductLook::default());
+            let unlit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            assert!(!r.has_studio_environment(StudioPreset::Product), "prepare bakes no studio");
+            assert!(unlit.iter().zip(&pixels).all(|(a, b)| close(*a, *b, 1)), "without its studio the look is the lights alone");
+            // Installed, the studio adds its light.
+            r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+            let lit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+            let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
+            assert!(mean(&lit) > mean(&pixels) + 3.0, "the studio adds light: {} against {}", mean(&lit), mean(&pixels));
+        }
+    }
+
+    /// Supersampled, the product look's filter dithers the 2 × 2 mean again; without the look the
+    /// filter is the plain box, as before.
+    #[test]
+    fn the_supersample_filter_dithers_only_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Some(scene) = pbr_scene(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.5, 1.5) else { panic!("valid surface") };
+        let mut frame = test_frame(scene, 2.0);
+        let plain = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        assert!(r.ss_ready && r.ss_scaled, "drawn supersampled");
+        let first = plain.first().copied().unwrap_or_default();
+        assert!(plain.iter().all(|p| *p == first), "the default filter adds no noise");
+        // A studio baked off the window thread and installed (a second install replaces it).
+        let env = std::thread::spawn(|| studio(StudioPreset::Soft)).join().unwrap_or_else(|_| studio(StudioPreset::Soft));
+        r.set_studio_environment(&device, &queue, &env);
+        r.set_studio_environment(&device, &queue, &env);
+        assert!(r.has_studio_environment(StudioPreset::Soft) && !r.has_studio_environment(StudioPreset::Product));
+        frame.product_look = Some(ProductLook { studio: StudioPreset::Soft, ..ProductLook::default() });
+        let look = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        let distinct: std::collections::BTreeSet<[u8; 3]> = look.iter().copied().collect();
+        assert!(distinct.len() > 1, "the look's filter dithers");
+        // Again, from the cached picture: the same dithered picture.
+        let again = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        assert!(r.cached.is_some());
+        assert!(look.iter().zip(&again).all(|(a, b)| close(*a, *b, 1)), "the cached picture is the filtered one");
+    }
+
+    /// A PBR square like [`pbr_scene`], with the product look's detail on every vertex.
+    fn detailed_scene(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> GpuScene {
+        let mut scene = GpuScene::default();
+        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
+            scene.pbr_tri_with(p, [0.0, 0.0, 1.0], surface, pattern, strength);
+        }
+        scene
+    }
+
+    /// A PBR floor with a 4 × 4 block standing 3 high in the middle (its top face is what the
+    /// fixed view looks down on).
+    fn block_on_floor() -> Option<GpuScene> {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.7, 0.7, 0.7), 0.0, 0.6, 1.5).ok()?;
+        let mut scene = GpuScene::default();
+        let mut quad = |z: f32, h: f32| {
+            for [x, y] in [[-h, -h], [h, -h], [h, h], [-h, -h], [h, h], [-h, h]] {
+                scene.pbr_tri([x, y, z], [0.0, 0.0, 1.0], surface);
+            }
+        };
+        quad(0.0, 12.0);
+        quad(3.0, 2.0);
+        Some(scene)
+    }
+
+    /// The pixel at (`x`, `y`) of a 64 × 64 frame, RGB.
+    fn pixel(bytes: &[u8], x: usize, y: usize) -> [u8; 3] {
+        let i = (y * 64 + x) * 4;
+        bytes.get(i..i + 3).map_or([0; 3], |p| [p[0], p[1], p[2]])
+    }
+
+    /// Without the product look a coat, a pattern or a frame's occlusion radius changes nothing
+    /// on a PBR surface: the documented preview, as without them (docs/render-opaque-pbr.md).
+    #[test]
+    fn coats_patterns_and_occlusion_wait_for_the_product_look() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let fixed = [
+            (Vec3::new(0.6, 0.0, 0.8), Vec3::new(3.0, 3.0, 3.0)),
+            (Vec3::new(-0.8, 0.0, 0.6), Vec3::new(1.0, 1.0, 1.0)),
+            (Vec3::new(0.0, -0.6, 0.8), Vec3::new(1.5, 1.5, 1.5)),
+        ];
+        let base = Vec3::new(0.06, 0.24, 0.07);
+        let (Ok(plain), Ok(coat)) =
+            (solidcraft_render::surface::OpaqueSurface::new(base, 0.0, 0.4, 1.5), solidcraft_render::clear_coat::ClearCoat::new(1.0, 0.06, 1.52))
+        else {
+            panic!("valid surface")
+        };
+        let Some(expected) = reinhard_pixel(base, 0.0, 0.4, 1.5, &fixed) else { panic!("valid BRDF") };
+        for (key, pattern) in (30..).zip(SurfacePattern::ALL) {
+            let scene = detailed_scene(plain.with_clear_coat(coat), pattern, 1.0);
+            let frame = Frame { key, ao_radius: 3.0, ..test_frame(scene, 1.0) };
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            let first = pixels.first().copied().unwrap_or_default();
+            assert!(pixels.iter().all(|p| *p == first), "{pattern:?}: no pattern and no dither");
+            assert!(close(first, expected, 2), "{pattern:?}: {first:?} against the uncoated {expected:?}");
+        }
+        let Some(scene) = block_on_floor() else { panic!("valid surface") };
+        let plain = render_frame(&mut r, &device, &queue, &Frame { key: 40, ..test_frame(scene.clone(), 1.0) }, true);
+        let occluded = render_frame(&mut r, &device, &queue, &Frame { key: 41, ao_radius: 4.0, ..test_frame(scene, 1.0) }, true);
+        assert_eq!(plain, occluded, "no occlusion on PBR surfaces without the look");
+    }
+
+    /// With the product look, a PBR surface shows its clear coat: the frame's pixel is the f64
+    /// coated surface oracle under the frame's light through exposure, PBR Neutral and the
+    /// dithered encode (no studio, so nothing else lights it).
+    #[test]
+    fn the_product_look_draws_the_clear_coat() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let light = Vec3::new(0.2, -0.1, 0.97);
+        let key = [0.2, -0.1, 0.97, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let look = ProductLook { intensity: 0.0, exposure: 1.5, ..ProductLook::default() };
+        let mut previous: Option<[u8; 3]> = None;
+        for (key_number, (base_ior, coat)) in (50..).zip([(1.5, None), (1.0, Some((1.0, 0.3, 1.52))), (1.5, Some((0.5, 0.2, 2.0)))]) {
+            let Ok(mut surface) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.06, 0.24, 0.07), 0.0, 0.5, base_ior) else {
+                panic!("valid surface")
+            };
+            if let Some((w, roughness, ior)) = coat {
+                let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, roughness, ior) else { panic!("valid coat") };
+                surface = surface.with_clear_coat(c);
+            }
+            let mut frame = Frame { key: key_number, ..test_frame(detailed_scene(surface, SurfacePattern::None, 0.0), 1.0) };
+            frame.product_lights = Some(vec![key]);
+            frame.product_look = Some(look);
+            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+            // A direct light in the look is a softbox: the coat's lobe for it is widened by
+            // `LOOK_LIGHT_SPREAD` (0.1 in α), so the oracle draws that wider coat.
+            let lit = match coat {
+                Some((w, roughness, ior)) => {
+                    let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, (roughness * roughness + 0.1).sqrt(), ior) else {
+                        panic!("valid coat")
+                    };
+                    surface.with_clear_coat(c)
+                }
+                None => surface,
+            };
+            let (Some(l), Ok(f)) = (light.normalized(), lit.brdf(Vec3::Z, Vec3::Z, light.normalized().unwrap_or(Vec3::Z))) else {
+                panic!("valid BRDF")
+            };
+            let radiance = [f.x, f.y, f.z].map(|c| (c * 2.0 * l.z * 1.5) as f32);
+            let expected = super::ibl::pbr_neutral(radiance).map(|m| {
+                let m = f64::from(m);
+                let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
+                (e * 255.0).round().clamp(0.0, 255.0) as u8
+            });
+            assert!(pixels.iter().all(|p| close(*p, expected, 2)), "coat {coat:?}: {expected:?}, got e.g. {:?}", pixels.first());
+            let first = pixels.first().copied().unwrap_or_default();
+            assert!(previous.is_none_or(|p| p != first), "each coat changes the picture");
+            previous = Some(first);
+        }
+    }
+
+    /// With the product look and an occlusion radius, a PBR floor darkens where a PBR block stands
+    /// on it (PBR surfaces join the depth prepass), only in the studio's light: away from the
+    /// block, and under the frame's directional light alone, nothing changes.
+    #[test]
+    fn the_product_look_occludes_only_indirect_light() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Some(scene) = block_on_floor() else { panic!("valid surface") };
+        let key = [0.3, -0.2, 0.93, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let draw = |r: &mut Renderer, number: u64, radius: f32, lights: Vec<[f32; 16]>, look: ProductLook| {
+            let frame =
+                Frame { key: number, ao_radius: radius, product_lights: Some(lights), product_look: Some(look), ..test_frame(scene.clone(), 1.0) };
+            render_frame(r, &device, &queue, &frame, true)
+        };
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+        let open = draw(&mut r, 60, 0.0, Vec::new(), ProductLook::default());
+        let shut = draw(&mut r, 61, 4.0, Vec::new(), ProductLook::default());
+        let sum = |p: [u8; 3]| p.iter().map(|&c| u32::from(c)).sum::<u32>();
+        // World (2.6, 0) beside the block, and (8.5, -8.5) far from it.
+        let (near, far) = ((40, 32), (59, 59));
+        assert!(
+            sum(pixel(&shut, near.0, near.1)) + 15 < sum(pixel(&open, near.0, near.1)),
+            "the floor darkens beside the block: {:?} against {:?}",
+            pixel(&shut, near.0, near.1),
+            pixel(&open, near.0, near.1)
+        );
+        assert!(close(pixel(&shut, far.0, far.1), pixel(&open, far.0, far.1), 1), "far from the block nothing changes");
+        let direct = ProductLook { intensity: 0.0, ..ProductLook::default() };
+        let lit = draw(&mut r, 62, 0.0, vec![key], direct);
+        let lit_occluded = draw(&mut r, 63, 4.0, vec![key], direct);
+        assert_eq!(lit, lit_occluded, "direct light is not occluded");
+    }
+
+    /// With the product look a pattern shows where its period spans pixels, and fades to the plain
+    /// surface where it is far below one.
+    #[test]
+    fn the_product_look_patterns_fade_to_the_plain_surface() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let Ok(laminate) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.36, 0.32, 0.17), 0.0, 0.6, 1.5) else {
+            panic!("valid surface")
+        };
+        let key = [0.3, -0.2, 0.93, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let draw = |r: &mut Renderer, number: u64, pattern: SurfacePattern, units: f32| {
+            let mut frame = Frame { key: number, ..test_frame(detailed_scene(laminate, pattern, 1.0), 1.0) };
+            let look = ProductLook { intensity: 0.0, units_per_mm: units, ..ProductLook::default() };
+            frame.product_lights = Some(vec![key]);
+            frame.product_look = Some(look);
+            inner_pixels(&render_frame(r, &device, &queue, &frame, true))
+        };
+        let plain = draw(&mut r, 70, SurfacePattern::None, 10.0);
+        let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
+        for (number, pattern) in (71..).step_by(2).zip([SurfacePattern::Weave, SurfacePattern::InkGrain]) {
+            // 10 world units a millimetre: a 0.58 mm pitch is about 18 pixels.
+            let near = draw(&mut r, number, pattern, if pattern == SurfacePattern::InkGrain { 200.0 } else { 10.0 });
+            let red = |p: &[[u8; 3]]| p.iter().map(|c| c[0]).max().unwrap_or(0) - p.iter().map(|c| c[0]).min().unwrap_or(0);
+            assert!(red(&near) > 12, "{pattern:?} shows: spread {}", red(&near));
+            assert!((mean(&near) - mean(&plain)).abs() < 0.05 * mean(&plain), "{pattern:?} keeps the mean: {} against {}", mean(&near), mean(&plain));
+            // 0.01 world units a millimetre: many periods to a pixel.
+            let far = draw(&mut r, number + 1, pattern, 0.01);
+            assert!(far.iter().zip(&plain).all(|(a, b)| close(*a, *b, 1)), "{pattern:?} fades to the plain surface");
         }
     }
 

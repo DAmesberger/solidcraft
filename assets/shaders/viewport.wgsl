@@ -20,6 +20,8 @@ struct U {
     sel: vec4<f32>,    // xyz a whole selected body's colour before lighting
     product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
+    look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
+    look_detail: vec4<f32>, // its pattern sizes: weave pitch x, y, ply thickness (mm), world units per mm
     sky: vec4<f32>,    // xyz = world up; w = 1: shade in linear light with a sky fill (#7974)
 };
 
@@ -60,6 +62,49 @@ fn out_color(c: vec4<f32>) -> vec4<f32> {
         return vec4<f32>(to_linear(c.rgb), c.a);
     }
     return c;
+}
+
+// The opt-in product look (`Frame::product_look`, docs/render-opaque-pbr.md): `u.look.w` is 1
+// with it, 0 without.
+fn look_on() -> bool {
+    return u.look.w > 0.5;
+}
+
+/// The look's (exposure, studio intensity, studio rotation, 1); only when `look_on()`.
+fn look_params() -> vec4<f32> {
+    return u.look;
+}
+
+/// Khronos PBR Neutral tone mapping: linear Rec. 709 in, [0, 1] out. Adapted from the Khronos
+/// Group's reference (Apache-2.0, see ATTRIBUTION.md); `ibl::pbr_neutral` on the CPU.
+fn look_tone(colour: vec3<f32>) -> vec3<f32> {
+    var c = max(colour, vec3<f32>(0.0));
+    let x = min(c.r, min(c.g, c.b));
+    let offset = select(0.04, x - 6.25 * x * x, x < 0.08);
+    c = c - vec3<f32>(offset);
+    let peak = max(c.r, max(c.g, c.b));
+    let d = 0.24;
+    let new_peak = 1.0 - d * d / (peak + d - 0.76);
+    let g = 1.0 - 1.0 / (0.15 * (peak - new_peak) + 1.0);
+    let compressed = mix(c * (new_peak / max(peak, 0.000001)), vec3<f32>(new_peak), g);
+    return select(c, compressed, peak >= 0.76);
+}
+
+/// Interleaved gradient noise in [0, 1) at pixel `p` (as the ambient occlusion's turn).
+fn look_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+/// A triangular dither in (−1, 1) LSB: two noise values along different pixel gradients, summed.
+fn look_dither(p: vec2<f32>) -> f32 {
+    return look_noise(p) + look_noise(vec2<f32>(p.y, p.x) + vec2<f32>(19.0, 47.0)) - 1.0;
+}
+
+/// A tone-mapped colour sRGB-encoded for an 8-bit target, dithered at pixel `p`.
+fn look_encode(mapped: vec3<f32>, p: vec2<f32>) -> vec3<f32> {
+    let c = clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0));
+    let e = select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
+    return clamp(e + vec3<f32>(look_dither(p) / 255.0), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 struct TOut {
@@ -670,12 +715,16 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
     if (dot(n, v) < 0.0) { n = -n; }
-    if u.product_lights_meta.x>0.0 {
+    // The product look lights non-PBR faces with the frame's product lights only (no studio).
+    if u.product_lights_meta.x>0.0 || look_on() {
         var radiance=vec3<f32>(0.0);
         for (var k=0u;k<min(u32(u.product_lights_meta.y),21u);k+=1u) {
             if u.product_lights[k*4u].w == 4.0 {radiance+=to_linear(base.rgb)*u.product_lights[k*4u+1u].xyz/3.141592653589793;continue;}
             let sample=product_light_sample(k,i.wp);
             radiance+=to_linear(base.rgb)*sample[1]*(max(dot(n,sample[0]),0.0)/3.141592653589793);
+        }
+        if look_on() {
+            return out_color(vec4<f32>(look_encode(look_tone(radiance*look_params().x),i.pos.xy),base.a));
         }
         let mapped=radiance/(vec3<f32>(1.0)+radiance);
         let encoded=select(mapped*12.92,1.055*pow(mapped,vec3<f32>(1.0/2.4))-vec3<f32>(0.055),mapped>vec3<f32>(0.0031308));

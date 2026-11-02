@@ -24,6 +24,13 @@ decoding state machines from image 0.25.10 (https://github.com/image-rs/image),
 MIT OR Apache-2.0. ATTRIBUTION.md describes the bounded/cancellable changes; the
 original licence texts are included in THIRD-PARTY-LICENSES.txt.
 
+The PBR Neutral tone mapping of the real-time product look (`pbr_neutral` in
+crates/gpu/src/view/ibl.rs and `look_tone` in assets/shaders/viewport.wgsl) is adapted
+from the Khronos Group's reference implementation
+(https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral),
+Copyright The Khronos Group Inc., licensed under the Apache License 2.0 (LICENSE-APACHE).
+ATTRIBUTION.md lists the files.
+
 Most bundled assets are drawn in code or contributed originally; third-party fonts (Liberation Sans
 for sketch text, BIZ UDPGothic for web Japanese display) are licensed under SIL OFL 1.1. The
 per-file list is in ATTRIBUTION.md.

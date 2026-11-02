@@ -1,5 +1,5 @@
-//! The optional AO passes. Only opaque model and preview triangles participate: their depth is
-//! drawn once into a single-sample depth map, and the occlusion term of the surface that depth
+//! The optional AO passes. Only opaque model and preview triangles participate (PBR surfaces
+//! too, with the product look, which occludes them): their depth is drawn once into a single-sample depth map, and the occlusion term of the surface that depth
 //! holds is drawn into a texture of the same size and blurred by depth (#9327), which the lit
 //! fragment reads. The maps are independent of the window's MSAA, and the depth runs the same way
 //! as the viewport's own buffer (see [`super::depth_compare`] and [`super::far_depth`]).
@@ -7,7 +7,10 @@
 //! bits for portable integer texel reads. GLSL cannot load from a depth texture, and float
 //! colour attachments are not available on every GL adapter.
 
-use super::{Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, planned_layout, shared_layout, tri_layout};
+use super::{
+    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_detailed_layout, pbr_layout, planned_layout, shared_layout,
+    tri_layout,
+};
 
 const TERM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
@@ -17,6 +20,18 @@ struct OpaquePipelines {
     planned: wgpu::RenderPipeline,
     instanced: wgpu::RenderPipeline,
     instanced_flat: wgpu::RenderPipeline,
+    pbr: wgpu::RenderPipeline,
+    pbr_detailed: wgpu::RenderPipeline,
+}
+
+/// Where a pass's vertices come from.
+#[derive(Clone, Copy)]
+enum Source {
+    Tris(TriSource),
+    /// PBR vertices, plain or with the product look's detail.
+    Pbr {
+        detailed: bool,
+    },
 }
 
 /// The maps at their current size. Group 2 of the shader is the depth map and a term: `bind` has
@@ -82,8 +97,9 @@ fn term_target(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachme
     })
 }
 
-/// The opaque triangles of `batches`, as neither pass counts them in the performance overlay.
-fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, binds: [&wgpu::BindGroup; 2], batches: [&Batches; 2]) {
+/// The opaque triangles of `batches`, as neither pass counts them in the performance overlay;
+/// `pbr` adds the PBR surfaces (the product look's, which they occlude and are occluded by).
+fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, binds: [&wgpu::BindGroup; 2], batches: [&Batches; 2], pbr: bool) {
     for (batch, bind) in batches.into_iter().zip(binds) {
         pass.set_bind_group(0, bind, &[]);
         pass.set_pipeline(&pipelines.built);
@@ -109,6 +125,15 @@ fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, bin
         }
         for draw in batch.instanced.iter().filter(|d| d.look == super::InstanceLook::Opaque) {
             draw.draw(pass, &pipelines.instanced, &pipelines.instanced_flat, &uncounted);
+        }
+        for (surfaces, pipeline) in [(&batch.pbr, &pipelines.pbr), (&batch.pbr_detailed, &pipelines.pbr_detailed)] {
+            if let Some(surfaces) = surfaces.as_ref().filter(|_| pbr) {
+                pass.set_pipeline(pipeline);
+                for (buffer, count) in &surfaces.parts {
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..*count, 0..1);
+                }
+            }
         }
     }
 }
@@ -150,19 +175,28 @@ impl Resources {
         let built = [Some(tri_layout())];
         let evaluated = [Some(planned_layout()), Some(color_layout())];
         let placed = [Some(shared_layout()), Some(instance_layout())];
+        let pbr = [Some(pbr_layout())];
+        let pbr_detailed = [Some(pbr_detailed_layout())];
         let target = |format| [Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::RED })];
         let opaque = |label, layout: &wgpu::PipelineLayout, fragment: &str, format, depth_write_enabled, compare| {
-            let pipeline = |source: TriSource| {
+            let pipeline = |source: Source| {
+                let (vertex, fragment) = match source {
+                    Source::Tris(s) => (s.entry(), s.fragment(fragment)),
+                    Source::Pbr { detailed: false } => ("vs_pbr", format!("{fragment}_pbr")),
+                    Source::Pbr { detailed: true } => ("vs_pbr_detailed", format!("{fragment}_pbr")),
+                };
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some(label),
                     layout: Some(layout),
                     vertex: wgpu::VertexState {
                         module,
-                        entry_point: Some(source.entry()),
+                        entry_point: Some(vertex),
                         buffers: match source {
-                            TriSource::Built => &built[..],
-                            TriSource::Planned => &evaluated[..],
-                            TriSource::Instanced | TriSource::InstancedFlat => &placed[..],
+                            Source::Tris(TriSource::Built) => &built[..],
+                            Source::Tris(TriSource::Planned) => &evaluated[..],
+                            Source::Tris(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
+                            Source::Pbr { detailed: false } => &pbr[..],
+                            Source::Pbr { detailed: true } => &pbr_detailed[..],
                         },
                         compilation_options: Default::default(),
                     },
@@ -177,7 +211,7 @@ impl Resources {
                     multisample: wgpu::MultisampleState::default(),
                     fragment: Some(wgpu::FragmentState {
                         module,
-                        entry_point: Some(&source.fragment(fragment)),
+                        entry_point: Some(&fragment),
                         targets: &target(format),
                         compilation_options: Default::default(),
                     }),
@@ -186,10 +220,12 @@ impl Resources {
                 })
             };
             OpaquePipelines {
-                built: pipeline(TriSource::Built),
-                planned: pipeline(TriSource::Planned),
-                instanced: pipeline(TriSource::Instanced),
-                instanced_flat: pipeline(TriSource::InstancedFlat),
+                built: pipeline(Source::Tris(TriSource::Built)),
+                planned: pipeline(Source::Tris(TriSource::Planned)),
+                instanced: pipeline(Source::Tris(TriSource::Instanced)),
+                instanced_flat: pipeline(Source::Tris(TriSource::InstancedFlat)),
+                pbr: pipeline(Source::Pbr { detailed: false }),
+                pbr_detailed: pipeline(Source::Pbr { detailed: true }),
             }
         };
         let prepass = opaque("sc_ao_prepass", &prepass_layout, "fs_ao_depth", wgpu::TextureFormat::R32Uint, true, wgpu::CompareFunction::Less);
@@ -215,6 +251,8 @@ impl Resources {
         Self { layout, maps, size: [1, 1], prepass, term, blur }
     }
 
+    /// Draw the maps when `radius` is positive; `pbr` adds the PBR surfaces.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -224,6 +262,7 @@ impl Resources {
         size_px: [f32; 2],
         reversed: bool,
         batches: [&Batches; 2],
+        pbr: bool,
     ) {
         let enabled = radius.is_finite() && radius > 0.0;
         // Bound memory at large window sizes; normalized coordinates also handle downsampling.
@@ -255,7 +294,7 @@ impl Resources {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        draw_opaque(&mut pass, &self.prepass, binds, batches);
+        draw_opaque(&mut pass, &self.prepass, binds, batches, pbr);
         drop(pass);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("sc_ao_term"),
@@ -270,7 +309,7 @@ impl Resources {
             multiview_mask: None,
         });
         pass.set_bind_group(2, &self.maps.bind, &[]);
-        draw_opaque(&mut pass, &self.term, binds, batches);
+        draw_opaque(&mut pass, &self.term, binds, batches, pbr);
         drop(pass);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("sc_ao_blur"),

@@ -384,6 +384,7 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
     let mode = scene.analysis.map(|a| a.mode);
     Frame {
         product_lights: None,
+        product_look: None,
         product: false,
         upload_error: None,
         key,

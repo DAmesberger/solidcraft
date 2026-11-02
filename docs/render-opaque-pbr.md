@@ -159,7 +159,9 @@ The static legacy `cpu-raster` descriptor retains its previous capabilities.
 No host gains HDRI, refraction, progressive/final rendering or EXR support.
 
 Look colors are decoded from sRGB8 to linear sRGB once in the shared document/scene
-adapter. PBR GPU vertices carry linear reflectance and optical parameters. The CPU
+adapter. PBR GPU vertices (48 bytes) carry linear reflectance and optical parameters;
+a coated body previews uncoated, as below. Only an embedding client's opt-in product
+look writes 64-byte vertices with more detail, into a stream of their own. The CPU
 rasterizer interpolates world position and normals with perspective correction;
 the GPU uses the corresponding fragment interpolation. Both use the original
 [opaque BRDF](render-surface.md) and three fixed neutral directional lights in Z-up
@@ -172,12 +174,185 @@ emission, anisotropy, coating, absorption or transmission. Lighting magnitudes a
 relative preview values, not calibrated lux or spectral data. The single-scattering
 model can darken rough metals. Transparent legacy looks retain approximate sorted
 alpha blending, including when seen in front of an opaque PBR surface; that is not
-glass optics. Nondefault exposure/environment controls remain explicitly unsupported.
+glass optics. Nondefault exposure/environment controls remain explicitly unsupported;
+an embedding client can opt the real-time preview into the product look below.
 
 Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
 capture, ownership, cancellation, stale-result rejection and PNG export policies
 remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
+
+## Opt-in product look
+
+The GPU viewport has a second, opt-in shading path, the product look, for programs that
+embed the viewport (`solidcraft-gpu`). SolidCraft's own app does not send it yet, so
+everything above, the `cpu-product` parity and the viewport BRDF probe stay as they are.
+Progressive and CPU renders never use it. Memory and upload bounds do not change: plain
+PBR vertices stay 48 bytes. A frame turns the look on with `Frame::product_look`, and the
+client bakes and installs the studio itself:
+
+```rust
+use solidcraft_gpu::view::{ProductLook, StudioEnvironment, StudioPreset, SurfacePattern};
+// Off the window thread (or step by step with `StudioBake` where there are no threads):
+let studio = StudioEnvironment::bake(StudioPreset::Product);
+renderer.set_studio_environment(&device, &queue, &studio);
+frame.product_look = Some(ProductLook { exposure: 1.0, studio: StudioPreset::Product, ..ProductLook::default() });
+scene.pbr_tri_with(p, n, surface_with_coat, SurfacePattern::PeelOverWeave, 0.3);
+```
+
+The look takes none of the 21 product-light slots; the frame's product lights, if any,
+still light the scene, and the fixed three-light studio of the default preview does not.
+The uniform carries the look in two `vec4`s after the lights: (exposure, intensity,
+rotation, 1) and (weave pitch x, weave pitch y, ply thickness, units per mm), all zero
+without a look. Out-of-range values are clamped (exposure and intensity to [0, 1024],
+rotation wrapped into [0, 2π), pattern lengths to [0.01, 100] mm) and non-finite or
+non-positive ones replaced by the defaults before upload (`ProductLook::sanitized`).
+The frame cache key hashes the drawn look, so any change to it draws a new picture.
+
+`GpuScene::pbr_tri_with` writes 64-byte vertices (the 48 of `pbr_tri`, then the pattern,
+its strength and the clear coat) into `GpuScene::pbr_detailed`, drawn by a second PBR
+pipeline (`vs_pbr_detailed`); `pbr_tri` writes no detail and carries no coat. The detail
+varying is flat (`@interpolate(flat, either)`, which WebGL2 supports), since the coat's
+IOR rides in the fraction of the pattern float and is compared exactly; the shader also
+snaps an IOR within 10⁻⁴ of 1 to 1.
+
+With the look, the PBR shader:
+
+- adds a procedural **studio** to the product lights: `Product` (four softboxes over a
+  light grey cyclorama and a dark floor), `Soft` (two large softboxes, bright cyclorama)
+  or `Contrast` (two strips and an overhead panel in a dark studio), turned by
+  `rotation` about +Z and scaled by `intensity`. No HDR file is read. Radiance is
+  relative, like the product lights; the presets are original visual studies;
+- reflects it with split-sum specular: a prefiltered Rgba16Float cube map, 128 × 128
+  texels a face at perceptual roughness 0 and five more levels to roughness 1, sampled
+  at level `roughness × 5`, times an analytic environment-BRDF fit, with
+  single-to-multiple-scattering compensation `1 + F0 (1 / (A + B) − 1)`;
+- lights the diffuse layer from nine spherical-harmonic irradiance terms, weighted by
+  what the specular lobe does not reflect, so a white lossless surface reflects exactly
+  the light it receives;
+- scales the radiance by `exposure`, tone maps it with Khronos PBR Neutral instead of
+  per-channel Reinhard, encodes it once and adds a ±1 LSB triangular dither (two
+  interleaved-gradient noise values) before the 8-bit store. For an sRGB attachment
+  (`u.back.w`), the dithered encoded value is decoded again so the attachment's own
+  encode quantises it. The 2 × 2 supersample filter and the cached still picture use a
+  look variant of the filter that dithers the mean again, so averaging does not cancel
+  the dither into bands.
+
+Non-PBR faces get no studio (their pipelines have no studio group): under the look they
+are lit by the frame's product lights alone, through the same exposure, PBR Neutral and
+dither. A look frame with no product lights therefore draws non-PBR faces black; a client
+that wants them lit gives them PBR surfaces or product lights.
+
+The studio is baked on the CPU, so it also works on WebGL2 (no compute shaders): 2 × 2
+radiance samples per texel of the sharpest level, a box pyramid of it, and 64 GGX
+samples per texel of each rougher level with filtered importance sampling; the
+irradiance terms are projected from the 32 × 32 level. A bake takes about 75–110 ms in
+an optimised build on an Apple M-series laptop (measured, three presets) and about
+1 MB of texels. The renderer never bakes (that would stall the window thread): until a
+client installs a preset's studio with `Renderer::set_studio_environment`, the look
+draws without it (a stand-in black cube). `StudioEnvironment::bake(preset)` is plain
+CPU work for another thread; where there are no threads (the web), `StudioBake` bakes
+in bounded steps, a frame's share at a time: `StudioBake::FRAME_WORK` is 152 steps a
+studio, each at most 1.8 ms in an optimised native build (measured, three presets),
+with the same result as the whole bake. The PBR pipelines gain bind group 3 (the cube,
+its sampler and the irradiance uniform); the stand-in is bound without a look. Groups 1
+and 2 of their layout are the solid pipelines' (accessibility, occlusion). Group 3 is
+the last group WebGL2's limit of four allows.
+
+The environment-BRDF fit is SolidCraft's own: polynomials in perceptual roughness and
+`1 − n·v` plus a Smith-masking term, least-squares fitted to the split-sum scale and bias
+integrated numerically from the viewport's own GGX/separable-Smith/Schlick BRDF. Its
+largest error over n·v in [0.02, 1] and roughness in [0.045, 1] is 0.046 (scale) and
+0.023 (bias); RMS 0.006 and 0.004. The sum is kept at or below one.
+
+Mathematics only, from public sources: split-sum prefiltering (Karis 2013, *Real Shading
+in Unreal Engine 4*), filtered importance sampling (Křivánek and Colbert 2008, *GPU Gems
+3*, ch. 20), nine-term irradiance (Ramamoorthi and Hanrahan 2001), multiple-scattering
+compensation (Fdez-Agüera 2019; Filament documentation). The PBR Neutral curve is
+adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
+
+The look also draws three things the default preview leaves out:
+
+- **Clear coat.** A vertex written by `GpuScene::pbr_tri_with` carries its
+  surface's `ClearCoat` (weight, roughness, IOR; the IOR rides in the pattern float's
+  fraction, `id + 0.25 + (IOR − 1) / 4`). For direct light `pbr_coated` is the shared
+  coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
+  GGX dielectric lobe over the base, which it attenuates at entry and exit by an upper bound
+  of its directional reflectance. In the studio the coat reflects its single-scattering
+  albedo w·(F0·A + B) at its own roughness and passes the rest to the base; the ambient
+  product light reaches the base through the same factor. The interface Fresnel is counted
+  once: a layer under a lacquer (a pigmented paint body) takes base IOR 1, which has
+  no interface of its own (no specular, no Fresnel attenuation of its diffuse), so only the
+  coat reflects at the air boundary. A client that keeps a base IOR above 1 under a coat
+  models two interfaces on purpose.
+- **Ambient occlusion.** With a frame's `ao_radius` above zero, PBR surfaces join the
+  occlusion passes (the depth prepass and the term pass, in both PBR vertex layouts, drawn
+  only with the look) and `fs_pbr` reads the solid pipelines' blurred term through
+  `occlusion()`. Occlusion scales only indirect light: the studio's diffuse
+  term and the ambient product light by the occlusion, the studio's specular (base and coat)
+  by specular occlusion `clamp((n·v + ao)^exp2(−16α − 1) − 1 + ao, 0, 1)` at each lobe's α
+  (Lagarde and de Rousiers 2014, *Moving Frostbite to PBR*; mathematics only). Direct product
+  lights are never occluded. Product-preview frames (`Frame::product`) draw no prepass, as
+  before, so they stay unoccluded.
+- **Procedural patterns** (`SurfacePattern`), evaluated in the shader from the world
+  position in millimetres (`units_per_mm`), with no textures or UVs:
+  `Weave` is a plain weave of two yarn families with over-under parity at
+  `weave_pitch` (default: a coarse glass cloth of 44 × 31 yarns per inch, IPC-4412 style
+  7628, so 0.577 × 0.819 mm and 0.173 mm a ply), as in glass-fibre composites. Each cell's top yarn is a flattened
+  bundle (elliptic across its width, flat along its run, diving under over the cell's last
+  fifth) with filament striations along it (7 per yarn width, 0.3 of the crown's swing), so
+  the cloth reads as directional strands, not tiles. It varies the albedo by about ±0.2 ×
+  strength and adds a small relief (6 µm × strength); on an edge (a normal within 45° of
+  horizontal) it runs along the edge and up through plies of `ply_thickness`, at 0.4 of a
+  face's swing, so a cut edge is mostly plain with subtle layering.
+  `OrangePeel` is the waviness of a sprayed or cured gloss coating, normal only, at 2.4 mm
+  and 0.9 mm wavelengths (6 µm and 1 µm relief, slopes of a few milliradians) so a gloss
+  coat's softbox reflection keeps its shape. `PeelOverWeave` is the same peel at full
+  strength over a woven laminate, the weave showing through the albedo only. `InkGrain` is
+  the grain of printed ink at 0.05 mm and 0.16 mm cells
+  (±18 % albedo, 2 µm relief). These sizes and amplitudes are visual estimates, not measured
+  surface data. Each pattern has zero mean in the albedo and fades to it by the pixel's
+  footprint (`fwidth` of the world position, taken in `fs_pbr` before any branch, so it is
+  valid WGSL on the web): peel and grain are fully shown at a footprint of a fifth of their
+  period and gone at 0.6; the weave and its fibres, whose edges are sharper, are gone at 0.3
+  (well before two pixels per period, so no moiré). All relief fades out toward grazing views
+  (|n·v| from 0.35 down to 0.05), where it would only streak reflections.
+- **Softbox direct lights.** With the look, a direct product light is treated as a small
+  area light for a clear coat: the coat's GGX α for it grows by 0.1 (a light of about 0.2
+  rad half-angle; the sphere-light roughness widening of Karis 2013, *Real Shading in Unreal
+  Engine 4*, mathematics only). GGX stays normalised, so the light's energy is unchanged and
+  a gloss coat shows a soft highlight instead of a clipped dot. The studio's reflection is
+  unaffected.
+
+Still out of reach with the look: cast shadows, image textures,
+true subsurface or absorption in a coat, crisp rectangular highlights (the cube's
+resolution limits the sharpest reflections), and any parity with the CPU hosts, which keep
+the fixed studio and draw no coat in the viewport sense above.
+
+Tests (`crates/gpu/src/view/ibl/tests.rs`, `view.rs`): white furnace (every level,
+irradiance π, white metal, white diffuse and white dielectric reflect 1 at every
+roughness and angle), energy conservation of each prefiltered level (mean within 5 %),
+irradiance against a direct cosine integral, the fit against the numerical split sum
+and the shader's coefficients against the fit, the actual WGSL environment term and cube
+lookups on a native GPU against the CPU reference, the tone curve, the dither's
+distribution, the look's sanitising, its uniform, the frame key, a stepped bake against
+the whole bake, and GPU frames
+showing that a frame without the look draws the documented Reinhard preview with no
+dither (against the CPU BRDF) while the look dithers, follows PBR Neutral and adds the
+studio once installed (and never bakes it in `prepare`: a look naming a studio that is
+not installed draws the lights alone), supersampled and cached too. For the coat, occlusion and patterns: the actual
+`pbr_coated` against the f64 `OpaqueSurface::with_clear_coat` oracle on any native GPU
+(fed the vertex detail `pbr_tri_with` writes), a coated white furnace and the coated studio
+term against its CPU reference, the patterns' parity, period, size in millimetres, edge
+orientation, zero mean and fade through the actual `look_detail`, both vertex layouts, and
+GPU frames showing that without the look a coat, any pattern and an occlusion radius change
+no pixel, while with it the coated pixel is the oracle's through PBR Neutral, a block
+darkens the floor beside it only in the studio's light, and a pattern fades to the plain
+surface. The derivatives guard scans `pbr::SOURCE` and also stops at unparenthesised
+branches, loops and `continue`. The PBR entry points (both vertex layouts, `fs_pbr` and the
+prepass's) translate to WebGL2's GLSL ES 3.00 through naga's GL backend, with the flat
+detail varying and the studio's cube; the GPU frames themselves run on a native adapter
+only (Metal here), and no browser has drawn a look frame yet.
 
 ## Validation and original example
 

@@ -16,6 +16,9 @@ Weight is finite in [0,1], perceptual roughness in [0.045,1], and relative IOR i
 Coats cannot be combined with runtime transmission on the same body. Overrides
 apply to the body and its faces in the job snapshot, never to the saved document,
 preview, undo history or appearance format. They require progressive rendering.
+The real-time viewport evaluates the same coat lobe only with the opt-in product look
+([opaque PBR](render-opaque-pbr.md#opt-in-product-look)), for vertices that carry a coat;
+SolidCraft's own preview stays uncoated.
 
 The implementation adds single-scattering GGX/Smith coat reflection with its own
 Schlick Fresnel term. For cosine `c`, define the conservative directional bound
