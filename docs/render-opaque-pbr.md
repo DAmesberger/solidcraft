@@ -212,6 +212,22 @@ lengths given in millimetres are drawn: a constant of the scene, not of a materi
 frame cache key hashes the drawn look and the units, so any change to them draws a new
 picture.
 
+The PBR shader is split in two (`pbr::SOURCE` = the shared shading, `pbr::SHADE`, then the vertex stream). A
+fragment entry builds a `PbrFragment` (pixel, world position, interpolated normal, view
+direction and the pixel's footprint, `fwidth` of the world position, taken before any
+branch), asks a material for the `Surface` there (`material_eval`), and returns
+`pbr_shade(surface, fragment)`. `Surface` is the WGSL mirror of
+`material_graph::SurfaceSample`: the `OpaqueSurface` core, its clear coat and the inputs the
+core lacks, with base and coat normals and a tangent. `pbr_shade` holds all of the lighting
+above and below, for both looks, and reads the core, the coat and the normal; the other inputs
+wait for the shading that reads them. For PBR vertices `material_eval` is the built-in
+"vertex constant" material (`surface_from_opaque` of the vertex's values, uncoated); material
+graphs generate their own. The split changes no frame of the default preview: of 900 test
+frames (five surfaces, a dome and a block, three lightings, the default preview and four
+looks, with and without occlusion and supersampling, linear and sRGB targets) every
+default-preview frame is byte-identical, and 7 look frames differ by one 8-bit step in one
+pixel each (Metal compiles with fast math, so restructured code may round differently).
+
 SolidCraft's paint callback bakes a look's studio on another thread natively and in
 `StudioBake::FRAME_WORK` steps a frame on the web, and installs it when done
 (`gpu::studio_ready` tells a view to repaint until then).

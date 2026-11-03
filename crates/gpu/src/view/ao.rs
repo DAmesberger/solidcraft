@@ -7,9 +7,7 @@
 //! bits for portable integer texel reads. GLSL cannot load from a depth texture, and float
 //! colour attachments are not available on every GL adapter.
 
-use super::{
-    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_layout, planned_layout, shared_layout, tri_layout,
-};
+use super::{Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_layout, planned_layout, shared_layout, tri_layout};
 
 const TERM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 

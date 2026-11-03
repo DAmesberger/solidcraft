@@ -4576,7 +4576,9 @@ mod tests {
         f.product_lights = None;
         assert_eq!(&floats(&f)[look_at..look_at + 8], &tame);
         // The scene's units: kept in range, 1 for nonsense.
-        for (units, drawn) in [(25.4, 25.4), (-1.0, 1.0), (f32::NAN, 1.0), (0.0, 1.0), (1e9, super::UNITS_PER_MM_RANGE[1]), (1e-9, super::UNITS_PER_MM_RANGE[0])] {
+        for (units, drawn) in
+            [(25.4, 25.4), (-1.0, 1.0), (f32::NAN, 1.0), (0.0, 1.0), (1e9, super::UNITS_PER_MM_RANGE[1]), (1e-9, super::UNITS_PER_MM_RANGE[0])]
+        {
             f.units_per_mm = units;
             assert_eq!(&floats(&f)[look_at + 4..look_at + 8], &[drawn, 0.0, 0.0, 0.0], "{units}");
         }
@@ -4786,8 +4788,11 @@ mod tests {
                 assert!(c < first, "fragment {n}: a derivative after a branch or return: {}", &body[c..(c + 40).min(body.len())]);
             }
         }
-        // The PBR source is scanned too.
-        assert!(fns.iter().any(|(n, _, frag)| n == "fs_pbr" && *frag), "fs_pbr is scanned");
+        // The PBR source is scanned too: its fragment takes the pixel footprint (through
+        // `pbr_fragment`, which materials fade their detail by) before its first branch.
+        let pbr = fns.iter().find(|(n, _, frag)| n == "fs_pbr" && *frag).map(|(_, body, _)| body.as_str()).unwrap_or("");
+        assert!(uses.iter().any(|u| u == "pbr_fragment"), "pbr_fragment takes the footprint");
+        assert!(pbr.find("pbr_fragment(").is_some_and(|c| c < first_branch(pbr)), "fs_pbr takes its footprint first");
     }
 
     /// Where a WGSL body first branches, loops or returns (`if` with or without parentheses,

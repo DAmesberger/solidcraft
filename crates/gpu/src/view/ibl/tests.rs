@@ -247,10 +247,7 @@ fn looks_are_sanitized() {
     assert_eq!(look.sanitized(), look);
     assert_eq!(look.uniform(), [1.5, 0.6, 0.75, 1.0]);
     let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12 };
-    assert_eq!(
-        wild.sanitized(),
-        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE }
-    );
+    assert_eq!(wild.sanitized(), ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE });
     let odd = ProductLook { exposure: -3.0, rotation: -1.0, ..look }.sanitized();
     assert_eq!(odd.exposure, 0.0);
     assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
@@ -701,6 +698,14 @@ fn probe_coated_ibl(@builtin(global_invocation_id) id: vec3<u32>) {
 #[test]
 fn the_product_look_shaders_translate_for_webgl2() {
     use naga::back::glsl;
+    // The shared shading stands alone after the viewport's shader, for shaders that bring their
+    // own material and entries.
+    let shade = format!("{}\n{}", crate::view::SHADER, crate::pbr::SHADE);
+    let parsed = naga::front::wgsl::parse_str(&shade).map_err(|e| e.emit_to_string(&shade));
+    let shade_ok =
+        parsed.map(|m| naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default()).validate(&m).is_ok());
+    assert_eq!(shade_ok, Ok(true), "pbr::SHADE validates on its own");
+    assert!(crate::pbr::SOURCE.starts_with(crate::pbr::SHADE));
     let source = format!("{}\n{}", crate::view::SHADER, crate::pbr::SOURCE);
     let module = match naga::front::wgsl::parse_str(&source) {
         Ok(m) => m,
@@ -711,11 +716,9 @@ fn the_product_look_shaders_translate_for_webgl2() {
         Err(e) => panic!("{e:?}"),
     };
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
-    for (stage, entry) in [
-        (naga::ShaderStage::Vertex, "vs_pbr"),
-        (naga::ShaderStage::Fragment, "fs_pbr"),
-        (naga::ShaderStage::Fragment, "fs_ao_depth_pbr"),
-    ] {
+    for (stage, entry) in
+        [(naga::ShaderStage::Vertex, "vs_pbr"), (naga::ShaderStage::Fragment, "fs_pbr"), (naga::ShaderStage::Fragment, "fs_ao_depth_pbr")]
+    {
         let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
