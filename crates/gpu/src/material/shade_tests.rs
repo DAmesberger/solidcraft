@@ -58,8 +58,8 @@ fn middle(bytes: &[u8]) -> [f64; 4] {
     for y in 16..SIZE - 16 {
         for x in 16..SIZE - 16 {
             let i = (y * SIZE + x) * 4;
-            for k in 0..4 {
-                sum[k] += f64::from(bytes.get(i + k).copied().unwrap_or(0));
+            for (k, total) in sum.iter_mut().enumerate() {
+                *total += f64::from(bytes.get(i + k).copied().unwrap_or(0));
             }
             count += 1.0;
         }
