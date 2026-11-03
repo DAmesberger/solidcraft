@@ -138,7 +138,6 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
         units_per_mm: 1.0,
         product: true,
         upload_error: None,
-        units_per_mm: 1.0,
         key,
         slot,
         sketch_key: 0,
