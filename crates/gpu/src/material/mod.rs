@@ -71,4 +71,4 @@ pub fn validate(source: &str) -> Result<(naga::Module, naga::valid::ModuleInfo),
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
