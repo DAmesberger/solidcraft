@@ -299,7 +299,9 @@ fn view_look_takes_a_look_and_a_view_and_never_edits_the_design() {
     }
     let toggle = s.execute("view.look", &json!({})).err().map(|e| e.to_string()).unwrap_or_default();
     assert!(toggle.contains("name the look"), "{toggle}");
-    for params in [json!({"look": "photoreal"}), json!({"look": "realistic", "view": "sketch"}), json!({"look": "standard", "save": true}), json!({"look": 1})] {
+    for params in
+        [json!({"look": "photoreal"}), json!({"look": "realistic", "view": "sketch"}), json!({"look": "standard", "save": true}), json!({"look": 1})]
+    {
         assert!(s.execute("view.look", &params).is_err(), "{params} is refused");
     }
     assert_eq!((s.doc.to_json(), s.undo.len()), (before, undo), "nothing in the design changes");

@@ -125,13 +125,8 @@ mod tests {
     use crate::SolveApp;
 
     fn with_gpu(app: &mut SolveApp) {
-        app.viewport.gpu = Some(crate::gpu::GpuTarget {
-            format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
-            depth: None,
-            samples: 1,
-            tess: false,
-            oit: false,
-        });
+        app.viewport.gpu =
+            Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
     }
 
     /// The command toggles without a look, sets one when named, acts on the modelling view unless
@@ -181,6 +176,28 @@ mod tests {
         // A look saved on a machine with a GPU draws nothing it can't.
         app.ui.view_look = REALISTIC;
         assert_eq!(super::product_look(&app, "model"), None);
+    }
+
+    /// In the window: Shift+P toggles the modelling view, the navigation bar's visual-style menu
+    /// has a Realistic row that does the same, and without a GPU viewport the row is disabled and
+    /// the key says why in the status line.
+    #[test]
+    fn shift_p_and_the_menu_row_switch_the_look() {
+        let mut h = crate::scenario::Harness::new();
+        h.step(&json!({"key": "P", "shift": true})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(h.app.ui.view_look, STANDARD, "no GPU: refused");
+        assert_eq!(h.app.status.as_ref().map(|s| s.0.as_str()), Some(crate::i18n::tr("view.look.no_gpu")));
+        h.step(&json!({"click": {"handle": "nav:slot:visual_style"}})).unwrap_or_else(|e| panic!("{e}"));
+        h.step(&json!({"click": {"handle": "nav:style:realistic"}})).ok();
+        assert_eq!(h.app.ui.view_look, STANDARD, "the row is disabled without a GPU");
+        h.step(&json!({"key": "Escape"})).ok();
+        with_gpu(&mut h.app);
+        h.step(&json!({"key": "P", "shift": true})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(h.app.ui.view_look, REALISTIC, "Shift+P");
+        h.step(&json!({"click": {"handle": "nav:slot:visual_style"}})).unwrap_or_else(|e| panic!("{e}"));
+        h.step(&json!({"click": {"handle": "nav:style:realistic"}})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(h.app.ui.view_look, STANDARD, "the menu row toggles it back");
+        assert_eq!(h.app.ui.visual_style, 0, "the visual style is a setting of its own");
     }
 
     /// Both looks are remembered between runs like the visual style; opening a design leaves them

@@ -3502,7 +3502,11 @@ impl Renderer {
             }
             res.product.sort_glass(queue, cb.back);
             res.highlight.take(device, queue, &res.uniform, &res.uniform_bgl, cb.hl_key, &cb.hl_slot, None, false);
-            queue.write_buffer(&res.uniform, 0, &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()));
+            queue.write_buffer(
+                &res.uniform,
+                0,
+                &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()),
+            );
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.
             res.ss_ready = (res.window_differs() || cb.ssaa != 1.0) && res.supersample(device, encoder, cb, false);
@@ -3530,7 +3534,11 @@ impl Renderer {
             res.model.sort_glass(queue, cb.back);
         }
         res.model.cull(queue, &cb.view_proj, cb.size_px);
-        queue.write_buffer(&res.uniform, 0, &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()));
+        queue.write_buffer(
+            &res.uniform,
+            0,
+            &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()),
+        );
         if let Some(a) = &cb.access
             && a.version != res.access_version
         {
@@ -4505,10 +4513,13 @@ mod tests {
         }
     }
 
-    /// The viewport shader parses and validates (a bad shader would only fail at run time).
+    /// The viewport shader, with the PBR shading its opaque faces share in the Realistic look
+    /// (`pbr::SOURCE`, as the renderer compiles them), parses and validates (a bad shader would
+    /// only fail at run time).
     #[test]
     fn shader_is_valid() {
-        let module = naga::front::wgsl::parse_str(super::SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::SHADER)));
+        let source = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
     }
 
