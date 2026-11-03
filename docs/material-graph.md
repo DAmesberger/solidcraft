@@ -1175,9 +1175,10 @@ command leaves the design unchanged.
 |---|---|---|
 | `appearance.graph.nodes` (read-only) | – | The node catalogue: kinds, ports, types, ranges, defaults, params, cost units, catalogue version |
 | `appearance.graph.validate` (read-only) | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node, port, code, message}]}` |
-| `appearance.graph.create` | `{id?, name, graph? \| from: "standard"}` | `{id}` |
+| `appearance.graph.create` | `{id?, name, graph? \| from?: "standard" \| saved look}` | `{id, cost}` |
+| `appearance.graph.convert` | `{look, id?, name?, scope?}` ("Convert to material graph": the look's one-node graph, and every override that is exactly that look names it) | `{id, cost, count}` |
 | `appearance.graph.set` | `{id, graph}` (full replace) | `{id, cost}` |
-| `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
+| `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" (with `fallback?`) \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
 | `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with stats / `[{id, name, uses, source}]` |
 | `appearance.graph.duplicate` | `{id, new_id?, name?}` | `{id}` |
 | `appearance.graph.delete` | `{id, replace_with?}` | `{replaced}`; refuses while referenced unless `replace_with` is given |
@@ -1185,7 +1186,9 @@ command leaves the design unchanged.
 | `appearance.texture.list` (read-only) | – | `[{texture, name, width, height, bytes, uses}]` |
 | `appearance.assign` (extended) | existing targets + `graph`, `values` (`pbr` remains shorthand) | unchanged |
 | `appearance.graph.update_from_library` | `{id, library, preview: bool}` | an impact preview (changed inputs, affected looks), or the applied update |
-| `library.export` / `library.apply` (extended) | catalog v3 | unchanged shapes, plus graph and texture counts |
+| `library.export` / `library.apply` (extended) | catalog v3; `library.apply` copies a look's graph and textures, `graph_id?` names the copy | unchanged shapes |
+
+The automation reference, with every parameter, is [material graph commands](material-graph-commands.md).
 
 Example (MCP or CLI, `solidcraft-cli run`):
 
@@ -1201,7 +1204,9 @@ Render jobs (`render.start`) and the embedding API (`solidcraft-gpu`) can overri
 graph's **interface** values for one job or frame, for example a texture bound to a
 `texture` interface input. The design, undo history and saved file do not change, the same
 contract as today's runtime `clear_coats`. Overrides are values and texture bindings, so
-they never compile anything. This generic mechanism is what lets any program bind
+they never compile anything. In `render.start` they are `raytrace.graph_values`
+(`[{graph | body_index + body_name, values}]`) with `raytrace.graph_textures` (base64 images
+the values name by SHA-256). This generic mechanism is what lets any program bind
 per-instance images (labels, markings) at render time.
 
 ## 8. Pcbcraft side

@@ -31,12 +31,12 @@ pub fn extract(s: &Session) -> Result<ProductScene> {
                     face: u32::try_from(face).map_err(|_| EngineError::Other("render face index exceeds the mesh contract".into()))?,
                     color: look.color,
                     opacity: look.opacity.clamp(0.0, 1.0),
-                    surface: look.opaque_surface().map_err(|e| EngineError::Other(e.to_string()))?,
+                    surface: look_surface(s, &look)?,
                     transmission: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let surface = s.doc.model_body_look(body).map(|l| l.opaque_surface()).transpose().map_err(|e| EngineError::Other(e.to_string()))?.flatten();
+        let surface = s.doc.model_body_look(body).map(|l| look_surface(s, &l)).transpose()?.flatten();
         scene.meshes.try_reserve(1).map_err(|_| EngineError::Other("could not reserve captured render bodies".into()))?;
         scene.meshes.push(ProductMesh {
             name: body.name.clone(),
@@ -49,6 +49,29 @@ pub fn extract(s: &Session) -> Result<ProductScene> {
         });
     }
     Ok(scene)
+}
+
+/// A look's opaque response: its `pbr`, or for a look naming a material graph, the graph's base
+/// response with the look's values (docs/material-graph.md §2): what every renderer without the
+/// graph's own code draws, and what the path back end's bound bodies keep as their surface.
+fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_render::surface::OpaqueSurface>> {
+    let Some(id) = &look.graph else { return look.opaque_surface().map_err(|e| EngineError::Other(e.to_string())) };
+    let fail = |e: solidcraft_render::material_graph::GraphError| EngineError::Other(format!("material graph `{}`: {e}", id.as_str()));
+    let mut graph = s
+        .doc
+        .appearances
+        .tables
+        .graphs
+        .get(id)
+        .cloned()
+        .ok_or_else(|| EngineError::Other(format!("a look names missing material graph `{}`", id.as_str())))?;
+    for input in &mut graph.interface {
+        if let Some(v) = look.values.get(&input.name) {
+            input.default = Some(v.clone());
+        }
+    }
+    let validated = solidcraft_render::material_graph::validate(&graph).map_err(fail)?;
+    solidcraft_render::material_graph::base_response(&validated).map(Some).map_err(fail)
 }
 
 #[cfg(test)]

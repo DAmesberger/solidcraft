@@ -3,11 +3,12 @@ use crate::{Result, Session, params::bad};
 use serde_json::{Value, json};
 use solidcraft_doc::appearance::Look;
 
-pub(in crate::cmd) fn paint(_s: &mut Session, p: &Value) -> Result<Value> {
+pub(in crate::cmd) fn paint(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("done").and_then(Value::as_bool) == Some(true) {
         return Ok(json!({"done":true}));
     }
-    let look = super::appearance_look("appearance.paint", p)?.ok_or_else(|| bad("appearance.paint", "choose a look first"))?;
+    let mut look = super::appearance_look("appearance.paint", p)?.ok_or_else(|| bad("appearance.paint", "choose a look first"))?;
+    crate::cmd::appearance_graph::settle_look("appearance.paint", &s.doc, &mut look)?;
     Ok(json!({"look": super::look_json(&look)}))
 }
 
@@ -67,7 +68,7 @@ pub(in crate::cmd) fn favorite(_s: &mut Session, p: &Value) -> Result<Value> {
 pub(in crate::cmd) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let look = s.appearance_clipboard.as_ref().ok_or_else(|| bad("appearance.paste", "copy a look first"))?;
     let mut params = p.as_object().cloned().ok_or_else(|| bad("appearance.paste", "give assignment targets"))?;
-    for key in ["appearance", "name", "color", "opacity", "pbr"] {
+    for key in ["appearance", "name", "color", "opacity", "pbr", "graph", "values"] {
         params.remove(key);
     }
     for (key, value) in super::look_json(look).as_object().into_iter().flatten() {
