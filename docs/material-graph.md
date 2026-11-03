@@ -10,6 +10,17 @@ package** once it is proven. The package has four parts:
 - a photoreal **view mode** beside the existing shading.
 
 There is no renderer-only PR (§9). Of the new parts, nothing is implemented yet.
+
+The package is **real-time, GPU-only photorealism in the interactive viewport**, not image
+rendering. A GPU is a hard requirement for it, as it already is for Solidcraft's viewport,
+and the feature has no CPU fallback. Upstream's GPU path tracer is a second target of the
+same material system, so materials are implemented once (§5.7). The CPU ray tracer and CPU
+product host are out of scope.
+
+- CPU work is limited to data preparation: parsing, validation, the IR, code generation and
+  texture decoding.
+- No CPU shading or rasterising runs in product code.
+- A CPU reference exists only inside tests, as an oracle for GPU frames.
 Performance figures are **targets** until they are measured. Work estimates are in
 agent-hours.
 
@@ -74,7 +85,7 @@ widget crate is ever considered (§7.1), its licence must be MIT/Apache/BSD, che
 | **Look** | Today's record, plus an optional `graph` (an id) and `values` (interface overrides). The look's `color` remains the colour the standard view, exports and old consumers show. |
 | **View look** | A viewport's `standard` (default, today's renderer) or `photoreal` drawing, independent of its visual style (§6). Not saved in the design. |
 | **Shape** | Everything about a graph that changes generated code: node kinds, params, topology, which inputs are connected and which are constants, texture colour spaces. Values never belong to the shape. |
-| **Flattened surface** | The graph's average opaque response (`OpaqueSurface` + optional `ClearCoat`), computed on the CPU. It feeds consumers that cannot evaluate graphs. |
+| **Base response** | A static read of the graph's output node: constant inputs as they are, driven inputs at their declared `fallback`. It is an `OpaqueSurface` (§5.7), computed without evaluating anything. It gives the display `color`, the fallback while a shape compiles, and the Save As copy for older releases. |
 
 Lengths are millimetres and angles are radians, as the render-materials catalogue's scale
 policy already requires ([materials.json](render-materials/materials.json)). Colours in
@@ -102,7 +113,12 @@ turn this off, so a graph cannot alias into moiré.
 
 **Ranges:** a constant outside its input's range **refuses** on load, as `PbrParameters`
 does today. Wires computed at run time can leave a range. The surface node clamps its
-inputs, and maps NaN to the input's default, identically in WGSL and in the CPU evaluator.
+inputs, and maps NaN to the input's default, identically in both GPU back ends (§5.7) and in
+the test-only reference.
+
+**Fallbacks:** a connection may carry a constant `fallback` of its input's type, for example
+`{"from": "rough", "fallback": 0.45}`; it defaults to the input's default. Fallbacks make up
+the base response (§2): data, not shading.
 
 ### 3.1 Surface nodes
 
@@ -120,7 +136,7 @@ inputs, and maps NaN to the input's default, identically in WGSL and in the CPU 
 | `specular_roughness_anisotropy` | float | [0, 1] | 0 | 0 is isotropic. |
 | `specular_rotation` | float | [−π, π] | 0 | Turns the tangent about the normal. |
 | `geometry_tangent` | vector3 | unit | the texcoord's tangent | Usually wired from a projection. |
-| `coat_weight` | float | [0, 1] | 0 | Replaces the runtime `clear_coats` override. |
+| `coat_weight` | float | [0, 1] | 0 | The same lobe as the path tracer's runtime `clear_coats` override. |
 | `coat_color` | color3 | [0, 1] | 1 | Tint of light through the coat (new in the renderer, §5.5). |
 | `coat_roughness` | float | [0.045, 1] | 0.1 | |
 | `coat_ior` | float | [1, 3] | 1.5 | |
@@ -407,7 +423,7 @@ Texture assets live beside them and are stored as container blobs.
 - `appearances.graphs` and `appearances.textures` are omitted when empty, so a design
   without graphs serialises exactly as today.
 - A look's `color` stays required. With a graph it is the colour the standard view shows
-  (the flattened base colour, sRGB8), which the assigning command computes. It is also what
+  (the base response's base colour, sRGB8), which the assigning command computes. It is also what
   STEP/3MF colour export and older readers' tools use.
 - `source` is generic provenance (library id, entry id, revision). It is optional and
   inert, and drives only an explicit "update from library" with an impact preview (§7.2).
@@ -446,9 +462,12 @@ a snapshot with graphs refuses, as exporting v1 refuses PBR loss today.
 | Size | 1–2048 px per side (the WebGL2 downlevel `max_texture_dimension_2d`) |
 | Encoded bytes | ≤ 16 MiB each |
 | Per design | ≤ 64 textures, ≤ 256 MiB decoded RGBA8 in total |
-| Mips | Generated on the CPU, off the window thread (no compute on WebGL2; [mips](render-texture-mips.md)) |
+| Mips | Generated on the GPU by render passes: each level is a linear-filtered downsample drawn into the next. This works on WebGL2, which has no compute. The path tracer uses level 0, as today. |
 
-Decoding uses `solidcraft_render::texture_input` on a worker. Until a texture has decoded,
+Decoding uses `solidcraft_render::texture_input` on a worker; this is data preparation. Rendering into
+a level of an `Rgba8UnormSrgb` texture on WebGL2 (`SRGB8_ALPHA8` is colour-renderable in ES
+3.0) is verified in track C3; if a driver fails it, the fallback is a linear texture with
+decode in the shader, never CPU mips. Until a texture has decoded,
 its `image` node reads its `default` colour.
 
 ### 4.4 Compatibility and the pending format change
@@ -496,7 +515,7 @@ the bytes with the output of the build before the change. Also tested:
 
 If upstream declines the `format.rs` change, the package still works. The only loss is that
 material-free designs saved during the release cycle get N+1, as every change does today
-(decision O9).
+(decision O8).
 
 **`pbr` looks are not migrated.** They are already part of the released format, so
 rewriting them into graphs would force N+1 onto every file that uses them, which is exactly
@@ -526,11 +545,11 @@ finds it newer than any it knows, and refuses to open the design with its standa
 it"). It neither opens it partly nor drops the graphs. Recovery files behave the same.
 
 For sharing with someone on the older release, `file.save_as` takes
-`"flatten_material_graphs": true`. Desktop Save As has the matching checkbox, "For older
+`"material_graphs": "base_response"`. Desktop Save As has the matching checkbox, "For older
 SolidCraft", which is never on by default. It writes a **copy** in which:
 
-- each graph look becomes its flattened `pbr` look (opaque, with its colour), or a scalar
-  look when the graph is transmissive;
+- each graph look becomes its base response as a `pbr` look (opaque, with its colour), or
+  a scalar look when the graph is transmissive, with no evaluation;
 - textures are omitted;
 - the output lists every changed look.
 
@@ -547,8 +566,8 @@ kind, param or input refuses (`deny_unknown_fields`) rather than being dropped.
 
 Validation produces a typed, topologically ordered **IR**: one SSA value per output,
 types resolved, triplanar and slope expansions applied, and constants assigned to uniform
-slots. The IR is a pure Rust type in `solidcraft-render` (no wgpu), shared by the CPU
-evaluator. `solidcraft-gpu` turns the IR into one WGSL function:
+slots. The IR is a pure Rust type in `solidcraft-render` (no wgpu) and is shared by both back
+ends (§5.7). `solidcraft-gpu`'s raster back end turns it into one WGSL function:
 
 ```wgsl
 // generated for shape 0x5c1e…; every value comes from the material's uniform slots
@@ -569,7 +588,8 @@ fn material_eval(c: MatCtx) -> Surface {
 
 - All pattern mathematics lives in a fixed **prelude** (today's `pat_hash`, `pat_noise`,
   `pat_weave_parts` and `pat_bumps`, generalised). The generator only emits calls,
-  arithmetic and `select`. Prelude functions are tested once against the CPU evaluator;
+  arithmetic and `select`. Prelude functions (the shared modules of §5.7) are tested once, against analytic values,
+golden GPU frames and the test-only reference;
   generated code adds only composition.
 - Identifiers are generated (`t0`, `v1`, …). No user string ever reaches WGSL. Constants
   are uniforms, not literals; only shape params (octaves, enum kinds) appear as code. The
@@ -595,8 +615,9 @@ fn material_eval(c: MatCtx) -> Surface {
   until track H; they are not in the package.
 - **Cache:** at most 64 live pipelines (LRU) per renderer. New shapes compile within a
   per-frame budget (target: at most two new pipelines a frame, and none in a frame already
-  over 8 ms). Until a shape's pipeline exists, its materials draw with the **flattened**
-  standard pipeline, so a new material never stalls a frame. On native, `wgpu` pipeline
+  over 8 ms). Until a shape's pipeline exists, its materials draw their **base response** through the
+  constant-graph pipeline, a GPU fallback that is always compiled. A new material never
+  stalls a frame. On native, `wgpu` pipeline
   creation is still synchronous on the device thread; the budget bounds it.
 
 ### 5.3 WebGL2 path
@@ -615,7 +636,9 @@ The constraints of wgpu 30's `downlevel_webgl2_defaults` (checked in `wgpu-types
   most 4 material textures fit with room to spare.
 - **15 inter-stage variables:** today's `PbrOut` uses 5; graph shapes add at most the
   object position and the flat material offset, 7 in all.
-- **No compute:** mips, the studio bake (already CPU) and flattening run on the CPU.
+- **No compute:** mips are built by render passes. The studio bake stays the renderer
+  branch's CPU data preparation (an environment texture, baked off the window thread); moving
+  it to render passes is possible later.
 - **GLSL ES 3.00** through naga's GL backend. The existing test (`view/ibl/tests.rs`, "The
   product look's PBR entry points translate to WebGL2's GLSL ES 3.00") is extended to
   translate **every shape in the test corpus** (all worked examples, the built-in library
@@ -632,7 +655,7 @@ frame. A browser run of the graph path is part of the completion evidence (track
 
 | Item | Target |
 |---|---|
-| Validation + IR + flattening of a 128-node graph | ≤ 1 ms CPU (native, optimised) |
+| Validation + IR + base response of a 128-node graph | ≤ 1 ms CPU (native, optimised) |
 | WGSL generation + naga validation per new shape | ≤ 5 ms |
 | Pipeline creation per new shape | ≤ 30 ms native, ≤ 150 ms WebGL2, off the critical frame by §5.2 |
 | GPU memory per material | ≤ 1 KiB uniform + its textures (+⅓ for mips) |
@@ -652,14 +675,15 @@ They will be measured with the existing `gpu` perf harness and recorded in
   irradiance, `pbr_coated`, occlusion, softbox widening, PBR Neutral and dither. Graph and
   non-graph paths share every lighting line.
 - **New in `pbr_shade`:**
-  - *Anisotropic GGX for direct lights:* the BRDF of the CPU core
+  - *Anisotropic GGX for direct lights* (viewport only, in the shared `bsdf.wgsl`): the
+    mathematics of `render::anisotropic_surface`, which serves as its oracle in tests
     ([anisotropic GGX](render-anisotropic-ggx.md)) ported to WGSL, with αt, αu from roughness and
     anisotropy as OpenPBR defines them.
   - *Anisotropic studio reflection:* an approximation that bends the reflection vector
     toward the tangent before the cube lookup (public technique, mathematics only, e.g. the
     Filament documentation). It must pass the white-furnace test within today's 5 %.
   - *`coat_color`:* the base lobe is multiplied by the coat colour once on entry and once on
-    exit (a thin absorbing layer), with the CPU `clear_coat.rs` oracle extended to match.
+    exit (a thin absorbing layer), with the `clear_coat.rs` oracle extended to match in tests.
   - *Emission:* added after lighting.
   - *Transmission:* see §5.6.
 - The graph's `Surface` carries a coat normal separate from the base normal, which today's
@@ -672,13 +696,129 @@ They will be measured with the existing `gpu` perf harness and recorded in
 
 | Situation | Behaviour |
 |---|---|
-| Shape not compiled yet / compile failed / over the cache | Flattened surface through the standard pipeline; a failure logs once per shape and reports in the render diagnostics. |
+| Shape not compiled yet / compile failed / over the cache | The base response through the constant-graph GPU pipeline; a failure logs once per shape and reports in the render diagnostics. |
 | Texture not decoded yet or failed | The image node's `default` colour. |
-| Path tracer (progressive GPU, native) | v1: flattened surface + coat + transmission inputs mapped to its existing runtime transmission. v2: the same IR compiled into its material function (it has storage buffers) (O5). |
-| CPU product host and CPU tests | The CPU evaluator (f64 interpreter of the IR) per hit. It is the oracle for the GPU and gives full parity, at CPU cost. |
-| Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the flattened display colour). |
+| GPU path tracer | The same IR through the path back end (§5.7); unsupported inputs approximated and reported. |
+| CPU ray tracer, CPU product host (out of scope) | Today's behaviour: the display `color` for a graph look, the `pbr` values for a `pbr` look. |
+| No GPU (the CPU viewport renderer) | Photoreal is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "photoreal needs a GPU". The standard view works as today. |
+| Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the base response's colour). |
 | `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. |
-| A graph with features a renderer lacks | Each host advertises what it supports, as `pbr` is advertised today. A required feature that is absent refuses the render job; it never silently drops the feature. |
+| A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O11). |
+
+### 5.7 One material system, two GPU targets
+
+The interactive viewport is the **primary** target. Upstream's GPU path tracer
+(`crates/gpu/src/path/`, native only) is a **second target of the same material system**.
+It gains no feature except evaluating graph materials, so a look renders from one
+definition everywhere a GPU shades it. Sharing has four layers.
+
+**1. One definition:** the graph in the file.
+
+**2. One IR, and its relation to `OpaqueSurface`.** The IR lives in `solidcraft-render`, next
+to `OpaqueSurface` and `ClearCoat` (`surface.rs`, `clear_coat.rs`), which the viewport, the
+path tracer and the CPU renderer share today. **`OpaqueSurface` becomes the constant core of
+the graph's output type; the graph neither replaces nor wraps it.**
+
+- The surface node's output type is `SurfaceSample`: `OpaqueSurface` (base colour, metallic,
+  roughness, dielectric IOR, optional `ClearCoat`) plus the inputs `OpaqueSurface` lacks
+  (anisotropy and tangent, coat colour, coat and base normals, emission, transmission,
+  opacity).
+- A `pbr` look is exactly the constant graph whose `SurfaceSample` has default extensions,
+  so the two convert losslessly both ways.
+- `OpaqueSurface`'s admission bounds (roughness ≥ 0.045, IOR [1, 3] …) are the surface
+  node's input ranges, from one table.
+- The CPU renderer and CPU product host keep consuming `OpaqueSurface` from `pbr` looks,
+  unchanged.
+- The **base response** is a static read of the graph's output node: each constant input as
+  it is, and each driven input's declared `fallback` constant (§4.1). It yields an
+  `OpaqueSurface` without evaluating anything. It gives the look's display `color`, the
+  fallback while a shape compiles (§5.2), and the copy written by Save As "For older
+  SolidCraft" (§4.4).
+
+**3. One WGSL library.** The two shaders duplicate each other today. Both are assembled by
+string concatenation: `path/mod.rs` uses `concat!(include_str!("path.wgsl"), …)`, and
+`view.rs` uses `format!("{SHADER}\n{}", pbr::SOURCE)`.
+
+| Function | Viewport (`pbr.rs`) | Path tracer (`path.wgsl`, `aging.wgsl`) |
+|---|---|---|
+| Safe normalise | `pbr_unit` | `unit` (same algorithm) |
+| Schlick with the IOR-1 rule | `pbr_fresnel` | `base_fresnel` (same), plus a plain `fresnel` |
+| GGX D and separable Smith | inline in `pbr_brdf` and `pbr_coated` | `distribution` + inline in `brdf` |
+| Base BRDF (spec + Fresnel-weighted diffuse) | `pbr_brdf` | first half of `brdf` |
+| Coat lobe and attenuation bound | `pbr_coat_bound`, `pbr_coated` | `coat_energy_bound`, second half of `brdf` |
+| Lattice hash and value noise | `pat_hash`, `pat_noise` (2D) | `aging_hash`, `aging_noise` (3D) |
+| Planar projection | none yet (proposed `tc_planar`) | `texture_uv` in `textures.wgsl` |
+
+These become shared modules in `crates/gpu/src/shading/`, prefixed `sc_` so that no name
+collides with either shader:
+
+- `bsdf.wgsl`: normalise, Fresnel, GGX/Smith, base BRDF, coat, and anisotropic GGX
+  evaluation for the viewport;
+- `noise.wgsl`: hashes and value, gradient and cellular noise in 2D and 3D;
+- `patterns.wgsl`: brushed, weave, checker, grid and gradient, with footprint fades;
+- `projection.wgsl`: planar, triplanar, cylindrical.
+
+Each is a plain `const &str`, concatenated into both shaders exactly as today; no new
+dependency is needed. `naga_oil` (MIT OR Apache-2.0) would add real imports, but
+concatenation already works, keeps one naga parse per module, and keeps the build simple
+(decision O12).
+
+The shared modules hold only pure functions over values. They have no bindings, no
+storage, no pointers to storage and no derivatives: those stay in each shader, and the
+viewport passes the footprint in. The modules therefore translate to GLSL ES 3.00, and the
+existing WebGL2 translation test, which covers the viewport entry points, checks them on
+every change. The path tracer's sampling and PDF (`sample_surface`, `surface_pdf`), its
+media and its sheets stay path-only.
+
+**4. One code generator, two back ends.** The front end (validation, IR, slot assignment,
+cost) is shared. The back ends:
+
+| | Raster back end (viewport) | Path back end (path tracer) |
+|---|---|---|
+| Runs on | native and WebGL2 | native only (storage buffers) |
+| Emits | `material_eval(MatCtx) -> Surface`, one pipeline per shape (§5.2) | `graph_surface(t: Triangle, p: vec3<f32>, n: vec3<f32>) -> Triangle` for every shape in the job's scene, with a `switch` on the shape index, inside the one path pipeline |
+| Values | uniform pages (16 KiB), vec4 offset in the vertex | a storage-buffer material table; the triangle names its record in `interior.z`, today "reserved" |
+| Textures | 2D textures with GPU-built mips, samplers in group 3 | the existing `texture_words` storage buffer and bilinear `texture_sample` |
+| Derivatives / filtering | `fwidth` footprint, mips | no derivatives in compute: patterns are evaluated unfiltered at the hit, as `aging.wgsl` is (path samples integrate over the pixel) |
+| Recompile | on a new shape | once per captured job, when its shape set differs (jobs are immutable snapshots) |
+
+`graph_surface` follows the existing hook pattern: like `texture_surface` and
+`aged_surface`, it returns the hit's resolved `Triangle` (base, parameters, coat, shading
+normal) before sampling. The integrator, its importance sampling, its PDF and its
+random-number use are therefore unchanged, and graph evaluation draws no random numbers.
+
+**What the path tracer does not gain.** Inputs it has no lobe for (anisotropy, coat colour)
+are evaluated as isotropic and untinted. Each such approximation is reported, never silent:
+`render.preflight` lists it per body, and so does the job result (decision O11). Emission
+maps to its existing surface emission, transmission to its existing runtime transmission,
+normals to its shading normal.
+
+**Path-tracer parity for looks without graphs.**
+
+- A triangle without a graph never enters `graph_surface`.
+- `brdf` keeps its exact expression order: the shared module is extracted from
+  `path.wgsl`'s version, and `pbr_brdf` is ported onto it. Its frames are within the
+  existing test tolerances, and the viewport parity checks guard that port.
+- `crates/gpu/src/path/tests.rs` therefore passes unchanged: the BRDF/PDF tests against the
+  f64 `render::surface` and `clear_coat` oracles, the zero-coat random-number checks, and the
+  coat sampling oracle.
+- New tests: a constant graph equals its `pbr` look in path output, and the path back end's
+  pattern values equal the raster back end's at the same points. Both back ends compile the
+  same IR, which is how two implementations are avoided.
+
+**What sharing saves and costs (agent-hours):**
+
+- **Saves** an estimated 28 hours that a separate path-tracer material system would need:
+  its own IR and code generator (about 14), a second port of the patterns (about 8), and a
+  second BSDF and coat with their oracle tests (about 6). It also removes the duplication in
+  the table above for good.
+- **Costs** 20 hours: extracting the shared library with parity re-verified in both
+  shaders (track S, 8) and the path back end (track PT, 12).
+- **Net:** about 8 hours saved now, plus one place to fix every later BSDF change.
+
+**Out of scope:** the CPU ray tracer and the CPU product host. For a graph look they show
+what they show today for a look without `pbr`: its display `color`. A `pbr` look keeps its
+`pbr` values. There is no CPU graph evaluator in product code.
 
 ## 6. Photoreal view mode
 
@@ -797,7 +937,7 @@ read-only, with a summary (nodes, cost, textures) and "Edit as JSON" through
 a permissively licensed egui node-graph widget would be evaluated then, with its licence
 named in the PR.
 
-The editor shows a live swatch (a sphere and a flat coupon, rendered with the product look
+The editor shows a live swatch (a sphere and a flat coupon, rendered on the GPU with the product look
 off the window thread) and the graph's cost against the budget. Every edit is a command
 (below); a slider drag is one undo step on release.
 
@@ -891,13 +1031,15 @@ commit. The steps are:
 | # | Commit (group) | Contents |
 |---|---|---|
 | 1 | Photoreal renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. **Without** the `SurfacePattern` enum, `pbr_tri_with` detail vertices and the `render_studio_look` preference. `fs_pbr` is split into `material_eval` + `pbr_shade`. |
-| 2 | Photoreal view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy photoreal resources, the Render-preview look (§6) |
-| 3 | Graph model | Types, validation, IR, cost model, CPU evaluator, flattening (`solidcraft-render`) |
-| 4 | Format and compatibility | The pending file, `appearances.graphs`/`textures`, texture blobs, the oldest-sufficient-format rule, Save As "For older SolidCraft" (§4.4) |
-| 5 | Commands | `appearance.graph.*`, `appearance.texture.*`, `assign` extension, runtime overrides; schemas |
-| 6 | GPU graphs | Code generation, shape cache, uniform pages, group-3 layout, pattern/projection/image nodes, anisotropy, `coat_color`, emission; the GLSL ES corpus test |
-| 7 | Editor | The layered stack and swatches in the Appearance editor; locale strings |
-| 8 | Libraries and content | Catalog v3, built-in graphs (today's four patterns and the examples), user docs, examples, screenshots |
+| 2 | Shared shading library | `crates/gpu/src/shading/` (BSDF, noise, projection), used by both `viewport.wgsl`/`pbr.rs` and `path.wgsl`. No output change: path tests unchanged, viewport frames within parity. |
+| 3 | Photoreal view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy photoreal resources, GPU requirement, the Render-preview look (§6) |
+| 4 | Graph model | Types, validation, IR, cost model, base response, `SurfaceSample` around `OpaqueSurface` (`solidcraft-render`); the test-only reference |
+| 5 | Format and compatibility | The pending file, `appearances.graphs`/`textures`, texture blobs, the oldest-sufficient-format rule, Save As "For older SolidCraft" (§4.4) |
+| 6 | Commands | `appearance.graph.*`, `appearance.texture.*`, `assign` extension, runtime overrides; schemas |
+| 7 | GPU graphs, viewport | The raster back end: code generation, shape cache, uniform pages, group-3 layout, pattern/projection/image nodes, GPU mips, anisotropy, `coat_color`, emission; the GLSL ES corpus test |
+| 8 | GPU graphs, path tracer | The path back end: the material table, the `graph_surface` hook, the shape switch, approximation reports in preflight (§5.7) |
+| 9 | Editor | The layered stack and GPU swatches in the Appearance editor; locale strings |
+| 10 | Libraries and content | Catalog v3, built-in graphs (today's four patterns and the examples), user docs, examples, screenshots |
 
 The PR body's `Changes a default:` line reads "No". The standard view stays the default,
 files without graphs save unchanged, and the Render preview stays standard.
@@ -910,77 +1052,97 @@ fork too.
 
 The contract comes first. **C0** fixes the following before any track starts:
 
-- the Rust types of the node catalogue, the IR and `Surface`;
+- the Rust types of the node catalogue, the IR, `SurfaceSample` and the base response;
 - the JSON schema;
 - the command and `view.look` schemas;
-- the prelude function signatures;
-- the uniform-page layout;
+- the signatures of the shared WGSL modules;
+- the uniform-page layout and the path material-table layout;
+- `graph_surface`'s signature;
 - `Part::used`;
-- the five worked examples as golden fixtures with CPU-evaluated expected values at fixed
-  points.
+- the five worked examples as golden fixtures. Their expected values are analytic where
+  possible, and otherwise come from the test-only reference.
 
 All later tracks build against those signatures.
 
 | Track | Scope | Depends on | Agent-hours |
 |---|---|---|---|
-| C0 | Contract (above) | – | 6 |
+| C0 | Contract (above) | – | 7 |
 | R | Renderer integration: bring `upstream-photoreal-look` into the package branch, remove `SurfacePattern`/detail vertices and `render_studio_look` from it, split `fs_pbr` into `material_eval` + `pbr_shade` with bit-identical frames | C0 | 6 |
-| V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in photoreal, lazy photoreal resources, shared tessellation; pixel tests in both looks | R | 12 |
-| A | Validation, IR, cost model, CPU evaluator with slopes, flattening; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 14 |
-| B | Format: tables, `Look.graph/values` (with `pbr` unchanged), texture blobs and base64, save GC, catalog v3 container | C0 | 10 |
-| K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice, Save As "For older SolidCraft" | B | 8 |
-| C1 | WGSL prelude (port of today's patterns), code generator, shape key, pipeline cache with budget and fallback, uniform pages, new vertex layouts, group-3 layout | A (IR), R | 14 |
-| C2 | `pbr_shade` additions: anisotropic GGX direct + studio, `coat_color` (with the CPU oracle), emission, transmission fallback; furnace tests | R | 10 |
-| C3 | Textures on the GPU: decode worker, mips, bind groups, `image` node sampling | C1, B (assets) | 6 |
+| S | Shared shading library: extract BSDF, coat, noise and projection into `crates/gpu/src/shading/` from `path.wgsl`'s versions; port `pbr.rs` and `path.wgsl` onto it; path tests unchanged, viewport parity, GLSL ES translation | R | 8 |
+| V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in photoreal, lazy photoreal resources, shared tessellation, the no-GPU refusal; pixel tests in both looks | R | 12 |
+| A | Validation, IR, cost model, `SurfaceSample`, base response; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 10 |
+| T | Test-only reference: an f64 interpreter of the IR under `#[cfg(test)]`/dev-dependencies, never in product code; it checks both back ends' frames | A | 6 |
+| B | Format: tables, `Look.graph/values` (with `pbr` unchanged), connection fallbacks, texture blobs and base64, save GC, catalog v3 container | C0 | 10 |
+| K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice, Save As "For older SolidCraft" from the base response | B | 8 |
+| C1 | Raster back end: code generator over the shared modules, shape key, pipeline cache with budget and base-response fallback, uniform pages, new vertex layouts, group-3 layout | A (IR), S at integration | 14 |
+| C2 | Shared BSDF additions for the viewport: anisotropic GGX direct + studio, `coat_color` (oracle in tests), emission, transmission fallback; furnace tests | S | 9 |
+| C3 | Textures on the GPU: decode worker, mips by render passes (the sRGB render-target check on WebGL2), bind groups, `image` node sampling | C1, B (assets) | 7 |
+| PT | Path back end: storage material table, triangle record in `interior.z`, per-job generated `graph_surface` with a shape switch, `image` via `texture_words`, approximation reports in preflight and job results; tests: no-graph parity, constant graph = `pbr`, both back ends agree at fixed points | A (IR), S | 12 |
 | D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start` | A, B | 12 |
-| E | Layered stack editor, swatch renders, texture picker, locale strings; built against C0's command schemas, then joined to D (4 of its 16) | C0, then D | 16 |
-| F | Consumers: path tracer and CPU host via the evaluator and flattening; export colour | A, B | 6 |
+| E | Layered stack editor, GPU swatches, texture picker, locale strings; built against C0's command schemas, then joined to D (4 of its 16) | C0, then D | 16 |
 | G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json` | A, D | 6 |
-| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3, GPU-vs-CPU oracle frames | C1–C3, V, K | 10 |
+| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, path-tracer frames of graph looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3 | C1–C3, PT, V, K | 11 |
 | P | Package assembly: the commit series, the proposal text, PR body, screenshots and a recording | all | 4 |
 | H | Pcbcraft (outside the package): table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
 
-- **Total:** about **140 agent-hours** for the upstream package, plus **10** for Pcbcraft:
-  **150** in all.
-- **Critical path:** C0 (6) → A's IR (8 of its 14) → C1 (14) → integrating C2 and C3 (6)
-  → I (10) → P (4) = about **48 agent-hours**.
+- **Total:** about **158 agent-hours** for the upstream package, plus **10** for Pcbcraft:
+  **168** in all.
+- **Critical path:** C0 (7) → A's IR (6 of its 10) → C1 (14) → integrating C2, C3 and S
+  (6) → I (11) → P (4) = about **48 agent-hours**.
 
 The other chains fit inside it:
 
-- R → V finishes by hour 24.
-- D is done by hour 32, and E's joining to it by hour 36.
+- R → S finishes by hour 21. PT starts there, ends by hour 33, and joins I.
+- R → V finishes by hour 25.
+- D is done by hour 29, and E's joining to it by hour 33.
 
-Tracks R, A, B and E start in parallel after C0. C2 and V start after R, and D, F, K and H
-fan out once A and B land. Reviews and merge rounds come on top of both figures.
+Changes since the previous estimate (140 + 10):
+
+- **Removed:** CPU consumers (old track F, 6) and the CPU evaluator and flattening in
+  product code (4 from A).
+- **Added:**
+  - the shared library S (8) and the path back end PT (12);
+  - the test-only reference T (6);
+  - GPU mips (+1 in C3), the larger contract (+1) and path evidence (+1 in I).
+- C2 is one hour smaller, because the coat already lives in the shared module.
+
+Tracks R, A, B and E start in parallel after C0. S, C2 and V start after R; PT starts after
+S; D, K, T and H fan out once A and B land. Reviews and merge rounds come on top of both
+figures.
 
 ### Risks
 
 1. **WebGL2 is unproven.** No browser has drawn a look frame yet. Uniform-array indexing
-   by a varying, compile and link times (ANGLE) and the four-group limit are the likely
-   failure points. *Mitigation:* the GLSL corpus test from commit 6 on, a browser frame in
-   track I before the package is offered, and the non-blocking compile with fallback.
-2. **The package is large** for upstream review, about eight commit groups. *Mitigation:*
-   the proposal first, a stacked series in which each commit passes CI on its own, and the
+   by a varying, sRGB mip render targets, compile and link times (ANGLE) and the
+   four-group limit are the likely failure points. *Mitigation:* the GLSL corpus test from
+   commit 7 on, a browser frame in track I before the package is offered, and the
+   non-blocking compile with the base-response fallback.
+2. **The package is large** for upstream review, ten commit groups. *Mitigation:* the
+   proposal first, a stacked series in which each commit passes CI on its own, and the
    offer of stacked PRs.
 3. **Upstream disagreement on the model** (naming, table vs inline, scope), which would
    force a rewrite after the fork has shipped files. *Mitigation:* the proposal before code,
    and keeping the fork's format pending (unreleased) until upstream agrees.
 4. **The format rule (§4.4) may be declined.** It touches shared `format.rs` policy.
    *Mitigation:* it is opt-in per change and conservative by default, and the package works
-   without it (O9).
-5. **Overlay compositing in photoreal:** drawing highlights, edges and sketches after tone
+   without it (O8).
+5. **Refactoring `path.wgsl`** onto shared modules could shift path output in the last
+   bits, or change its random-number use. *Mitigation:* the shared functions are extracted
+   from `path.wgsl`'s exact expressions, the path tests must pass unchanged, and graph
+   evaluation consumes no random numbers.
+6. **Overlay compositing in photoreal:** drawing highlights, edges and sketches after tone
    mapping needs a clean pass order with the AO, supersample and cached-still paths.
    *Mitigation:* pixel tests for each overlay in both looks (track V).
-6. **Preview and final render diverge** while the path tracer uses flattened surfaces.
-   *Mitigation:* document it in v1; the path-tracer codegen is the first v2 item.
-7. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
-   *Mitigation:* keep masks sharp in the examples; the closure mix is in v2.
-8. **The node set freezes on release.** Every addition is then a format change.
+7. **Path and viewport disagree** for inputs the path tracer approximates (anisotropy, coat
+   colour). *Mitigation:* the approximation reports (O11); no new path lobes in this package.
+8. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
+   *Mitigation:* keep masks sharp in the examples; the closure mix comes later.
+9. **The node set freezes on release.** Every addition is then a format change.
    *Mitigation:* start small, version the catalogue, refuse anything unknown.
-9. **The anisotropic studio approximation** may fail the furnace bound at high anisotropy.
-   *Mitigation:* clamp anisotropy in the studio term to what passes, documented.
-10. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
-    LRU and flattened fallback; the stack editor produces few distinct shapes.
+10. **The anisotropic studio approximation** may fail the furnace bound at high anisotropy.
+    *Mitigation:* clamp anisotropy in the studio term to what passes, documented.
+11. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
+    LRU and the base-response fallback; the stack editor produces few distinct shapes.
 
 ### Open decisions (with recommendations)
 
@@ -988,12 +1150,15 @@ fan out once A and B land. Reviews and merge rounds come on top of both figures.
 |---|---|---|
 | O1 | Graph identity: a design-level table of named graphs referenced by looks, or an inline graph copied into every look (value semantics, as `pbr` is today) | **Table.** Editing a material updates every use (as CAD users expect), files stay small with 100,000 overrides, and libraries map to it with provenance. `duplicate` gives divergence when wanted. |
 | O2 | First editor: layered stack or node canvas | **Layered stack** (§7.1); a canvas later. |
-| O3 | `surface.mix` semantics in v1 | **Parameter blend**; closure mix in v2. |
+| O3 | `surface.mix` semantics in v1 | **Parameter blend**; closure mix later. |
 | O4 | Default projection space | **Object**, so patterns stick to moving and instanced parts; today's look uses world millimetres, which `space: world` keeps. |
-| O5 | Path tracer in v1 | **Flattened** in v1; IR → path-tracer material in v2. |
-| O6 | Transmission inputs in v1 | **Include** them (validated, with a real-time fallback), so that glass and clear silicone need no second format change. |
-| O7 | Constant colour encoding | Store linear floats; accept `{"srgb8": …}` for exact `pbr` equivalence; commands also accept hex sRGB. |
-| O8 | Is the view look remembered between runs? | **Yes, like visual style** (the existing convention), defaulting to standard and reset by Restore Defaults. Opening a design never changes it. The alternative, starting standard on every launch, would break that convention for a single setting. |
-| O9 | Written format number for material-free designs | **Opt-in "oldest sufficient format"** (`Part::used`, §4.4): generic, conservative, no change for existing parts. The fallback, if upstream declines it, is today's build-wide bump for the release cycle. |
-| O10 | Save As "For older SolidCraft" (flatten graphs into a copy) | **Include** it (about 3 of track K's hours). It makes sharing with the last release explicit, never a silent loss. |
-| O11 | The view-mode key | **Shift+P**, which is free and rebindable. Founder or maintainers may prefer another; nothing else depends on it. |
+| O5 | Transmission inputs in v1 | **Include** them (validated; the viewport draws today's see-through glass, the path tracer its existing transmission), so glass and clear silicone need no second format change. |
+| O6 | Constant colour encoding | Store linear floats; accept `{"srgb8": …}` for exact `pbr` equivalence; commands also accept hex sRGB. |
+| O7 | Is the view look remembered between runs? | **Yes, like visual style** (the existing convention), defaulting to standard and reset by Restore Defaults. Opening a design never changes it. |
+| O8 | Written format number for material-free designs | **Opt-in "oldest sufficient format"** (`Part::used`, §4.4): generic, conservative, no change for existing parts. If upstream declines it, the fallback is today's build-wide bump for the release cycle. |
+| O9 | `pbr` → graph migration | **None, on open or on save.** A `pbr` look stays `pbr`. A graph is created only by an explicit edit that needs one (a coat, a pattern, "Convert to material graph"), so only designs that use graphs get the new format. |
+| O10 | Save As "For older SolidCraft" (the base response into a copy) | **Include** it (about 3 of track K's hours). It makes sharing with the last release explicit, never a silent loss, and involves no evaluation. |
+| O11 | Path tracer and inputs it has no lobe for (anisotropy, coat colour) | **Approximate** (isotropic, untinted) and **report** each one in `render.preflight` and the job result. No new path features. The alternative, refusing such jobs, would block every brushed-metal render. |
+| O12 | Composing the shared WGSL modules | **Concatenation** of `sc_`-prefixed modules, the mechanism both shaders already use. `naga_oil` (MIT OR Apache-2.0) only if module count grows. |
+| O13 | Test oracle | **Keep a test-only f64 IR interpreter** (track T) beside analytic checks and golden GPU frames. Patterns have no closed form, and an independent reference catches back-end drift. It never ships in product code. |
+| O14 | The view-mode key | **Shift+P**, which is free and rebindable. Founder or maintainers may prefer another; nothing else depends on it. |
