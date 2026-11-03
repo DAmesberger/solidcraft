@@ -19,7 +19,7 @@ pub enum SamplingError {
 impl std::fmt::Display for SamplingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Dimensions => "texture dimensions must be positive and at most 2048",
+            Self::Dimensions => "texture dimensions must be positive and within the texture input edge limit",
             Self::Length => "texture storage must be exactly width * height * 4 floats",
             Self::Values => "normalized texture channels must be finite and in [0, 1]",
             Self::Coordinates => "repeat coordinates must be finite and within the CPU reference bound",

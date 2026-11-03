@@ -48,8 +48,9 @@ pub(super) fn is_maths(kind: &str) -> bool {
 enum TexKey {
     /// A constant texture on one `image` node.
     Node(usize),
-    /// An interface texture read in one colour space.
-    Interface(usize, bool),
+    /// An interface texture read in one colour space with one wrap mode. (Track C3: a binding
+    /// has one sampler, as GLSL ES's combined samplers need.)
+    Interface(usize, bool, i64),
 }
 
 struct Lowerer<'a> {
@@ -115,7 +116,8 @@ impl Lowerer<'_> {
                     return Operand::Absent;
                 };
                 if iface.ty == Ty::Texture {
-                    return self.texture(TexKey::Interface(*j, srgb), format!("{}{}", TextureBinding::INTERFACE_PREFIX, iface.name), srgb);
+                    let wrap = node.param("wrap").unwrap_or(0);
+                    return self.texture(TexKey::Interface(*j, srgb, wrap), format!("{}{}", TextureBinding::INTERFACE_PREFIX, iface.name), srgb);
                 }
                 let width = iface.ty.width();
                 if let Some(s) = self.interface_slots.get(j).and_then(|s| self.slots.get_mut(*s)) {

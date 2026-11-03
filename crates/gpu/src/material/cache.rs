@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use solidcraft_render::material_graph::ir::{Ir, ShapeKey};
 
-use super::scene::GraphScene;
+use super::scene::{GraphScene, TextureSet};
+use super::textures::ResidentTextures;
 use super::{CACHE_SHAPES, COMPILES_PER_FRAME, FRAME_BUDGET_MS, OBJECT_VERTEX_SIZE, PAGE_BYTES, VERTEX_SIZE};
 use crate::view::ibl::{StudioPreset, Studios};
 
@@ -73,6 +74,8 @@ pub(crate) struct Materials {
     /// samplers by wrap mode.
     blank: Option<wgpu::TextureView>,
     samplers: [wgpu::Sampler; 3],
+    /// The resident material textures (`textures`).
+    pub(crate) textures: ResidentTextures,
     /// Shapes kept and new pipelines a frame ([`CACHE_SHAPES`], [`COMPILES_PER_FRAME`]); tests
     /// lower them.
     pub(crate) capacity: usize,
@@ -131,6 +134,7 @@ impl Materials {
             capacity: CACHE_SHAPES,
             compiles_per_frame: COMPILES_PER_FRAME,
             samplers,
+            textures: ResidentTextures::new(device),
             #[cfg(test)]
             no_time_budget: false,
         }
@@ -189,6 +193,12 @@ impl Materials {
         self.fallback_draws.store(0, std::sync::atomic::Ordering::Relaxed);
         self.frame += 1;
         let frame = self.frame;
+        self.textures.next_frame();
+        for draw in &scene.draws {
+            for key in scene.set(draw.set).iter().flatten() {
+                self.textures.touch(key);
+            }
+        }
         self.stats = MaterialStats { failed: u32::try_from(self.failed.len()).unwrap_or(u32::MAX), ..MaterialStats::default() };
         if scene.draws.is_empty() {
             self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
@@ -297,6 +307,8 @@ struct DrawGpu {
     ir: Arc<Ir>,
     object: bool,
     page: usize,
+    /// Its texture set in `GraphBatches::sets`.
+    set: u32,
     buffer: wgpu::Buffer,
     vertices: u32,
 }
@@ -306,9 +318,12 @@ struct DrawGpu {
 pub(crate) struct GraphBatches {
     pages: Vec<PageGpu>,
     draws: Vec<DrawGpu>,
-    binds: Vec<wgpu::BindGroup>,
-    /// The studio (preset, installation) and pages the binds were made for.
-    bound: Option<(Option<StudioPreset>, u64, usize)>,
+    /// The scene's texture sets (index 0 binds none).
+    sets: Vec<TextureSet>,
+    /// Group-3 binds by (page, texture set).
+    binds: HashMap<(usize, u32), wgpu::BindGroup>,
+    /// The studio (preset, installation), pages and texture generation the binds were made for.
+    bound: Option<(Option<StudioPreset>, u64, usize, u64)>,
 }
 
 impl GraphBatches {
@@ -344,6 +359,11 @@ impl GraphBatches {
         if rebind {
             self.bound = None;
         }
+        let sets: Vec<TextureSet> = (0..=scene.draws().iter().map(|d| d.textures).max().unwrap_or(0)).map(|i| scene.texture_set(i)).collect();
+        if sets != self.sets {
+            self.sets = sets;
+            self.bound = None;
+        }
         self.draws.clear();
         for draw in scene.draws() {
             let stride = GraphScene::stride(draw.object);
@@ -362,7 +382,15 @@ impl GraphBatches {
             bytes.resize(bytes.len().div_ceil(4) * 4, 0);
             queue.write_buffer(&buffer, 0, &bytes);
             written += bytes.len() as u64;
-            self.draws.push(DrawGpu { shape: draw.shape, ir: ir.clone(), object: draw.object, page, buffer, vertices: vertices / 3 * 3 });
+            self.draws.push(DrawGpu {
+                shape: draw.shape,
+                ir: ir.clone(),
+                object: draw.object,
+                page,
+                set: draw.textures,
+                buffer,
+                vertices: vertices / 3 * 3,
+            });
         }
         written
     }
@@ -371,23 +399,41 @@ impl GraphBatches {
         self.draws.is_empty()
     }
 
-    /// Make the group-3 binds (studio + page) for the frame's studio, when it or the pages changed.
+    /// Texture set `i` (none past the scene's).
+    fn set(&self, i: u32) -> &TextureSet {
+        static NONE: TextureSet = [None, None, None, None];
+        usize::try_from(i).ok().and_then(|i| self.sets.get(i)).unwrap_or(&NONE)
+    }
+
+    /// Make the group-3 binds (studio + page + textures) of every (page, texture set) drawn, when
+    /// the studio, the pages or the resident textures changed. A texture not resident yet binds
+    /// the 1 × 1 stand-in, so its `image` nodes draw their `default`.
     pub(crate) fn bind(&mut self, device: &wgpu::Device, materials: &Materials, studios: &Studios, preset: Option<StudioPreset>) {
         let Some(blank) = materials.blank.as_ref().filter(|_| !self.draws.is_empty()) else { return };
-        let want = (preset, studios.generation(), self.pages.len());
-        if self.bound == Some(want) && self.binds.len() == self.pages.len() {
-            return;
+        let want = (preset, studios.generation(), self.pages.len(), materials.textures.generation());
+        if self.bound != Some(want) {
+            self.binds.clear();
         }
-        let textures = [blank, blank, blank, blank];
         let samplers = [&materials.samplers[0], &materials.samplers[1], &materials.samplers[2]];
-        self.binds = self.pages.iter().map(|p| studios.material_bind(device, &materials.group3, preset, &p.buffer, textures, samplers)).collect();
+        for draw in &self.draws {
+            if self.binds.contains_key(&(draw.page, draw.set)) {
+                continue;
+            }
+            let Some(page) = self.pages.get(draw.page) else { continue };
+            let set = self.set(draw.set);
+            let view = |i: usize| set.get(i).and_then(Option::as_ref).and_then(|k| materials.textures.view(k)).unwrap_or(blank);
+            let textures = [view(0), view(1), view(2), view(3)];
+            let bind = studios.material_bind(device, &materials.group3, preset, &page.buffer, textures, samplers);
+            self.binds.insert((draw.page, draw.set), bind);
+        }
         self.bound = Some(want);
     }
 
     /// Draw every material surface: one draw per (shape, page, texture set).
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'static>, pipelines: &Materials, tally: &crate::view::Tally) {
         for draw in &self.draws {
-            let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&draw.shape, draw.object), self.binds.get(draw.page)) else {
+            let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&draw.shape, draw.object), self.binds.get(&(draw.page, draw.set)))
+            else {
                 continue;
             };
             pass.set_pipeline(pipeline);
