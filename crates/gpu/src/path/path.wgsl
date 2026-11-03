@@ -104,7 +104,7 @@ struct Medium { id: f32, ior: f32, sigma: vec3<f32>, scatter: vec2<f32> };
 fn initialize_media(hit_index:u32,d:vec3<f32>,stack:ptr<function,array<Medium,16>>,count:ptr<function,u32>) -> bool {
     let first=triangle(hit_index);
     if first.base.w<=0.0 || first.parameters.w>=0.0 {return true;}
-    let outward=unit(cross(first.p1.xyz-first.p0.xyz,first.p2.xyz-first.p0.xyz));
+    let outward=sc_unit(cross(first.p1.xyz-first.p0.xyz,first.p2.xyz-first.p0.xyz));
     let entering=dot(outward,d)<0.0;
     var reference=select(hit_index+1u,u32(first.interior.w),entering);
     var length=0u;
@@ -128,51 +128,10 @@ fn random(state: ptr<function, u32>) -> f32 {
     return f32(((word >> 22u) ^ word) >> 8u) * (1.0 / 16777216.0);
 }
 
-fn unit(v: vec3<f32>) -> vec3<f32> {
-    let scale = max(max(abs(v.x), abs(v.y)), abs(v.z));
-    if scale == 0.0 { return vec3<f32>(0.0, 0.0, 1.0); }
-    return normalize(v / scale);
-}
-fn fresnel(f0: vec3<f32>, c: f32) -> vec3<f32> {
-    let t = 1.0 - clamp(c, 0.0, 1.0);
-    return f0 + (vec3<f32>(1.0) - f0) * (t*t*t*t*t);
-}
-// An index-matched dielectric has no interface reflection at any angle.
-// Metal fractions still contribute their independently weighted grazing limit.
-fn base_fresnel(f0:vec3<f32>,cosine:f32,metallic:f32,ior:f32)->vec3<f32> {
-    let x=1.0-clamp(cosine,0.0,1.0);
-    let grazing=select(1.0,metallic,ior==1.0);
-    return f0+(vec3<f32>(grazing)-f0)*(x*x*x*x*x);
-}
-fn distribution(nh: f32, a2: f32) -> f32 {
-    let d = (1.0 - nh*nh) + nh*nh*a2;
-    return a2 / (PI*d*d);
-}
+// The opaque BRDF (base under an optional clear coat) is the shared shading library's
+// (`crates/gpu/src/shading/bsdf.wgsl`), which the viewport compiles too.
 fn brdf(t: Triangle, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
-    let nv = clamp(dot(n,v), -1.0, 1.0);
-    let nl = clamp(dot(n,l), -1.0, 1.0);
-    if nv <= 0.0 || nl <= 0.0 { return vec3<f32>(0.0); }
-    let h = unit(v+l);
-    let a = t.parameters.y*t.parameters.y;
-    let a2 = a*a;
-    let d = distribution(clamp(dot(n,h), 0.0, 1.0), a2);
-    let gv = 2.0 / (nv + sqrt(a2 + (1.0-a2)*nv*nv));
-    let gl = 2.0 / (nl + sqrt(a2 + (1.0-a2)*nl*nl));
-    let ratio = (t.parameters.z - 1.0) / (t.parameters.z + 1.0);
-    let f0 = mix(vec3<f32>(ratio*ratio), t.base.xyz, t.parameters.x);
-    let diffuse = t.base.xyz * ((1.0-t.parameters.x)/PI);
-    let base = base_fresnel(f0,dot(v,h),t.parameters.x,t.parameters.z) * (d*0.25*gv*gl)
-        + (vec3<f32>(1.0)-base_fresnel(f0,nv,t.parameters.x,t.parameters.z)) * (vec3<f32>(1.0)-base_fresnel(f0,nl,t.parameters.x,t.parameters.z)) * diffuse;
-    if t.coat.x <= 0.0 || t.coat.z == 1.0 { return base; }
-    let coat_a = t.coat.y*t.coat.y;
-    let coat_a2 = coat_a*coat_a;
-    let coat_d = distribution(clamp(dot(n,h),0.0,1.0),coat_a2);
-    let coat_gv = 2.0/(nv+sqrt(coat_a2+(1.0-coat_a2)*nv*nv));
-    let coat_gl = 2.0/(nl+sqrt(coat_a2+(1.0-coat_a2)*nl*nl));
-    let coat_ratio = (t.coat.z-1.0)/(t.coat.z+1.0);
-    let coat_f0 = vec3<f32>(coat_ratio*coat_ratio);
-    let attenuation = (vec3<f32>(1.0)-t.coat.x*coat_energy_bound(coat_f0,nv))*(vec3<f32>(1.0)-t.coat.x*coat_energy_bound(coat_f0,nl));
-    return base*attenuation+t.coat.x*fresnel(coat_f0,dot(v,h))*(coat_d*0.25*coat_gv*coat_gl);
+    return sc_coated_brdf(t.base.xyz, t.parameters.xyz, t.coat.xyz, n, v, l);
 }
 
 // Explicit stored vertex anchor plus unadded local offset. Neither field is
@@ -608,8 +567,8 @@ fn surface_ray_depth(t: Triangle, bary: vec3<f32>, origin: vec3<f32>, axis: u32)
 
 fn from_local(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     let axis = select(vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,1.0,0.0),abs(n.z)>0.9);
-    let x = unit(cross(axis,n));
-    return unit(x*p.x + cross(n,x)*p.y + n*p.z);
+    let x = sc_unit(cross(axis,n));
+    return sc_unit(x*p.x + cross(n,x)*p.y + n*p.z);
 }
 fn sample_surface(t: Triangle, n: vec3<f32>, v: vec3<f32>, rng: ptr<function,u32>) -> vec3<f32> {
     let component = random(rng); let x = random(rng); let y = random(rng);
@@ -619,13 +578,13 @@ fn sample_surface(t: Triangle, n: vec3<f32>, v: vec3<f32>, rng: ptr<function,u32
 fn surface_pdf(t: Triangle, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> f32 {
     let nl = dot(n,l);
     if nl<=0.0 || dot(n,v)<=0.0 { return 0.0; }
-    let h = unit(v+l); let vh = max(dot(v,h),1e-20);
+    let h = sc_unit(v+l); let vh = max(dot(v,h),1e-20);
     let nh = max(dot(n,h),0.0);
     let alpha = t.parameters.y*t.parameters.y;
-    let base = 0.5*nl/PI+0.5*distribution(nh,alpha*alpha)*nh/(4.0*vh);
+    let base = 0.5*nl/PI+0.5*sc_ggx_d(nh,alpha*alpha)*nh/(4.0*vh);
     if t.coat.x<=0.0 { return base; }
     let coat_alpha = t.coat.y*t.coat.y;
-    let coat_pdf = distribution(nh,coat_alpha*coat_alpha)*nh/(4.0*vh);
+    let coat_pdf = sc_ggx_d(nh,coat_alpha*coat_alpha)*nh/(4.0*vh);
     return (1.0-t.coat.x*0.5)*base+t.coat.x*0.5*coat_pdf;
 }
 fn power_weight(a: f32, b: f32) -> f32 {
@@ -639,7 +598,7 @@ fn emitter_hit_precise(o: vec3<f32>, o_low: vec3<f32>, d: vec3<f32>, minimum: f3
     var hit = EmitterHit(FAR,0xffffffffu);
     for (var i=0u; i<u32(u.light_count.w); i+=1u) {
         let light = u.area_lights[i];
-        let normal = unit(cross(light.u.xyz,light.v.xyz));
+        let normal = sc_unit(cross(light.u.xyz,light.v.xyz));
         let cosine = dot(normal,d);
         if abs(cosine)<1e-8 { continue; }
         let to_light=precise_point_delta(light.center.xyz,vec3<f32>(0.0),o,o_low);
@@ -661,7 +620,7 @@ fn emitter_hit(o: vec3<f32>, d: vec3<f32>) -> EmitterHit {
 }
 
 fn area_pdf(light: AreaLight, delta: vec3<f32>) -> f32 {
-    let cosine = dot(unit(cross(light.u.xyz,light.v.xyz)),-unit(delta));
+    let cosine = dot(sc_unit(cross(light.u.xyz,light.v.xyz)),-sc_unit(delta));
     if cosine<=0.0 { return 0.0; }
     return dot(delta,delta)/(light.center.w*cosine);
 }
@@ -746,9 +705,9 @@ fn direct_light(t: Triangle, position: vec3<f32>, o: vec3<f32>, n: vec3<f32>, ge
                 let light = u.area_lights[source];
                 let point = light.center.xyz + light.u.xyz*(2.0*random(rng)-1.0) + light.v.xyz*(2.0*random(rng)-1.0);
                 let delta = point-position;
-                sample = EnvironmentSample(unit(delta),light.radiance.xyz,area_pdf(light,delta));
+                sample = EnvironmentSample(sc_unit(delta),light.radiance.xyz,area_pdf(light,delta));
                 let shadow = point-o;
-                shadow_direction = unit(shadow);
+                shadow_direction = sc_unit(shadow);
                 shadow_distance = length(shadow);
             } else if source==area_count {
                 if u.environment_map.w<=0.0 && !any(u.environment.xyz>vec3<f32>(0.0)) { continue; }
@@ -789,15 +748,15 @@ fn primary_ray(uv: vec2<f32>, lens_sample: vec2<f32>) -> CameraRay {
     let offset = u.right.xyz*uv.x + u.up.xyz*uv.y;
     var o = u.eye.xyz + offset;
     var d = -u.back.xyz;
-    if u.eye.w > 0.5 { o = u.eye.xyz; d = unit(offset-u.back.xyz*u.back.w); }
+    if u.eye.w > 0.5 { o = u.eye.xyz; d = sc_unit(offset-u.back.xyz*u.back.w); }
     if u.eye.w > 0.5 && u.right.w > 0.0 {
         let radius = sqrt(lens_sample.x)*u.right.w;
         let phi = 2.0*PI*lens_sample.y;
-        let displacement = radius*(cos(phi)*unit(u.right.xyz)+sin(phi)*unit(u.up.xyz));
+        let displacement = radius*(cos(phi)*sc_unit(u.right.xyz)+sin(phi)*sc_unit(u.up.xyz));
         // Construct the focal point directly, avoiding division by a tiny ray cosine.
         let focal = offset*(u.up.w/u.back.w)-u.back.xyz*u.up.w;
         o += displacement;
-        d = unit(focal-displacement);
+        d = sc_unit(focal-displacement);
     }
     return CameraRay(o,d);
 }
@@ -933,7 +892,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
         coverage = 1.0;
         ray_excluded = 0xffffffffu; ray_minimum = u.lighting.x;
         var t = triangle(hit.triangle); let v = -d;
-        var geometric = unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+        var geometric = sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
         let entering = dot(geometric,v)>=0.0;
         if !entering { geometric = -geometric; }
         var ni = 1.0;
@@ -941,7 +900,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
             let current = media[medium_count-1u];
             ni = current.ior;
         }
-        var n = unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
+        var n = sc_unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
         if dot(n,geometric)<0.0 { n = -n; }
         if dot(n,v)<=0.0 { n = geometric; }
         // Recover the surface point from barycentrics. A distant ray's f32 distance
@@ -955,7 +914,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
         }
         let shading_position = position+position_low;
         t = texture_surface(t,shading_position);
-        t = aged_surface(t,shading_position,unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
+        t = aged_surface(t,shading_position,sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
         let original_normal = n;
         n = texture_normal(t,shading_position,n,geometric);
         if dot(n,v)<=0.0 { n=original_normal; }
@@ -1044,7 +1003,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
                     medium_count += 1u;
                 } else { medium_count -= 1u; }
                 throughput *= (ni/nt)*(ni/nt);
-                d = unit(transmitted);
+                d = sc_unit(transmitted);
                 o = position-geometric*(u.lighting.x*2.0);
             }
             if dot(d,geometric) > 0.0 { o = position+geometric*(u.lighting.x*2.0); }
@@ -1179,13 +1138,13 @@ fn lens_reference() {
     if entry.triangle == 0xffffffffu { accumulation[0] = vec4<f32>(0.0); return; }
     let a = triangle(entry.triangle);
     let pa = surface_point(a,entry.bary);
-    let na = unit(a.n0.xyz*entry.bary.x+a.n1.xyz*entry.bary.y+a.n2.xyz*entry.bary.z);
+    let na = sc_unit(a.n0.xyz*entry.bary.x+a.n1.xyz*entry.bary.y+a.n2.xyz*entry.bary.z);
     let inside = refract(direction,na,1.0/a.parameters.z);
     let exit = trace(pa-na*u.lighting.x*2.0,inside,false);
     if exit.triangle == 0xffffffffu { accumulation[0] = vec4<f32>(0.0); return; }
     let b = triangle(exit.triangle);
     let pb = surface_point(b,exit.bary);
-    let nb = unit(b.n0.xyz*exit.bary.x+b.n1.xyz*exit.bary.y+b.n2.xyz*exit.bary.z);
+    let nb = sc_unit(b.n0.xyz*exit.bary.x+b.n1.xyz*exit.bary.y+b.n2.xyz*exit.bary.z);
     let outgoing = refract(inside,-nb,b.parameters.z);
     let spot = pb+outgoing*((-u.back.w-pb.z)/outgoing.z);
     accumulation[0] = vec4<f32>(spot+vec3<f32>(1.0,1.0,3.0),1.0);
@@ -1195,11 +1154,6 @@ fn lens_reference() {
 @compute @workgroup_size(1)
 fn environment_reference() {
     accumulation[0]=vec4<f32>(env_eval(u.right.xyz),env_pdf(u.right.xyz));
-}
-
-fn coat_energy_bound(f0: vec3<f32>, cosine: f32) -> vec3<f32> {
-    let minimum_vh = cosine/sqrt(2.0*(1.0+sqrt(max(0.0,1.0-cosine*cosine))));
-    return fresnel(f0,minimum_vh);
 }
 
 fn sample_surface_values(t: Triangle, n: vec3<f32>, v: vec3<f32>, variates: vec3<f32>) -> vec3<f32> {
@@ -1236,7 +1190,7 @@ fn boundary_reference() {
     if entry.triangle==0xffffffffu {accumulation[0]=vec4<f32>(9.0,9.0,9.0,1.0);return;}
     let t=triangle(entry.triangle);
     let position=surface_point(t,entry.bary);
-    let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     let shifted=position-outward*(2.0*u.lighting.x);
     let legacy=trace(shifted,u.right.xyz,false);
     let low_min=trace_bounded(shifted,u.right.xyz,false,entry.triangle,0.0);
@@ -1303,13 +1257,13 @@ fn refracted_corner_reference() {
     if entry.triangle==0xffffffffu {accumulation[0]=vec4<f32>(0.0,0.0,0.0,1.0);return;}
     let t=triangle(entry.triangle);
     let position=surface_point(t,entry.bary);
-    let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     let inside=refract(u.right.xyz,outward,1.0/t.parameters.z);
     let exit=trace_ordered_within(position,inside,false,entry.triangle,0.0,true,FAR,-1.0);
     var valid_exit=false;
     if exit.triangle!=0xffffffffu {
         let other=triangle(exit.triangle);
-        let normal=unit(cross(other.p1.xyz-other.p0.xyz,other.p2.xyz-other.p0.xyz));
+        let normal=sc_unit(cross(other.p1.xyz-other.p0.xyz,other.p2.xyz-other.p0.xyz));
         valid_exit=other.optics.w==t.optics.w && dot(normal,inside)>0.0;
     }
     accumulation[0]=vec4<f32>(select(0.0,1.0,dot(outward,u.right.xyz)<0.0),select(0.0,1.0,exit.triangle!=0xffffffffu),select(0.0,1.0,valid_exit),1.0);
@@ -1328,7 +1282,7 @@ fn rib_residual_reference() {
     if source==0xffffffffu {accumulation[0]=vec4<f32>(9.0,9.0,9.0,1.0);return;}
     let t=triangle(source);
     let point=surface_point_precise(t,u.environment.xyz);
-    let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     let direction=reflect(u.back.xyz,outward);
     let f=dielectric(abs(dot(outward,u.back.xyz)),t.parameters.z,1.0);
     let dropped=trace_bounded(point.hi+point.lo,direction,false,source,0.0);
@@ -1336,7 +1290,7 @@ fn rib_residual_reference() {
     var valid_exit=false;
     if retained.triangle!=0xffffffffu {
         let other=triangle(retained.triangle);
-        let n=unit(cross(other.p1.xyz-other.p0.xyz,other.p2.xyz-other.p0.xyz));
+        let n=sc_unit(cross(other.p1.xyz-other.p0.xyz,other.p2.xyz-other.p0.xyz));
         valid_exit=other.optics.w==t.optics.w&&dot(n,direction)>0.0;
     }
     accumulation[0]=vec4<f32>(select(0.0,1.0,dropped.triangle!=0xffffffffu),select(0.0,1.0,retained.triangle!=0xffffffffu),select(0.0,1.0,valid_exit),1.0);

@@ -92,7 +92,7 @@ fn fs_mat(i: MatOut) -> @location(0) vec4<f32> {
     let fo = fwidth(i.op) * mm;
     let fw = f.footprint * mm;
     let frame = sc_object_frame(wx, wy, ox, oy);
-    let n = pbr_unit(i.n);
+    let n = sc_unit(i.n);
     let n_object = sc_proj_unit(transpose(frame.to_world) * n, n);
     let c = GraphCtx(f, i.record, n, n_object, i.wp * mm, i.op * mm, max(max(fw.x, fw.y), fw.z), max(max(fo.x, fo.y), fo.z), frame);
     return pbr_shade(material_eval(c), f);

@@ -45,7 +45,8 @@ pub const STREAM: &str = include_str!("stream.wgsl");
 pub const PRELUDE: &str = include_str!("prelude.wgsl");
 
 fn module(eval: &str) -> String {
-    format!("{}\n{}\n{}\n{STREAM}\n{PRELUDE}\n{eval}", crate::shading::library(), crate::view::SHADER, crate::pbr::SHADE)
+    // `pbr::SHADE` starts with the shared library.
+    format!("{}\n{}\n{STREAM}\n{PRELUDE}\n{eval}", crate::view::SHADER, crate::pbr::SHADE)
 }
 
 /// The WGSL module of a graph's shape: the shared library, the viewport's shading, the stream,

@@ -69,7 +69,11 @@ pub fn install(
     // What the renderer can do (order-independent transparency), not only what was asked for.
     let scene = res.target();
     let stats = res.stats();
-    rs.renderer.write().callback_resources.insert(res);
+    let mut renderer = rs.renderer.write();
+    renderer.callback_resources.insert(res);
+    // The material editor's swatch draws with a renderer of its own into the same kind of pass.
+    renderer.callback_resources.insert(crate::appearance_graph_editor::SwatchTargets { scene, window });
+    drop(renderer);
     (scene, stats, ready)
 }
 
@@ -202,7 +206,7 @@ pub fn studio_ready() -> bool {
 /// callback does: on another thread natively (about 0.1 s in an optimised build), and a frame's
 /// bounded share at a time on the web, which has no threads ([`StudioBake::FRAME_WORK`]).
 #[derive(Default)]
-struct StudioBaking {
+pub(crate) struct StudioBaking {
     #[cfg(not(target_arch = "wasm32"))]
     thread: Option<(StudioPreset, std::sync::Arc<std::sync::Mutex<Option<StudioEnvironment>>>)>,
     #[cfg(target_arch = "wasm32")]
@@ -212,7 +216,7 @@ struct StudioBaking {
 impl StudioBaking {
     /// Move the bake of `preset`'s studio on; the finished studio once it is baked.
     #[cfg(not(target_arch = "wasm32"))]
-    fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
+    pub(crate) fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
         if self.thread.as_ref().is_none_or(|(baking, _)| *baking != preset) {
             let result = std::sync::Arc::new(std::sync::Mutex::new(None));
             let sink = result.clone();
@@ -238,7 +242,7 @@ impl StudioBaking {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
+    pub(crate) fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
         if self.steps.as_ref().is_none_or(|bake| bake.preset() != preset) {
             self.steps = Some(StudioBake::new(preset));
         }

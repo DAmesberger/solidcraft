@@ -17,12 +17,12 @@ fn denoise_guides(@builtin(global_invocation_id) gid: vec3<u32>) {
     var t=triangle(hit.triangle);
     let position=surface_point(t,hit.bary);
     t=texture_surface(t,position);
-    t=aged_surface(t,position,unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
+    t=aged_surface(t,position,sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
     // Single first-hit guides cannot describe refracted or sharp reflected images.
     if t.base.w>0.0 || (t.parameters.x>0.5 && t.parameters.y<0.25) || (t.coat.x>0.0 && t.coat.y<0.05) { return; }
-    var geometric=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    var geometric=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     if dot(geometric,-ray.direction)<0.0 { geometric=-geometric; }
-    var n=unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
+    var n=sc_unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
     if dot(n,geometric)<0.0 { n=-n; }
     if dot(n,-ray.direction)<=0.0 { n=geometric; }
     let mapped=texture_normal(t,position,n,geometric);
