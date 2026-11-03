@@ -1,5 +1,6 @@
 {
   "en": {
+    "cmd.appearance_graph_convert": "Convert to Material Graph",
     "cmd.appearance_graph_create": "New Material Graph",
     "cmd.appearance_graph_delete": "Delete Material Graph",
     "cmd.appearance_graph_duplicate": "Duplicate Material Graph",
@@ -15,6 +16,7 @@
     "cmd.view_look": "View Look"
   },
   "de": {
+    "cmd.appearance_graph_convert": "In Materialgraph umwandeln",
     "cmd.appearance_graph_create": "Neuer Materialgraph",
     "cmd.appearance_graph_delete": "Materialgraph löschen",
     "cmd.appearance_graph_duplicate": "Materialgraph duplizieren",
@@ -30,6 +32,7 @@
     "cmd.view_look": "Darstellung der Ansicht"
   },
   "ar": {
+    "cmd.appearance_graph_convert": "تحويل إلى رسم بياني للمادة",
     "cmd.appearance_graph_create": "رسم بياني جديد للمادة",
     "cmd.appearance_graph_delete": "حذف رسم المادة البياني",
     "cmd.appearance_graph_duplicate": "تكرار رسم المادة البياني",
@@ -45,6 +48,7 @@
     "cmd.view_look": "مظهر العرض"
   },
   "he": {
+    "cmd.appearance_graph_convert": "המרה לגרף חומר",
     "cmd.appearance_graph_create": "גרף חומר חדש",
     "cmd.appearance_graph_delete": "מחיקת גרף חומר",
     "cmd.appearance_graph_duplicate": "שכפול גרף חומר",
@@ -60,6 +64,7 @@
     "cmd.view_look": "מראה התצוגה"
   },
   "ja": {
+    "cmd.appearance_graph_convert": "マテリアルグラフに変換",
     "cmd.appearance_graph_create": "新しいマテリアルグラフ",
     "cmd.appearance_graph_delete": "マテリアルグラフを削除",
     "cmd.appearance_graph_duplicate": "マテリアルグラフを複製",
@@ -75,6 +80,7 @@
     "cmd.view_look": "ビューの外観"
   },
   "vi": {
+    "cmd.appearance_graph_convert": "Chuyển thành đồ thị vật liệu",
     "cmd.appearance_graph_create": "Đồ thị vật liệu mới",
     "cmd.appearance_graph_delete": "Xóa đồ thị vật liệu",
     "cmd.appearance_graph_duplicate": "Nhân bản đồ thị vật liệu",
@@ -90,6 +96,7 @@
     "cmd.view_look": "Diện mạo khung nhìn"
   },
   "zh": {
+    "cmd.appearance_graph_convert": "转换为材质图",
     "cmd.appearance_graph_create": "新建材质图",
     "cmd.appearance_graph_delete": "删除材质图",
     "cmd.appearance_graph_duplicate": "复制材质图",
