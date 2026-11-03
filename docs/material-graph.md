@@ -226,6 +226,7 @@ with bounded cost, and derivatives stay valid everywhere (§5.1).
 | Cost after expansion (§3.6) | 2000 units | Bounds per-pixel ALU (target, §5.4). |
 | Texture samples after expansion | 8 | Triplanar images count three each. |
 | Distinct textures per graph | 4 | WebGL2 has 16 sampled textures per stage (§5.3). |
+| Texture assets | ≤ 16384 px a side, ≤ 256 MiB encoded, ≤ 256 per design, ≤ 1 GiB decoded per design | Safety only (§4.3); the renderer clamps the resident size. |
 | Uniform constants per graph | 256 floats (64 vec4) | Fits a 16 KiB uniform page with ≥ 16 materials. |
 | Shapes compiled per design | not limited; the GPU cache holds 64 (LRU) | §5.2 |
 
@@ -429,6 +430,10 @@ Texture assets live beside them and are stored as container blobs.
   STEP/3MF colour export and older readers' tools use.
 - `source` is generic provenance (library id, entry id, revision). It is optional and
   inert, and drives only an explicit "update from library" with an impact preview (§7.2).
+- `layout` is an optional, **editor-only** map from node id to a canvas position, `[x, y]`.
+  Renderers, the IR and the shape key ignore it, so moving a node never changes a picture or
+  recompiles anything. Validation bounds it. A later node canvas (O2) stores positions
+  there without a format change; the layer list leaves it empty.
 - A graph with `geometry_opacity` < 1 or `transmission_weight` > 0 requires the look's
   `opacity` = 1. Opacity stays the scalar legacy blend; it does not combine with graph
   optics, which keeps today's "PBR requires opacity 1" rule.
@@ -458,19 +463,53 @@ a snapshot with graphs refuses, as exporting v1 refuses PBR loss today.
 
 ### 4.3 Texture limits
 
-| Limit | Value |
-|---|---|
-| Encodings | PNG, JPEG (8-bit; ICC and EXIF orientation as `texture_input` admits them today) |
-| Size | 1–2048 px per side (the WebGL2 downlevel `max_texture_dimension_2d`) |
-| Encoded bytes | ≤ 16 MiB each |
-| Per design | ≤ 64 textures, ≤ 256 MiB decoded RGBA8 in total |
-| Mips | Generated on the GPU by render passes: each level is a linear-filtered downsample drawn into the next. This works on WebGL2, which has no compute. The path tracer uses level 0, as today. |
+**Files keep images at full quality.** The file's limits exist only for safety against hostile
+input; they never cap quality. **The renderer chooses the resident resolution** for each
+device.
 
-Decoding uses `solidcraft_render::texture_input` on a worker; this is data preparation. Rendering into
-a level of an `Rgba8UnormSrgb` texture on WebGL2 (`SRGB8_ALPHA8` is colour-renderable in ES
-3.0) is verified in track C3; if a driver fails it, the fallback is a linear texture with
-decode in the shader, never CPU mips. Until a texture has decoded,
-its `image` node reads its `default` colour.
+| Limit (file, safety) | Value | Why this number |
+|---|---|---|
+| Encodings | PNG, JPEG; 8-bit, and 16-bit PNG for data maps (height) | What `texture_input` admits; ICC and EXIF orientation as it handles them today |
+| Size | 1–16384 px per side | The largest 2D texture any current desktop GPU holds in one piece (`max_texture_dimension_2d` is 16384 on Apple, most Vulkan/D3D12 parts). Larger images cannot be resident anywhere, so the bound costs no quality. |
+| Encoded bytes | ≤ 256 MiB per image | The container's existing per-part cap (`design-container.md`), so one rule bounds every blob. A noisy 16384² PNG fits; typical maps are far smaller. |
+| Decoded memory per design | ≤ 1 GiB of decoded pixels (RGBA8 counts 4 B/px, 16-bit data 2 B/px), checked from the headers before any decode | Exactly one maximum-size RGBA8 image, or sixteen at 4096². It leaves room inside wasm32's 4 GiB address space and on 8 GiB machines while the app's own geometry is loaded. |
+| Textures per design | ≤ 256 | Hostile-input protection for the per-texture bookkeeping (table entries, blob lookups, bind groups and worker jobs), not quality. 256 holds the whole starter pack (48 recipes × 5 maps = 240) in one design. |
+| Codec allocation guard | the header's decoded size (≤ the remaining design budget) + 64 MiB codec scratch, passed as `image::Limits::max_alloc` | The real defence against decompression bombs: a header that lies about its size cannot make the codec allocate past the budget. It replaces today's fixed 64 MiB guard, which only works because the edge is 2048. |
+
+**Resident resolution (renderer, never stored).** Each texture is made resident at the
+largest mip level that fits both the device's `max_texture_dimension_2d` and a GPU memory
+budget for material textures:
+
+- **Native:** usually the full size; the budget is 2 GiB, with the least-recently-drawn
+  textures dropping a level first.
+- **WebGL2:** 2048 px per side (the downlevel limit) and a 256 MiB budget.
+- **The path tracer** takes the same clamp against its `max_storage_buffer_binding_size` and
+  its texture-buffer budget (`job::textures::MAX_TEXTURE_PIXELS_BYTES`).
+- **Downsampling above the device limit:** when an image exceeds the device limit, the
+  decode worker box-filters it by powers of two down to the first level that fits. This is
+  data preparation, done once per load. The GPU then builds the rest of the mip chain.
+
+**Mips** are built on the GPU by render passes: each level is a linear-filtered downsample
+drawn into the next. This works on WebGL2, which has no compute.
+
+**Upstream's `texture_input` is raised generically** as part of the package (track C3):
+
+- `MAX_TEXTURE_EDGE` goes from 2048 to 16384, and `MAX_TEXTURE_BYTES` from 16 MiB to 256 MiB;
+- the fixed `MAX_CODEC_BYTES` becomes the header-derived guard above;
+- `MapRole::Height` is added;
+- `texture_lod`, `texture_sampling` and HDR normalization follow the same constant, and their
+  tests are written against it.
+
+The path tracer's runtime `raytrace.textures` request keeps its own 1024 × 1024 job limit
+unchanged (no new path-tracer features). **Effect on the starter pack and
+`render.library`: none.** Its maps are 512 × 512, a few hundred KiB, and admitted before
+and after.
+
+Decoding uses `solidcraft_render::texture_input` on a worker; this is data preparation.
+Rendering into a level of an `Rgba8UnormSrgb` texture on WebGL2 (`SRGB8_ALPHA8` is
+colour-renderable in ES 3.0) is verified in track C3. If a driver fails it, the fallback is a
+linear texture with decode in the shader, never CPU mips. Until a texture has decoded, its
+`image` node reads its `default` colour.
 
 ### 4.4 Compatibility and the pending format change
 
@@ -553,6 +592,94 @@ downgrading export.
 **Node-set versions:** the node catalogue is versioned with the design format. A new node
 kind or input arrives in its own pending file, with its own `used` predicate. An unknown
 kind, param or input refuses (`deny_unknown_fields`) rather than being dropped.
+
+### 4.5 What the graph builds on upstream (no second copy)
+
+Upstream already has textured material resources, texture admission, a path-tracer texture
+path and lighting rigs, all marked `unbound` or flattened today. Graphs **bind** them; nothing
+here is duplicated.
+
+**1. The starter surface pack, the Selene pack and the material catalogue.**
+`assets/render/starter/materials/` holds 48 original recipes (`SURF-*`). Each has five PNG
+maps (base colour, OpenGL normal, roughness, metallic, 16-bit height), a tile size in
+millimetres and a seed, and the manifest marks them `runtime_status: unbound`.
+`assets/render/selene/materials/` is the Selene appearance pack, and
+`docs/render-materials/materials.json` is the `MAT-*` concept catalogue they cite. A
+`SURF-*` maps to a graph as follows:
+
+| Recipe data | Graph |
+|---|---|
+| `base_color` (sRGB) | `image` (`space: srgb`) → `base_color` |
+| `normal_open_gl` | `image` (linear) → `normal.map` (`convention: opengl`) → `geometry_normal` |
+| `roughness`, `metallic` | `image` (linear, `channel: r`) → `specular_roughness`, `base_metalness` |
+| `height` (16-bit) | used only when a recipe has no normal map: `image` → `normal.from_height` |
+| `tile_mm` | `texcoord.triplanar` `scale_mm`, or `texcoord.planar` when a frame is given |
+| `pattern: brushed` and the like | `specular_roughness_anisotropy` and a tangent from the texcoord; the per-recipe amount is an authored estimate in the binding table, recorded as such |
+
+The maps are copied into the design's textures (`appearances.textures`, by SHA-256, the
+manifest's own digests), so the design stays self-contained. The graph's `source` records
+`{library: "solidcraft-starter", entry: "SURF-001", revision: resource_version}`. The `MAT-*`
+catalogue stays a concept backlog: a `MAT-*` gains a graph only through a `SURF-*` (or a
+Selene entry) that cites it.
+
+**2. `render.library.appearance.apply`** (`crates/engine/src/cmd/render/library.rs`).
+
+- **`uniform_opaque` stays exactly as it is** (decision O17): colour + `pbr`, omitting
+  `["spatial_maps", "height_displacement", "true_anisotropic_brdf"]`. Scripts that rely on it
+  see no change, and the design format is untouched by it.
+- **A new variant `graph`** builds the graph above, assigns it, and returns the same reply
+  shape.
+  - Its `omitted` list drops `spatial_maps` and `true_anisotropic_brdf` in the Realistic
+    look.
+  - **It keeps `height_displacement`**, because graphs never move geometry: height feeds only
+    the shading normal. Saying otherwise would hide a gap. Displacement stays a separate
+    future feature.
+  - Its optional `frame` chooses a planar projection; without one, it is triplanar in object
+    space.
+  - Selene entries get the same `graph` variant where their pack has maps; otherwise their
+    `baseline_projection` becomes a one-node graph.
+- `gpu_planar_maps` (the path tracer's job-scoped maps) stays as it is: it is a runtime job
+  binding, not a design look.
+
+**3. `solidcraft_render::texture_input`** (`MapRole`, `Interpretation`, `TextureSource`,
+`DecodedTexture`, bounded decode on a caller-owned worker) is **the** admission and decoder.
+
+- Design textures and `image` nodes go through it; there is no second decoder.
+- Its limits are raised generically to the file's safety bounds (§4.3); the renderer, not the file, clamps resolution.
+- The one addition is `MapRole::Height` (16-bit data, `Interpretation::Data`) for the
+  starter pack's height maps (track C3).
+- An `image` node's role follows from its use: `space: srgb` reads as `BaseColor`, linear
+  data as the matching data role.
+
+**4. The path tracer's texture path** (`crates/gpu/src/path/textures.rs`, `textures.wgsl`,
+`job::textures::{TextureMap, BaseColorMode, PlanarFrame}`, `texture_surface`) is
+**reused** by the path back end (§5.7):
+
+- `image` nodes pack their pixels into the same `texture_words` storage buffer, with the same
+  identity de-duplication (`TextureMap::identity`), and sample with the same bilinear
+  `texture_sample`. These move into the shared library as `sc_` functions (track S).
+- `texture_surface` stays for runtime `raytrace.textures` requests on non-graph bodies, so
+  existing jobs and their parity tests are unchanged.
+- A graph look's maps never go through the runtime request; the graph does the same work
+  through the same buffer.
+
+**5. Lighting resources.** `job::lighting::StudioLighting` (sun, uniform environment, at most
+four rectangular `AreaLight`s), `render_resources::HdrResource` (validated embedded HDR
+environments) and the starter lighting rigs (`assets/render/starter/lighting/`, 24 `STU-*`
+rigs from `docs/render-materials/studio-presets.json`) already exist. The rigs are rectangular
+area lights scaled to the subject's extent B, calibrated by `CAL-LIGHT-001`, and
+`runtime_binding: unbound`. The default Realistic studio (§5.8) is built from them:
+
+| Reused | Genuinely new |
+|---|---|
+| A starter **rig** as the studio description: its key, fill and rim are `AreaLight`s placed in multiples of B (the room "sized to the scene"), with gains from `CAL-LIGHT-001` | The **real-time binding** of a rig: its area lights baked into the studio cube and used as direct lights (softbox α widening) |
+| The renderer branch's CPU studio bake (data preparation) and split-sum/SH | **Box-projected** reflections against the rig's room |
+| `StudioLighting`'s types for the rig's lights | A **cyclorama/horizon gradient**, because `StudioLighting.environment` is one uniform colour; it is added as an optional gradient on the rig, not a second studio type |
+| `HdrResource`: a design that already has an HDR environment in its render settings can light Realistic from it through the same bake (an option in track L, not the default) | Per-preset **exposure** calibrated against the rig |
+
+The default rig is chosen in track L and reviewed with the golden frames (O15). The
+procedural `Product`/`Soft`/`Contrast` presets of the renderer branch are re-expressed as
+rigs, or removed if a starter rig covers them.
 
 ## 5. Renderer
 
@@ -836,6 +963,8 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   lookup, a public real-time technique (mathematics only). A flat face then sweeps across
   the softboxes and shows gradients. This is one ray-box intersection per lookup, and it is
   WebGL2-safe.
+- **Built on a starter lighting rig** (§4.5): the rig's rectangular area lights, placed in
+  multiples of the subject extent, are the softboxes, and `CAL-LIGHT-001` gives their gains.
 - **Graded softboxes:**
   - a large key above front-left, whose radiance falls off smoothly toward its edges
     (no hard rectangle);
@@ -1160,6 +1289,29 @@ In the fork, the same series lands on `pcbcraft-via2` first. Pcbcraft keeps the 
 `SurfacePattern` path until track H moves it to graphs; the path is then removed from the
 fork too.
 
+### Branches and base
+
+- **The package branch is `material-graph`, based on upstream main `21c5be2b2`.** The package
+  targets upstream, so it is built and tested on upstream's code. Its first commits are the
+  renderer branch (`77b22947a`, `ca4c4acdd` from `upstream-photoreal-look`). Then come this note
+  and the C0 contract, then the tracks.
+- **The fork's `pcbcraft-via2` stays on its older upstream (`4f3ac07ae`, #8747)** with the
+  fork-only work (drilled boards, instancing, the via scaling). The package is not built on it:
+  that base is about 2,300 upstream PRs behind, and the package would then carry fork-only
+  changes into an upstream PR.
+- **How the two stay in sync:**
+  - The package lands in the fork by **merging `material-graph` into a fork integration branch**
+    (`pcbcraft-via2` or its successor), which then also brings in upstream main. Fork-only work
+    that conflicts (the via-scaling changes to `view.rs` and `pbr.rs`) is resolved there, once
+    per package milestone, not in the package.
+  - Pcbcraft pins a fork revision that contains the merge.
+  - Fixes found in the fork that belong to the package are made on `material-graph` first, then
+    merged again. The package never takes fork-only commits.
+  - When upstream main moves, `material-graph` merges it (no rebase after the first track
+    commit, so parallel tracks never lose their base).
+- `material-graph-on-via2` is a local backup of the note's history on the old base; it is
+  deleted once this layout is accepted.
+
 ## 10. Work breakdown
 
 The contract comes first. **C0** fixes the following before any track starts:
@@ -1190,17 +1342,18 @@ All later tracks build against those signatures.
 | K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice | B | 5 |
 | C1 | Raster back end: code generator over the shared modules, shape key, pipeline cache with budget and base-response fallback, uniform pages, new vertex layouts, group-3 layout | A (IR), S at integration | 14 |
 | C2 | Shared BSDF additions for the viewport: anisotropic GGX direct + studio, `coat_color` (oracle in tests), emission, transmission fallback; furnace tests | S | 9 |
-| C3 | Textures on the GPU: decode worker, mips by render passes (the sRGB render-target check on WebGL2), bind groups, `image` node sampling | C1, B (assets) | 7 |
-| PT | Path back end: storage material table, triangle record in `interior.z`, per-job generated `graph_surface` with a shape switch, `image` via `texture_words`, approximation reports in preflight and job results; tests: no-graph parity, constant graph = `pbr`, both back ends agree at fixed points | A (IR), S | 12 |
-| D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start` | A, B | 12 |
+| C3 | Textures on the GPU: decode worker, mips by render passes (the sRGB render-target check on WebGL2), bind groups, `image` node sampling; `MapRole::Height` (16-bit) in `texture_input`, the one decoder; the file's safety limits in `texture_input` (16384 px, 256 MiB, header-derived codec guard, 1 GiB per design), resident-size clamp and decode-time downsampling, the texture memory budget (§4.3). The admission part starts after B; only binding and sampling wait for C1 | C1, B (assets) | 11 |
+| PT | Path back end: storage material table, triangle record in `interior.z`, per-job generated `graph_surface` with a shape switch, `image` via `texture_words`, approximation reports in preflight and job results; tests: no-graph parity, constant graph = `pbr`, both back ends agree at fixed points; reuses `path/textures.rs` packing, de-duplication and `texture_sample` (§4.5) | A (IR), S | 11 |
+| D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start`; the `graph` variant of `render.library.appearance.apply` for `SURF-*` and Selene entries (§4.5) | A, B | 15 |
 | E | Layered stack editor, GPU swatches, texture picker, locale strings; built against C0's command schemas, then joined to D (4 of its 16) | C0, then D | 16 |
-| G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json` | A, D | 6 |
+| G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json`; the `SURF-*`/Selene binding table (anisotropy estimates recorded as such) | A, D | 7 |
 | I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, path-tracer frames of graph looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3; golden frames of the showcase, the acceptance test (§5.9) and the founder review set | C1–C3, PT, V, K, L, X | 14 |
 | P | Package assembly: the commit series, the proposal text, PR body, screenshots and a recording | all | 4 |
 | H | Pcbcraft (outside the package): table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
 
-- **Total:** about **175 agent-hours** for the upstream package, plus **10** for Pcbcraft:
-  **185** in all.
+- **Total:** about **182 agent-hours** for the upstream package, plus **10** for Pcbcraft:
+  **192** in all. Full-quality textures (§4.3) added 2 to C3. Building on upstream's packs (§4.5) added 5: D +3, C3 +2, G +1, PT −1. The
+  studio track L stays at 12, because reusing the rigs offsets binding them.
 - **Critical path:** C0 (7) → A's IR (6 of its 10) → C1 (14) → integrating C2, C3 and S
   (6) → I (14) → P (4) = about **51 agent-hours**. The founder's review of the golden
   frames is a gate after I, not agent time.
@@ -1227,6 +1380,52 @@ Changes since the previous estimate (140 + 10); the Save As export (3 hours of K
 Tracks R, A, B, E and X start in parallel after C0. S, C2, V and L start after R; PT starts after
 S; D, K, T and H fan out once A and B land. Reviews and merge rounds come on top of both
 figures.
+
+### The C0 contract and who owns which files
+
+**C0 is in place.** Its parts:
+
+| Part | Where |
+|---|---|
+| Graph types, catalogue (v1), limits, IR types, `SurfaceSample`; `validate`/`lower`/`base_response` refuse "not built yet" | `crates/render/src/material_graph/` |
+| Worked examples as fixtures | `crates/render/tests/fixtures/material_graph/` |
+| `GraphId`, `TextureAsset`, `GraphTables` (not wired) | `crates/doc/src/appearance_graph.rs` |
+| Format change, no step | `crates/doc/src/format/pending/appearance-graphs.rs` |
+| Twelve `appearance.graph.*` / `appearance.texture.*` commands with schemas: `nodes` runs, the rest check their parameters and refuse | `crates/engine/src/{cmd,schema}/appearance_graph.rs` |
+| `view.look` with schema, refusing `realistic`; the `view_look` UI setting | `crates/engine/src/cmd/view_navigation.rs`, `crates/ui-egui/src/lib.rs` |
+| Shared WGSL module layout and its rules test | `crates/gpu/src/shading/` |
+| Golden-frame location | `crates/gpu/tests/golden/realistic/` |
+| Command labels | `assets/locales/pending/material-graph.json` |
+
+**Ownership rules:**
+
+- Each track **owns** the files below. Touching another track's file needs a note to its owner.
+- Contract types change only by a commit that says so, after the affected owners agree.
+- Every track lifts its own "not built yet" refusals and keeps `cargo xtask ci` green.
+
+| Wave | Track | Owns | Relies on | h |
+|---|---|---|---|---|
+| 1 | R | `gpu/src/pbr.rs` (the `fs_pbr` split; `look_detail`), `gpu/src/view.rs` (`pbr_tri_with`, detailed vertices, `units_per_mm` to the frame uniform), `gpu/src/view/ao.rs`, `gpu/src/view/ibl.rs` (`SurfacePattern`, `ProductLook` fields), `assets/shaders/viewport.wgsl`, `ui-egui/src/render_workspace.rs` + `prefs.rs` (`render_studio_look`), `assets/locales/pending/render-studio-look.json`, `docs/render-opaque-pbr.md` | `SurfaceSample` as WGSL `Surface` | 7 |
+| 1 | A | `render/src/material_graph/{ir.rs, catalogue.rs}` and new `validate.rs`, `lower.rs`, `base.rs` | `graph.rs`, `limits`, IR types, fixtures | 10 |
+| 1 | B | `doc/src/appearance.rs` (`Look.graph/values`, `Appearances` tables), `doc/src/appearance_graph.rs`, the pending file's note, `io/src/design.rs` + `io/src/design/` (texture blobs), `io/src/catalog.rs` (v3) | `GraphTables`, `limits`, A's `validate` (refusing until A) | 10 |
+| 1 | E | `ui-egui/src/dialogs_appearance.rs`, new `ui-egui/src/appearance_graph_editor.rs`, its locale file | the C0 command schemas; joins D | 16 |
+| 1 | X | `examples/realistic-showcase.json`, its PNG under `assets/`, `attribution/pending/realistic-showcase.md` | the C0 command schemas; runs once D lands | 4 |
+| 2 | S | `gpu/src/shading/{bsdf,noise}.wgsl`, `gpu/src/path/{path.wgsl, aging.wgsl, textures.wgsl, mod.rs}` (shader assembly), the BRDF functions of `pbr.rs` | module rules (`shading/tests.rs`), R's split | 8 |
+| 2 | V | `engine/src/cmd/view_navigation.rs` + `schema/view_navigation.rs` (`view.look`), `ui-egui/src/{lib.rs, control.rs, navigation_bar*.rs, viewport.rs, keymap.rs, command_help.rs}`, overlay order in `gpu/src/view.rs` (coordinate with C1) | `view.look` schema, R | 12 |
+| 2 | L | `gpu/src/view/ibl.rs` + `ibl/` (studio, box projection, exposure), the studio lookups of `pbr.rs`, `ui-egui/src/gpu.rs` (bake reuse), binding a starter rig from `assets/render/starter/lighting/` | R; merges after S in `pbr.rs` | 12 |
+| 2 | T | new `render/src/material_graph/reference.rs` (`#[cfg(test)]` only) | A's IR | 6 |
+| 2 | K | `doc/src/format.rs` (`Part::used`, `written_for`), `doc/build.rs`, the writer call in `io/src/design.rs` | B | 5 |
+| 2 | D | `engine/src/{cmd,schema}/appearance_graph.rs`, `engine/src/cmd/inspect.rs` (`appearance.assign`), `engine/src/cmd/libraries.rs`, the `render.start` overrides, `engine/src/cmd/render/library.rs` (the `graph` variant) | A, B | 15 |
+| 3 | C1 | new `gpu/src/material/` (raster code generator, shape cache, uniform pages), `gpu/src/shading/{patterns,projection}.wgsl`, PBR draw batching and vertex layouts in `view.rs`, the group-3 layout function in `ibl.rs` | A's IR, S, R | 14 |
+| 3 | C2 | `gpu/src/shading/bsdf.wgsl` (anisotropic GGX, coat colour, emission), `pbr_shade` in `pbr.rs`, `render/src/clear_coat.rs` (test oracle) | S | 9 |
+| 3 | PT | new `gpu/src/path/material.rs` (path back end), `gpu/src/path/scene.rs` (material table, `interior.z`), the `graph_surface` hook in `path.wgsl`, reusing `gpu/src/path/textures.rs` | A's IR, S | 11 |
+| 3 | G | built-in graphs under `assets/appearances/graphs/`, `docs/render-material-graphs.md`, `examples/material-graphs.json`, the starter/Selene binding table | A, D | 7 |
+| 4 | C3 | new `gpu/src/material/textures.rs` (upload, GPU mips), the decode worker hook, `render/src/texture_input.rs` (`MapRole::Height`), `texture_lod.rs`, `texture_sampling.rs`, `texture_input/normalization/` (raised limits) | C1, B | 11 |
+| 4 | I | golden frames, the acceptance test, the browser run, perf records | everything | 14 |
+| 5 | P | the commit series, the proposal and PR text | everything | 4 |
+| – | H | Pcbcraft repo only | B, D, C1 | 10 |
+
+Waves are start order, not barriers: a wave-2 track starts when what it relies on has landed.
 
 ### Risks
 
@@ -1294,6 +1493,7 @@ the tracks.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| O14 | Default studio: procedural or a bundled HDR image | **Procedural** (original, small, reproducible, no asset to license). A CC0 HDR studio image could be added later as an optional preset, with its source recorded. |
+| O14 | Default studio: a starter rig, a new procedural studio, or a bundled HDR image | **A starter lighting rig** (`STU-*`, upstream's own, MIT OR Apache-2.0) with a cyclorama gradient added, bound in real time (§4.5, §5.8). No new studio type and no third-party image; a design's own `HdrResource` can light Realistic as an option. |
 | O15 | Acceptance thresholds (§5.9) | **Adopt the proposed numbers as targets**, and let the founder's review of the golden frames confirm or tighten them before upstream. |
 | O16 | Reflections of the default studio | **Box-projected, from a room sized to the scene.** This is the only cheap way flat faces get gradients; it is WebGL2-safe, at one ray-box test per lookup. |
+| O17 | `render.library.appearance.apply` for `SURF-*` | **Keep `uniform_opaque` unchanged and add a `graph` variant** (§4.5); `height_displacement` stays in its omitted list, because graphs never displace geometry. |
