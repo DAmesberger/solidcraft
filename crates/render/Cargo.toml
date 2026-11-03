@@ -11,6 +11,8 @@ workspace = true
 [features]
 default = []
 raytrace-cpu = []
+# Test-only f64 oracles for the GPU shading tests (`clear_coat::tinted_coat_brdf`); no renderer uses them.
+oracle = []
 
 [dependencies]
 solidcraft-geom = { workspace = true }

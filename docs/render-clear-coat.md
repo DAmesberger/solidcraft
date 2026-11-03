@@ -54,3 +54,21 @@ and [Filament's clear-coat model](https://google.github.io/filament/main/filamen
 These motivate independent interfaces and substrate attenuation; this implementation
 is original and deliberately simpler than a multilayer random walk. No reference
 implementation source was copied.
+
+## Coat colour (viewport, material graphs)
+
+A material graph's `coat_color` (docs/material-graph.md §5.5) tints what passes the
+coat: a thin absorbing layer multiplies the substrate by the colour once on entry
+and once on exit. At coverage `weight`, each pass keeps `1 - weight * (1 - coat_color)`
+on top of the Fresnel attenuation above; the coat's own reflection is untinted, and an
+index-matched coat (IOR 1) only tints. The path length through the layer is not
+modelled (the tint is the same at every angle). A white coat colour is the model
+above exactly.
+
+The viewport evaluates it in the shared shading library (`sc_coat_layer` in
+`crates/gpu/src/shading/bsdf.wgsl`, which also takes a coat normal of its own); its
+studio term tints the base's reflection and diffuse light by the same two passes. The
+f64 oracle is `clear_coat::tinted_coat_brdf`, compiled only for tests (the render
+crate's `oracle` feature, enabled by the GPU crate's tests); no CPU renderer shades a
+coat colour. The GPU path tracer has no lobe for it and draws the coat untinted,
+reporting the approximation (decision O10).
