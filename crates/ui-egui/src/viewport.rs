@@ -1534,12 +1534,18 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         let faces = b.body.face_count();
         let mut face_colors = Vec::with_capacity(faces);
         let mut face_classes = Vec::with_capacity(faces);
+        // See-through graph faces: the material stream draws them blended, so here they are
+        // glass that shows nothing (and writes no depth).
+        let graph_see_through =
+            if graph_looks && !faded { crate::viewport_graphs::see_through_faces(&s.doc, b, face_looks) } else { vec![false; faces] };
         for f in 0..faces {
             let look = face_looks.get(&f);
             let color = look.map_or(base, |l| Color32::from_rgb(l.color[0], l.color[1], l.color[2]));
             let opacity = look.map_or(opacity, |l| l.opacity);
             let (rgba, class) = if faded {
                 (c4(color.gamma_multiply(0.35)), crate::gpu::TriClass::Faded)
+            } else if graph_see_through.get(f).copied().unwrap_or(false) {
+                ([0; 4], crate::gpu::TriClass::Glass)
             } else if opacity < 0.999 {
                 let mut rgba = c4(color);
                 rgba[3] = (opacity.clamp(0.05, 1.0) * 255.0).round() as u8;
@@ -1553,8 +1559,8 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
             face_classes.push(class);
         }
         if graph_looks && !faded {
-            let opaque = |f: usize| face_classes.get(f) == Some(&crate::gpu::TriClass::Opaque);
-            crate::viewport_graphs::add_body(&mut sc, &mut looks, &s.doc, b, face_looks, &drawn_mesh(app, b), opaque);
+            let drawn = |f: usize| face_classes.get(f) == Some(&crate::gpu::TriClass::Opaque) || graph_see_through.get(f).copied().unwrap_or(false);
+            crate::viewport_graphs::add_body(&mut sc, &mut looks, &s.doc, b, face_looks, &drawn_mesh(app, b), drawn);
         }
         let class = plan_class(app, &face_classes);
         let planned = class.and_then(|class| drawn_plan(app, b, true).map(|plan| (plan, class)));
@@ -1564,15 +1570,17 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         }
         // Opaque, faded and see-through bodies alike, in one colour (faces of their own colour
         // are built as before).
+        let body_see_through = face_looks.is_empty() && !graph_see_through.is_empty() && graph_see_through.iter().all(|x| *x);
         let look = if faded {
             crate::gpu::InstanceLook::Faded
-        } else if opacity < 0.999 {
+        } else if opacity < 0.999 || body_see_through {
             crate::gpu::InstanceLook::Glass
         } else {
             crate::gpu::InstanceLook::Opaque
         };
         let alpha = match look {
             crate::gpu::InstanceLook::Faded => col[3],
+            crate::gpu::InstanceLook::Glass if body_see_through => 0,
             crate::gpu::InstanceLook::Glass => (opacity.clamp(0.05, 1.0) * 255.0).round() as u8,
             crate::gpu::InstanceLook::Opaque => 255,
         };

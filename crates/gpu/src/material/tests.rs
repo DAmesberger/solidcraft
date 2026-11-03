@@ -1099,3 +1099,71 @@ fn vector_slopes_match_the_reference() {
         assert!(tilted, "case {i}: the height tilts the normal");
     }
 }
+
+/// C2's rule for the blended class: a surface that drives transmission or opacity, or holds a
+/// transmission above 0 or an opacity below 1, in any layer.
+#[test]
+fn see_through_materials_are_the_ones_with_coverage_below_one() {
+    let surface = |inputs: Value| {
+        lowered(&graph_of(json!({"name": "s", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}},
+            {"id": "n", "kind": "pattern.noise", "inputs": {"texcoord": {"from": "uv"}}},
+            {"id": "s", "kind": "standard_surface", "inputs": inputs}], "output": "s"})))
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let words = |l: &Lowered| uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    for (inputs, want) in [
+        (json!({}), false),
+        (json!({"geometry_opacity": 1}), false),
+        (json!({"geometry_opacity": 0.4}), true),
+        (json!({"transmission_weight": 0.3}), true),
+        (json!({"transmission_weight": 0}), false),
+        (json!({"geometry_opacity": {"from": "n"}}), true),
+    ] {
+        let l = surface(inputs.clone());
+        assert_eq!(super::see_through(&l.ir, &words(&l)), want, "{inputs}");
+    }
+}
+
+/// A see-through graph surface is drawn blended over what lies behind it (premultiplied, as C2's
+/// shading returns it): a transmissive blue square over a red face shows both. (Opacity joins the
+/// same coverage when C2's shading reads `geometry_opacity`.)
+#[test]
+fn a_see_through_graph_blends_over_what_lies_behind() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let glass = |transmission: f64| {
+        lowered(&graph_of(json!({"name": "glass", "nodes": [
+            {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.05, 0.1, 0.9], "transmission_weight": transmission, "specular_roughness": 0.6}}],
+            "output": "s"})))
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let mut r = renderer(&device, &queue);
+    let frame_with = |r: &mut Renderer, l: Option<&Lowered>, key: u64| {
+        let mut scene = GpuScene::default();
+        let red = scene.color([230, 20, 20, 255]);
+        for p in SQUARE {
+            scene.tri([p[0], p[1], -1.0], [0.0, 0.0, 1.0], red);
+        }
+        if let Some(l) = l {
+            let words = uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+            let m = scene.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
+            for p in SQUARE {
+                scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+            }
+        }
+        let pixels = inner_pixels(&render_frame(r, &device, &queue, &realistic(scene, key, 1.0), true));
+        let n = pixels.len().max(1) as f64;
+        [0, 1, 2].map(|k| pixels.iter().map(|p| f64::from(p[k])).sum::<f64>() / n)
+    };
+    let behind = frame_with(&mut r, None, 1);
+    let half = glass(0.6);
+    assert!(super::see_through(&half.ir, &uniform_words(&half.ir, &BTreeMap::new()).unwrap_or_default()));
+    let blended = frame_with(&mut r, Some(&half), 2);
+    let stats = r.material_stats();
+    assert_eq!(stats.fallback_draws, 0, "drawn by its own far and near pipelines: {stats:?}");
+    assert!(blended[2] > behind[2] + 15.0, "the blue surface shows: {blended:?} over {behind:?}");
+    assert!(blended[0] > 0.3 * behind[0], "and the red face shows through it: {blended:?} over {behind:?}");
+    let opaque = frame_with(&mut r, Some(&glass(0.0)), 3);
+    assert!(opaque[0] < 0.2 * behind[0], "without transmission it hides the face: {opaque:?}");
+    assert!(blended[0] > opaque[0] + 20.0, "transmission lets the face through: {blended:?} against {opaque:?}");
+}

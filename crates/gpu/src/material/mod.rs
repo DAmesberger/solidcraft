@@ -19,7 +19,7 @@ pub mod scene;
 
 pub use cache::MaterialStats;
 pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, generate, material_eval};
-pub use scene::{GraphDraw, GraphMaterial, GraphScene, GraphSceneError, base_record};
+pub use scene::{GraphDraw, GraphMaterial, GraphScene, GraphSceneError, base_record, see_through};
 
 use solidcraft_render::material_graph::ir::Ir;
 

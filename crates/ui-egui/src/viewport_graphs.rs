@@ -76,12 +76,35 @@ impl GraphLooks {
     }
 }
 
+/// Per face of `b`: whether its graph look (its own, else the body's) is see-through (a
+/// transmission or an opacity below 1, `appearance_graph::see_through`). Those faces are drawn by
+/// the material stream, blended; the standard path draws them as invisible glass.
+pub(crate) fn see_through_faces(
+    doc: &solidcraft_engine::doc::Document,
+    b: &solidcraft_engine::doc::ModelBody,
+    face_looks: &HashMap<usize, solidcraft_engine::doc::appearance::Look>,
+) -> Vec<bool> {
+    let graphs = &doc.appearances.tables.graphs;
+    let faces = b.body.face_count();
+    if graphs.is_empty() {
+        return vec![false; faces];
+    }
+    let body_look = doc.model_body_look(b);
+    (0..faces)
+        .map(|f| {
+            face_looks.get(&f).or(body_look.as_ref()).is_some_and(|look| {
+                look.graph.as_ref().and_then(|id| graphs.get(id)).is_some_and(|g| solidcraft_engine::doc::appearance_graph::see_through(g, look))
+            })
+        })
+        .collect()
+}
+
 /// Whether the model view draws graph looks: the Realistic view, with a GPU.
 pub(crate) fn active(app: &crate::SolveApp) -> bool {
     app.viewport.gpu.is_some() && crate::view_look::current(app, "model") == crate::view_look::REALISTIC
 }
 
-/// The graph faces of body `b` into `sc.graphs`: each opaque face (`opaque(face)`) whose own look,
+/// The graph faces of body `b` into `sc.graphs`: each face `drawn(face)` keeps whose own look,
 /// else the body's, names a graph, from `mesh` (world positions, also used as object positions).
 /// Returns how many faces it added.
 pub(crate) fn add_body(
@@ -91,7 +114,7 @@ pub(crate) fn add_body(
     b: &solidcraft_engine::doc::ModelBody,
     face_looks: &HashMap<usize, solidcraft_engine::doc::appearance::Look>,
     mesh: &solidcraft_engine::geom::Mesh,
-    opaque: impl Fn(usize) -> bool,
+    drawn: impl Fn(usize) -> bool,
 ) -> usize {
     let graphs = &doc.appearances.tables.graphs;
     if graphs.is_empty() {
@@ -103,7 +126,7 @@ pub(crate) fn add_body(
     for face in 0..b.body.face_count() {
         let Some(look) = face_looks.get(&face).or(body_look.as_ref()) else { continue };
         let Some(id) = look.graph.as_ref() else { continue };
-        if !opaque(face) {
+        if !drawn(face) {
             continue;
         }
         let Some(graph) = graphs.get(id) else { continue };

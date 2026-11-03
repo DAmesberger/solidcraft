@@ -643,3 +643,27 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
     app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "color": [10, 20, 30]})).unwrap();
     assert!(counts(&app).0.is_empty());
 }
+
+/// A see-through graph look (transmission) in the Realistic view: the material stream draws its
+/// faces blended, and the standard path draws them as glass that shows nothing.
+#[test]
+fn a_see_through_graph_look_is_drawn_blended() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    app.run(
+        "appearance.graph.create",
+        json!({"id": "glass", "name": "Glass", "graph": {"name": "Glass", "nodes": [
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.9, 0.95, 1.0], "transmission_weight": 0.9}}], "output": "s"}}),
+    )
+    .unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "glass"})).unwrap();
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.view_look = crate::view_look::REALISTIC;
+    let sc = build_scene(&app);
+    assert!(!sc.graphs.draws().is_empty() && sc.graphs.draws().iter().all(|d| d.blended), "drawn blended");
+    assert!(sc.palette.entries().contains(&[0, 0, 0, 0]), "the standard faces show nothing");
+    app.ui.view_look = crate::view_look::STANDARD;
+    assert!(build_scene(&app).graphs.draws().is_empty());
+}

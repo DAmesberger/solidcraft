@@ -43,6 +43,8 @@ pub struct GraphDraw {
     pub textures: u32,
     /// [`OBJECT_VERTEX_SIZE`] vertices (the shape reads object space), else [`VERTEX_SIZE`].
     pub object: bool,
+    /// See-through ([`see_through`]): drawn blended, premultiplied over what lies behind.
+    pub blended: bool,
     pub vertices: Vec<u8>,
 }
 
@@ -59,7 +61,7 @@ pub struct GraphScene {
     shapes: HashMap<ShapeKey, Arc<Ir>>,
     pages: Vec<Page>,
     draws: Vec<GraphDraw>,
-    draw_index: HashMap<(ShapeKey, u32, u32), usize>,
+    draw_index: HashMap<(ShapeKey, u32, u32, bool), usize>,
     materials: Vec<Entry>,
     /// Identical records (same shape and words) share one.
     dedup: HashMap<(ShapeKey, Vec<u32>), GraphMaterial>,
@@ -111,6 +113,28 @@ pub fn base_record(s: &SurfaceSample) -> [f32; 4 * BASE_VEC4 as usize] {
     ]
 }
 
+/// Whether a material is see-through (its surface's colour comes back with coverage below 1): a
+/// surface layer drives `transmission_weight` or `geometry_opacity`, or holds a transmission
+/// above 0 or an opacity below 1.
+pub fn see_through(ir: &Ir, words: &[u32]) -> bool {
+    use solidcraft_render::material_graph::ir::Operand;
+    let value = |op: &Operand| match op {
+        Operand::Uniform { offset, .. } => usize::try_from(*offset).ok().and_then(|i| words.get(i)).map(|w| f32::from_bits(*w)),
+        _ => None,
+    };
+    let layer = |inputs: &[(&'static str, Operand)]| {
+        inputs.iter().any(|(name, op)| {
+            let driven = matches!(op, Operand::Value(_) | Operand::Geometry(_));
+            match *name {
+                "transmission_weight" => driven || value(op).is_some_and(|x| !(x <= 0.0)),
+                "geometry_opacity" => driven || value(op).is_some_and(|x| !(x >= 1.0)),
+                _ => false,
+            }
+        })
+    };
+    layer(&ir.surface) || ir.mix_layers.iter().any(|m| layer(&m.fg))
+}
+
 impl GraphScene {
     /// Add a material of graph `ir` with its uniform `words` (`uniform_words`) and base response
     /// `base` (`base_sample`). Equal materials share a record.
@@ -148,8 +172,9 @@ impl GraphScene {
         p.used += vec4s;
         self.shapes.entry(ir.shape).or_insert_with(|| ir.clone());
         let page = u32::try_from(page).unwrap_or(u32::MAX);
-        let draw = *self.draw_index.entry((ir.shape, page, 0)).or_insert_with(|| {
-            self.draws.push(GraphDraw { shape: ir.shape, page, textures: 0, object: ir.object_space, vertices: Vec::new() });
+        let blended = see_through(ir, words);
+        let draw = *self.draw_index.entry((ir.shape, page, 0, blended)).or_insert_with(|| {
+            self.draws.push(GraphDraw { shape: ir.shape, page, textures: 0, object: ir.object_space, blended, vertices: Vec::new() });
             self.draws.len() - 1
         });
         let m = GraphMaterial(u32::try_from(self.materials.len()).unwrap_or(u32::MAX));
