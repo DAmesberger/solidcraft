@@ -340,8 +340,8 @@ pub struct ReferenceSurface {
 impl ReferenceSurface {
     /// Floats in the WGSL declaration order.
     pub const FLOATS: usize = 37;
-    /// The name of each float, in [`Self::to_floats`] order.
-    pub const NAMES: [&'static str; Self::FLOATS] = [
+    /// The name of each float, in [`Self::to_floats`] order ([`Self::FLOATS`] of them).
+    pub const NAMES: &'static [&'static str] = &[
         "base_color.r",
         "base_color.g",
         "base_color.b",
@@ -449,8 +449,8 @@ impl ReferenceSurface {
     pub fn max_difference(&self, other: &ReferenceSurface) -> (&'static str, f64) {
         let (a, b) = (self.to_floats(), other.to_floats());
         let mut worst = ("", 0.0);
-        for (k, name) in Self::NAMES.iter().enumerate() {
-            let d = (a[k] - b[k]).abs();
+        for ((name, x), y) in Self::NAMES.iter().zip(a).zip(b) {
+            let d = (x - y).abs();
             let d = if d.is_nan() { f64::INFINITY } else { d };
             if d > worst.1 {
                 worst = (name, d);

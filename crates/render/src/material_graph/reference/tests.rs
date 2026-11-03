@@ -212,6 +212,7 @@ fn a_surface_round_trips_through_floats() {
     let (ir, words) = prepare_json(fixture("brushed-nickel-silver"), &none()).unwrap();
     let s = eval(&ir, &words, &sample_points()[1]).surface;
     let floats: Vec<f32> = s.to_floats().iter().map(|x| *x as f32).collect();
+    assert_eq!(ReferenceSurface::NAMES.len(), ReferenceSurface::FLOATS);
     let back = ReferenceSurface::from_floats(&floats).unwrap();
     let (field, d) = s.max_difference(&back);
     assert!(d < 1e-6, "{field}: {d}");
