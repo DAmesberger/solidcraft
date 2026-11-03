@@ -7,7 +7,7 @@ use solidcraft_engine::Session;
 use solidcraft_engine::render::material_graph::{Constant, InputValue, MaterialGraph};
 
 use super::model::{self, Driver};
-use super::{Action, Commands, Editor, Pending, TextureUse};
+use super::{Action, Commands, Editor, Link, LookContext, Next, Outcome, Pending, TextureUse};
 
 const FIXTURES: &[(&str, &str, usize)] = &[
     ("black-epoxy-clear-coat", include_str!("../../../render/tests/fixtures/material_graph/black-epoxy-clear-coat.json"), 1),
@@ -97,10 +97,15 @@ fn editor(fake: &mut Fake) -> Editor {
     ed
 }
 
-fn set_graph(fake: &Fake) -> MaterialGraph {
-    let (id, params) = fake.changes.last().unwrap();
-    assert_eq!(id, "appearance.graph.set");
-    serde_json::from_value(params["graph"].clone()).unwrap()
+/// The graph the engine holds after the last change, which was `command`.
+fn sent_graph(fake: &Fake, command: &str) -> MaterialGraph {
+    let (id, _) = fake.changes.last().unwrap();
+    assert_eq!(id, command);
+    fake.graph.clone()
+}
+
+fn no_look() -> LookContext {
+    LookContext::default()
 }
 
 #[test]
@@ -166,7 +171,7 @@ fn the_editor_lists_creates_and_undoes_through_the_real_engine() {
     assert!(matches!(&ed.catalogue, Some(Ok(_))));
     assert!(matches!(&ed.graphs, Some(Ok(list)) if list.is_empty()));
     assert!(ed.loaded.is_none());
-    ed.apply(&mut app, Action::Create("Brushed".into()));
+    ed.apply(&mut app, Action::Create("Brushed".into()), &no_look());
     assert!(ed.note.is_none(), "{:?}", ed.note);
     assert_eq!(app.session.undo.len(), before + 1);
     ed.sync(&mut app);
@@ -182,7 +187,11 @@ fn a_value_edit_is_one_command_sent_when_it_settles() {
     assert!(matches!(&ed.validation, Some(Ok(v)) if v.ok && v.cost > 0));
     // A drag shows its value without sending anything.
     for x in [0.5, 0.6, 0.7] {
-        ed.apply(&mut fake, Action::Pending(Pending::Input { node: "surface".into(), port: "base_metalness".into(), value: Constant::Number(x) }));
+        ed.apply(
+            &mut fake,
+            Action::Pending(Pending::Input { node: "surface".into(), port: "base_metalness".into(), value: Constant::Number(x) }),
+            &no_look(),
+        );
     }
     assert!(fake.changes.is_empty());
     ed.commit(&mut fake);
@@ -203,7 +212,7 @@ fn a_refused_edit_leaves_the_replies_and_shows_why() {
     let mut ed = editor(&mut fake);
     let before = ed.loaded.clone();
     fake.refuse = true;
-    ed.apply(&mut fake, Action::Pending(Pending::Param { node: "uv".into(), param: "space".into(), value: model_param("world") }));
+    ed.apply(&mut fake, Action::Pending(Pending::Param { node: "uv".into(), param: "space".into(), value: model_param("world") }), &no_look());
     ed.commit(&mut fake);
     assert!(ed.note.as_ref().is_some_and(|(n, e)| *e && n.contains("over budget")));
     assert!(ed.pending.is_none());
@@ -225,8 +234,10 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     let stack = model::stack(&ed.graph().unwrap().graph).unwrap();
     // Add: a new top layer copying the top surface's constants, half mixed, layout kept.
     let added = model::add_layer(&ed.graph().unwrap().graph, &stack).unwrap();
-    ed.apply(&mut fake, Action::Set(added));
-    let g = set_graph(&fake);
+    ed.apply(&mut fake, Action::Replace(added), &no_look());
+    assert!(ed.note.is_none(), "{:?}", ed.note);
+    // A new top layer moves the output: only a whole replacement says that.
+    let g = sent_graph(&fake, "appearance.graph.set");
     let s = model::stack(&g).unwrap();
     assert_eq!(s.layers.len(), 3);
     let top = model::node(&g, &s.layers[2].surface).unwrap();
@@ -243,6 +254,14 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     let mask = |g: &MaterialGraph, l: &model::Layer| model::node(g, l.mix.as_deref().unwrap()).unwrap().inputs.get("mix").cloned();
     assert_eq!(mask(&swapped, &s2.layers[2]), mask(&ed.graph().unwrap().graph, &stack.layers[1]));
     assert!(model::swap_layers(&swapped, &s2, 0).is_err(), "the base has no mask and stays at the bottom");
+    // A reorder keeps the output: one edit of connections.
+    let mut fake2 = Fake::new(ed.graph().unwrap().graph.clone());
+    let mut ed2 = editor(&mut fake2);
+    let renamed = MaterialGraph { name: fake2.graph.name.clone(), ..swapped.clone() };
+    ed2.apply(&mut fake2, Action::Replace(renamed), &no_look());
+    assert!(ed2.note.is_none(), "{:?}", ed2.note);
+    let g2 = sent_graph(&fake2, "appearance.graph.edit");
+    assert_eq!(model::stack(&g2).unwrap().layers[2].surface, stack.layers[1].surface);
     // Remove the etched layer (in the middle): the top mix now lies on the base, and the
     // mask's image, the pits and their projection go with it; the layout loses their entries.
     let removed = model::remove_layer(&ed.graph().unwrap().graph, &stack, 1).unwrap();
@@ -254,7 +273,11 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     assert_eq!(removed.layout.get("plain"), Some(&[10.0, 20.0]));
     assert!(!removed.layout.contains_key("pits"));
     assert!(model::remove_layer(&removed, &s3, 0).is_err(), "the base stays");
-    ed.apply(&mut fake, Action::Set(removed));
+    ed.apply(&mut fake, Action::Replace(removed), &no_look());
+    assert!(ed.note.is_none(), "{:?}", ed.note);
+    let g = sent_graph(&fake, "appearance.graph.edit");
+    assert!(model::node(&g, "etched").is_none());
+    assert_eq!(g.layout.get("plain"), Some(&[10.0, 20.0]), "an edit keeps the layout");
     // Removing the top layer moves the output down.
     let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
     let stack = model::stack(&fake.graph).unwrap();
@@ -262,8 +285,9 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     assert_eq!(g.output, "plain");
     assert_eq!(g.nodes.len(), 1);
     let mut ed = editor(&mut fake);
-    ed.apply(&mut fake, Action::Set(g));
+    ed.apply(&mut fake, Action::Replace(g), &no_look());
     assert_eq!(fake.changes.len(), 1);
+    assert_eq!(sent_graph(&fake, "appearance.graph.set").output, "plain");
 }
 
 #[test]
@@ -304,7 +328,7 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
     let mut fake = Fake::new(fixture("brushed-nickel-silver"));
     let mut ed = editor(&mut fake);
     let use_ = TextureUse::Drive { node: "surface".into(), port: "base_color".into() };
-    assert_eq!(ed.apply(&mut fake, Action::AddTexture(use_.clone())), Some(use_.clone()), "the picker opens");
+    assert_eq!(ed.apply(&mut fake, Action::AddTexture(use_.clone()), &no_look()), Some(Next::PickTexture(use_.clone())), "the picker opens");
     let dir = solidcraft_engine::io::vfs::temp_dir().join(format!("solidcraft-graph-editor-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("mark.png").to_string_lossy().to_string();
@@ -313,16 +337,17 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(fake.changes[0], ("appearance.texture.add".into(), json!({"path": path})));
     let key = solidcraft_engine::doc::appearance_graph::texture_key(PNG_2X1);
-    let g = set_graph(&fake);
+    let g = sent_graph(&fake, "appearance.graph.edit");
     let image = g.nodes.iter().find(|n| n.kind == "image").unwrap();
     assert!(matches!(image.inputs.get("file"), Some(InputValue::Constant(Constant::Texture(t))) if t.texture == key));
-    assert_eq!(fake.graph, g, "the engine took the driven graph");
+    let wire = g.nodes.iter().find(|n| n.id == "surface").and_then(|n| n.inputs.get("base_color"));
+    assert!(matches!(wire, Some(InputValue::Connection(c)) if c.fallback.is_some()), "the image's connection keeps the colour: {wire:?}");
     // Laser-etched's mark is an interface input: its default is set by set_interface.
     let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
     let key = fake.texture(PNG_2X1);
     let mut ed = editor(&mut fake);
     let input = fake.graph.interface[0].clone();
-    ed.apply(&mut fake, Action::Texture(key.clone(), TextureUse::Interface(input)));
+    ed.apply(&mut fake, Action::Texture(key.clone(), TextureUse::Interface(input)), &no_look());
     assert!(ed.note.is_none(), "{:?}", ed.note);
     let (id, params) = fake.changes.last().unwrap();
     assert_eq!(id, "appearance.graph.edit");
@@ -334,19 +359,21 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
 fn graphs_are_chosen_created_duplicated_and_replaced_as_json() {
     let mut fake = Fake::new(fixture("pbr-copper"));
     let mut ed = editor(&mut fake);
-    ed.apply(&mut fake, Action::Create("  ".into()));
+    ed.apply(&mut fake, Action::Create("  ".into()), &no_look());
     assert!(fake.changes.is_empty(), "an empty name is not sent");
-    ed.apply(&mut fake, Action::Create("Anodised".into()));
+    ed.apply(&mut fake, Action::Create("Anodised".into()), &no_look());
     assert_eq!(fake.changes[0], ("appearance.graph.create".into(), json!({"name": "Anodised"})));
-    ed.apply(&mut fake, Action::Duplicate);
+    ed.apply(&mut fake, Action::Duplicate, &no_look());
     assert_eq!(fake.changes[1], ("appearance.graph.duplicate".into(), json!({"id": "g"})));
-    ed.apply(&mut fake, Action::Json("{not json".into()));
+    ed.apply(&mut fake, Action::Json("{not json".into()), &no_look());
     assert_eq!(fake.changes.len(), 2);
     assert!(ed.note.as_ref().is_some_and(|(_, e)| *e));
     let text = serde_json::to_string(&fixture("brushed-nickel-silver")).unwrap();
     ed.sync(&mut fake);
-    ed.apply(&mut fake, Action::Json(text));
-    assert_eq!(set_graph(&fake), fixture("brushed-nickel-silver"));
+    ed.apply(&mut fake, Action::Json(text), &no_look());
+    let (id, params) = fake.changes.last().unwrap();
+    assert_eq!(id, "appearance.graph.set");
+    assert_eq!(serde_json::from_value::<MaterialGraph>(params["graph"].clone()).unwrap(), fixture("brushed-nickel-silver"));
 }
 
 #[test]
@@ -402,7 +429,7 @@ fn the_section_draws_every_example_without_sending_anything() {
         let ed = editor(&mut fake);
         let mut actions = Vec::new();
         ctx.run_ui(Default::default(), |ui| {
-            ui_scope(ui, |ui| actions = super::body(ui, &ed, false, None));
+            ui_scope(ui, |ui| actions = super::body(ui, &ed, false, &no_look()));
         })
         .textures_delta
         .clear();
@@ -416,7 +443,7 @@ fn the_section_draws_every_example_without_sending_anything() {
     let mut canned = Canned(g);
     let mut ed = Editor::default();
     ed.sync(&mut canned);
-    ctx.run_ui(Default::default(), |ui| ui_scope(ui, |ui| assert!(super::body(ui, &ed, false, None).is_empty()))).textures_delta.clear();
+    ctx.run_ui(Default::default(), |ui| ui_scope(ui, |ui| assert!(super::body(ui, &ed, false, &no_look()).is_empty()))).textures_delta.clear();
 }
 
 /// Replies for a graph the engine would not hold; it changes nothing.
@@ -453,10 +480,11 @@ fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
     use solidcraft_engine::geom::Vec3;
     use solidcraft_engine::render::surface::OpaqueSurface;
     let surface = OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.35, 1.5).unwrap();
-    let scene = super::swatch::scene(surface);
+    let scene = super::swatch::scene(&super::swatch::Sample::Surface(surface));
     assert_eq!(scene.pbr.len() % crate::gpu::PBR_SIZE, 0);
     assert!(scene.pbr.len() / crate::gpu::PBR_SIZE >= 3 * 2 * 24 * 48);
-    assert_ne!(super::swatch::key(surface), super::swatch::key(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 0.0, 0.35, 1.5).unwrap()));
+    let other = OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 0.0, 0.35, 1.5).unwrap();
+    assert_ne!(super::swatch::key(&super::swatch::Sample::Surface(surface)), super::swatch::key(&super::swatch::Sample::Surface(other)));
     let size = 256;
     let camera = super::swatch::camera();
     let eye = camera.eye();
@@ -541,4 +569,177 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
         }
     }
     crate::theme::set_dark(previous);
+}
+
+/// A driver is one `edit`: its nodes are added and the input is connected with the value it had
+/// as the fallback, so the standard view does not change. Removing it is one edit too.
+#[test]
+fn a_driver_is_one_edit_whose_connection_keeps_the_value() {
+    let c = catalogue();
+    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let before = fake.graph.nodes.len();
+    let mut ed = editor(&mut fake);
+    let driven = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
+    ed.apply(&mut fake, Action::Replace(driven), &no_look());
+    assert!(ed.note.is_none(), "{:?}", ed.note);
+    let (id, params) = fake.changes.last().unwrap();
+    assert_eq!(id, "appearance.graph.edit");
+    let ops = params["ops"].as_array().unwrap();
+    assert!(ops.iter().any(|op| op["op"] == "connect" && op["port"] == "base_metalness" && op["fallback"] == json!(1.0)), "{ops:?}");
+    let wire = model::node(&fake.graph, "surface").and_then(|n| n.inputs.get("base_metalness")).cloned();
+    assert!(matches!(wire, Some(InputValue::Connection(ref w)) if w.fallback == Some(Constant::Number(1.0))), "{wire:?}");
+    ed.sync(&mut fake);
+    let back = model::undrive(&fake.graph, "surface", "base_metalness", Some(Constant::Number(1.0))).unwrap();
+    ed.apply(&mut fake, Action::Replace(back), &no_look());
+    let g = sent_graph(&fake, "appearance.graph.edit");
+    assert_eq!(g.nodes.len(), before, "the driver's nodes went with it");
+    assert_eq!(model::shown_constant(model::node(&g, "surface").unwrap(), "base_metalness"), Some(&Constant::Number(1.0)));
+}
+
+/// A change validation refuses is not sent; its findings sit at the row they name, and the
+/// cost shown is the one the last change's reply gave.
+#[test]
+fn a_refused_change_is_not_sent_and_names_its_row_and_the_cost_follows_replies() {
+    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut ed = editor(&mut fake);
+    // A required input left without a texture: the image node's `file`.
+    let c = catalogue();
+    let mut bad = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
+    bad.nodes.push(solidcraft_engine::render::material_graph::Node {
+        id: "img".into(),
+        kind: "image".into(),
+        params: Default::default(),
+        inputs: [("texcoord".to_string(), InputValue::Connection(model_connection("uv")))].into_iter().collect(),
+    });
+    if let Some(n) = bad.nodes.iter_mut().find(|n| n.id == "surface") {
+        n.inputs.insert("base_weight".into(), InputValue::Connection(model_connection("img.value")));
+    }
+    ed.apply(&mut fake, Action::Replace(bad), &no_look());
+    assert!(fake.changes.is_empty(), "nothing is sent");
+    assert!(ed.note.as_ref().is_some_and(|(_, e)| *e));
+    let refusal = ed.refusal.clone().expect("validation's findings are kept");
+    let issue = refusal.errors.iter().find(|i| i.node.is_some()).expect("a located finding");
+    assert!(ed.issues(issue.node.as_deref().unwrap(), issue.port.as_deref()).count() >= 1);
+    // A good change: its reply's cost is the cost shown.
+    let good = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Weave, None).unwrap();
+    let before = ed.graph().unwrap().cost;
+    ed.apply(&mut fake, Action::Replace(good), &no_look());
+    assert!(ed.refusal.is_none());
+    let engine = fake.engine.execute("appearance.graph.get", &json!({"id": "g"})).unwrap();
+    assert_eq!(u64::from(ed.graph().unwrap().cost), engine["cost"].as_u64().unwrap(), "before the next read");
+    assert!(ed.graph().unwrap().cost > before);
+}
+
+/// The web build adds a picked image by its bytes; the engine takes them.
+#[test]
+fn the_web_build_adds_textures_as_base64() {
+    let mut fake = Fake::new(fixture("pbr-copper"));
+    let params = super::texture_bytes("/picked/dir/mark.png", PNG_2X1);
+    assert_eq!(params["name"], "mark.png");
+    let reply = fake.engine.execute("appearance.texture.add", &params).unwrap();
+    assert_eq!(reply["texture"], json!(solidcraft_engine::doc::appearance_graph::texture_key(PNG_2X1)));
+}
+
+/// The dialog's look names a graph: the editor shows it, Use hands the dialog an Apply, and the
+/// look's own values are kept on the link, not sent as graph edits.
+#[test]
+fn the_look_link_chooses_the_graph_and_carries_its_values() {
+    let mut fake = Fake::new(fixture("electrolytic-sleeve"));
+    fake.engine.execute("appearance.graph.create", &json!({"id": "a-first", "name": "A first"})).unwrap();
+    let mut ed = Editor::default();
+    ed.link_to(Some(Link { graph: "g".into(), values: Default::default() }));
+    ed.sync(&mut fake);
+    assert_eq!(ed.graph().unwrap().id, "g", "the look's graph, not the list's first");
+    assert_eq!(ed.apply(&mut fake, Action::Use, &no_look()), Some(Next::Dialog(Outcome::Apply)));
+    let red = Constant::Vector(vec![0.5, 0.05, 0.05]);
+    ed.apply(&mut fake, Action::Value("sleeve".into(), Some(red.clone())), &no_look());
+    assert_eq!(ed.link.as_ref().and_then(|l| l.values.get("sleeve")), Some(&red));
+    assert!(fake.changes.is_empty(), "a look's value is not a graph edit");
+    ed.apply(&mut fake, Action::Value("sleeve".into(), None), &no_look());
+    assert!(ed.link.as_ref().is_some_and(|l| l.values.is_empty()));
+    ed.unlink();
+    assert!(ed.link.is_none());
+}
+
+/// Through the app: convert the picked body's PBR look to a graph, add a layer, give the look
+/// its own value and apply it, then reopen the dialog on the body's graph. Real commands only.
+#[test]
+fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
+    let mut h = crate::scenario::Harness::new();
+    h.call("ui.resize", json!({"width": 1600, "height": 2400}));
+    h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    h.app
+        .run(
+            "appearance.assign",
+            json!({"bodies": ["Body1"], "color": "#c42824", "name": "Red", "pbr": {"metallic": 0, "roughness": 0.4, "dielectric_ior": 1.5}}),
+        )
+        .unwrap();
+    h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
+    h.app.start("appearance.assign");
+    h.frames(3);
+    h.step(&json!({"click": {"handle": "dialog:section:Material graph"}})).unwrap();
+    h.frames(2);
+    let undo = h.app.session.undo.len();
+    h.step(&json!({"click": {"handle": "appearance:graph_convert"}})).unwrap();
+    h.frames(2);
+    let look = h.app.session.doc.appearances.bodies["Body1"].clone();
+    let id = look.graph.as_ref().expect("the body's look names the new graph").as_str().to_string();
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    let editor = |h: &crate::scenario::Harness| match h.app.dialog.as_ref().map(|d| &d.kind) {
+        Some(crate::dialogs::Kind::Appearance(k)) => k.material.clone(),
+        _ => panic!("appearance dialog"),
+    };
+    assert_eq!(editor(&h).link.as_ref().map(|l| l.graph.clone()), Some(id.clone()));
+    // A layer, by its button.
+    h.step(&json!({"click": {"handle": "appearance:graph_add_layer"}})).unwrap();
+    h.frames(2);
+    let graph = h.app.session.execute("appearance.graph.get", &json!({"id": id})).unwrap();
+    let graph: MaterialGraph = serde_json::from_value(graph["graph"].clone()).unwrap();
+    assert_eq!(model::stack(&graph).unwrap().layers.len(), 2);
+    // Apply the graph look to the picked body again, through its button.
+    h.step(&json!({"click": {"handle": "appearance:graph_use"}})).unwrap();
+    h.frames(2);
+    assert_eq!(h.app.session.doc.appearances.bodies["Body1"].graph.as_ref().map(|g| g.as_str().to_string()), Some(id.clone()));
+    // Reopened, the dialog follows the body's graph.
+    h.app.dialog = None;
+    h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
+    h.app.start("appearance.assign");
+    h.frames(3);
+    assert_eq!(editor(&h).chosen, Some(id.clone()));
+    assert_eq!(editor(&h).link.map(|l| l.graph), Some(id));
+}
+
+/// The swatch draws a graph as itself through the material-graph pipelines (C1).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_swatch_draws_a_graph_with_its_coat() {
+    use solidcraft_engine::geom::Vec3;
+    let epoxy = super::swatch::Material::new(&fixture("black-epoxy-clear-coat"), &Default::default()).expect("the example lowers");
+    let sample = super::swatch::Sample::Graph(std::sync::Arc::new(epoxy));
+    let scene = super::swatch::scene(&sample);
+    assert!(!scene.graphs.is_empty() && scene.pbr.is_empty(), "drawn as a graph, not as a PBR surface");
+    let copper = super::swatch::Material::new(&fixture("pbr-copper"), &Default::default()).unwrap();
+    assert_ne!(super::swatch::key(&sample), super::swatch::key(&super::swatch::Sample::Graph(std::sync::Arc::new(copper))));
+    let size = 256;
+    let camera = super::swatch::camera();
+    let eye = camera.eye();
+    let Some(rgba) = crate::gpu::render_product_offscreen(
+        scene,
+        None,
+        camera.view_proj(1.0, super::swatch::RADIUS).to_f32(),
+        camera.back().to_f32(),
+        [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
+        size,
+        false,
+    ) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    if let Ok(path) = std::env::var("SOLIDCRAFT_SWATCH_GRAPH_PNG") {
+        image::RgbaImage::from_raw(size, size, rgba.clone()).unwrap().save(path).unwrap();
+    }
+    let c = camera.view_proj(1.0, super::swatch::RADIUS).apply(Vec3::new(-1.15, 0.0, 1.0));
+    let (x, y) = ((c[0] / c[3] * 0.5 + 0.5) * f64::from(size), (0.5 - c[1] / c[3] * 0.5) * f64::from(size));
+    let i = ((y as u32).min(size - 1) * size + (x as u32).min(size - 1)) as usize * 4;
+    assert_ne!(&rgba[i..i + 3], &[255, 255, 255], "the sphere is drawn");
 }
