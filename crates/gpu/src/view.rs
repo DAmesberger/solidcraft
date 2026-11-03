@@ -24,7 +24,7 @@ pub(crate) mod ibl;
 mod msaa_check;
 mod oit;
 
-pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset};
+pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset, StudioRoom};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
 
@@ -157,9 +157,9 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 }
 /// The shader's `U`: the view-projection matrix, 10 `vec4`s (the tenth carries the ambient
 /// occlusion radius), the 8 analysis colours, their flags, the depth direction and the two
-/// whole-body highlight colours, the product lights, the product look, the scene's units and the sky
-/// (`uniform_bytes`).
-const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64 + 32 + 16;
+/// whole-body highlight colours, the product lights, the product look, the scene's units, the
+/// look's room and the sky (`uniform_bytes`).
+const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64 + 32 + 16 + 32;
 
 /// A body drawn from its display plan, evaluated on the GPU: the plan, and a palette index per
 /// face (the plan's face numbering; faces past the end take the last index).
@@ -3414,7 +3414,7 @@ pub fn frame_key(cb: &Frame) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cb.product.hash(&mut h);
     cb.product_lights.as_ref().map(|lights| lights.iter().take(21).map(|light| light.map(f32::to_bits)).collect::<Vec<_>>()).hash(&mut h);
-    product_look(cb).map(|look| (look.studio, look.uniform().map(f32::to_bits))).hash(&mut h);
+    product_look(cb).map(|look| (look.studio, look.uniform().map(f32::to_bits), look.room_uniform().map(f32::to_bits))).hash(&mut h);
     units_per_mm(cb).to_bits().hash(&mut h);
     cb.key.hash(&mut h);
     cb.sketch_key.hash(&mut h);
@@ -3670,6 +3670,43 @@ impl Renderer {
     /// client asks for another frame (the kept picture is not reused meanwhile).
     pub fn wants_redraw(&self) -> bool {
         self.materials.wants_redraw()
+    }
+
+    /// What this device keeps of material textures (docs/material-graph.md §4.3): what a
+    /// [`crate::material::TextureDecoder`] for it prepares to.
+    pub fn material_texture_policy(&self) -> crate::material::ResidentPolicy {
+        self.materials.textures.policy
+    }
+
+    /// The formats the adapter draws into ([`crate::material::TextureCaps::of`]); until set, the
+    /// ones every device has.
+    pub fn set_material_texture_caps(&mut self, caps: crate::material::TextureCaps) {
+        self.materials.textures.caps = caps;
+    }
+
+    pub fn material_texture_caps(&self) -> crate::material::TextureCaps {
+        self.materials.textures.caps
+    }
+
+    /// Make a decoded material texture resident: upload it, build its mips on the GPU, and keep
+    /// the texture budget by dropping levels of the least recently drawn. Draws of its key
+    /// sample it from the next frame on; until then they draw their `image` nodes' `default`.
+    pub fn install_material_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: crate::material::PreparedTexture,
+    ) -> Result<(), solidcraft_render::texture_input::TextureError> {
+        self.materials.textures.install(device, queue, texture)
+    }
+
+    /// Drop a material texture (its asset left the design).
+    pub fn remove_material_texture(&mut self, key: &crate::material::TextureKey) {
+        self.materials.textures.remove(key);
+    }
+
+    pub fn material_texture_stats(&self) -> crate::material::TextureStats {
+        self.materials.textures.stats()
     }
 
     #[cfg(test)]
@@ -4375,6 +4412,8 @@ fn frame_uniform(cb: &Frame, look: Option<ProductLook>, w: f32, h: f32, linear: 
     // The product look ([`ProductLook::uniform`]; all zero without it), then the scene's units.
     v.extend(look.map_or([0.0; 4], |look| look.uniform()));
     v.extend([units_per_mm(cb), 0.0, 0.0, 0.0]);
+    // The look's room ([`ProductLook::room_uniform`]; all zero without the look or a room).
+    v.extend(product_look(cb).map_or([0.0; 8], |look| look.room_uniform()));
     v.extend(cb.sky.map(|value| if value.is_finite() { value } else { 0.0 }));
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
@@ -4624,7 +4663,7 @@ mod tests {
         let floats = |f: &super::Frame| -> Vec<f32> {
             super::uniform_bytes(f, 64.0, 64.0, false, false).as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
         };
-        let look_at = super::UNIFORM_SIZE as usize / 4 - 12;
+        let look_at = super::UNIFORM_SIZE as usize / 4 - 20;
         // The meta vec4 sits right before the 21 light records.
         let meta = look_at - 21 * 16 - 4;
         let light = [0.6, 0.0, 0.8, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
@@ -4634,7 +4673,7 @@ mod tests {
         assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
         assert_eq!(&plain[meta + 4..meta + 20], &light);
         assert_eq!(&plain[look_at..look_at + 8], &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], "no look; the units");
-        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0 };
+        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0, room: None };
         f.product_look = Some(wild);
         let v = floats(&f);
         assert_eq!(&v[..look_at], &plain[..look_at], "the lights and everything else as without the look");

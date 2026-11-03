@@ -233,6 +233,13 @@
 //!   in `format_pending`, so a later build applies just the steps a file is missing. At release
 //!   time `scripts/fold-format-pending.sh` moves them into the next `v<N>/`.
 //!
+//! A change may say which files use it (`pub const USED` in its file, [`Part::used`]). A design
+//! is then written in the oldest format that holds it ([`Family::written_for`]): a format whose
+//! changes all say so and that the design doesn't use is skipped, and `format_pending` lists only
+//! the changes it may use. A design that uses none of a pending format's changes, all of which
+//! say so, keeps the last release's number and bytes, so that release still opens it. A change
+//! that says nothing is used by every file, as every change was before.
+//!
 //! Drawings (`solidcraft-drawing/N`, #3890) are versioned by the same code ([`Family`]) from their
 //! own first format, 1 (the record in [`crate::drawing`]): each later change is one file in
 //! `src/drawing/format/`, in `v<N>/` or `pending/` as above, and the release script folds that
@@ -255,6 +262,11 @@ pub(crate) struct Part {
     pub name: &'static str,
     /// How a file from before the change is rewritten as it opens, if it is.
     pub step: Option<JsonStep>,
+    /// Whether a file's saved JSON uses the change, if the change says (its file's `USED`); `None`
+    /// is used by every file. A file that doesn't use it is written without its number or name
+    /// ([`Family::written_for`]) and later has its `step` run as it opens, so a change that says
+    /// must have a step that leaves such a file as it is, or no step.
+    pub used: Option<fn(&Value) -> bool>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/format_parts.rs"));
@@ -303,6 +315,23 @@ impl Family<'_> {
     /// The names of the pending changes this build writes into a file (`format_pending`).
     pub fn pending_names(&self) -> Vec<String> {
         self.formats.pending.iter().map(|p| p.name.to_string()).collect()
+    }
+
+    /// The format a file whose saved JSON is `v` is written in, and its `format_pending`: the
+    /// oldest format that holds it. From this build's format it steps back past every format
+    /// whose changes all say which files use them ([`Part::used`]) and none of which `v` uses, and
+    /// stops at the first change that is used or says nothing, or at the formats before changes
+    /// were files. In a pending format the list names only the changes `v` may use, in file order;
+    /// an older format lists none.
+    pub fn written_for(&self, v: &Value) -> (u32, Vec<String>) {
+        self.formats.written_for(v)
+    }
+
+    /// Whether [`Family::written_for`] reads a file at all: some change of this build's format
+    /// says which files use it. Otherwise every file gets this build's format and every pending
+    /// name.
+    pub fn reads_content(&self) -> bool {
+        self.formats.newest().iter().any(|part| part.used.is_some())
     }
 
     /// The format tag of format `n`.
@@ -355,6 +384,60 @@ pub fn pending_names() -> Vec<String> {
     DESIGN.pending_names()
 }
 
+/// Whether a design's own format fields are this build's: what reading or creating it sets. A
+/// tool or a test that set another format or list is written as it set them.
+fn stamped_by_this_build(format: Option<&str>, pending: &[String]) -> bool {
+    format == Some(format_string(FORMAT).as_str()) && pending == pending_names().as_slice()
+}
+
+/// Give a design's saved JSON `v` (a plain design or a container's `document.json`) the oldest
+/// format that holds it ([`Family::written_for`]), as every design writer does. A design whose
+/// fields aren't this build's is left as it is.
+pub fn write_oldest_format(v: &mut Value) {
+    if !DESIGN.reads_content() {
+        return;
+    }
+    let pending: Vec<String> = match v.get("format_pending") {
+        None => Vec::new(),
+        Some(list) => match serde_json::from_value(list.clone()) {
+            Ok(list) => list,
+            Err(_) => return,
+        },
+    };
+    if !stamped_by_this_build(v.get("format").and_then(Value::as_str), &pending) {
+        return;
+    }
+    let (format, listed) = DESIGN.written_for(v);
+    let Some(o) = v.as_object_mut() else { return };
+    o.insert("format".into(), Value::String(format_string(format)));
+    if listed.is_empty() {
+        o.remove("format_pending");
+    } else {
+        o.insert("format_pending".into(), listed.into());
+    }
+}
+
+impl Document {
+    /// The design as it is saved: in the oldest format that holds it ([`write_oldest_format`]).
+    /// Borrowed when that is the design's own format, as it is for every design while no change
+    /// of this build's format says which files use it.
+    pub fn in_written_format(&self) -> std::borrow::Cow<'_, Document> {
+        use std::borrow::Cow;
+        if !DESIGN.reads_content() || !stamped_by_this_build(Some(&self.format), &self.format_pending) {
+            return Cow::Borrowed(self);
+        }
+        let Ok(v) = serde_json::to_value(self) else { return Cow::Borrowed(self) };
+        let (format, listed) = DESIGN.written_for(&v);
+        if format == FORMAT && listed == self.format_pending {
+            return Cow::Borrowed(self);
+        }
+        let mut saved = self.clone();
+        saved.format = format_string(format);
+        saved.format_pending = listed;
+        Cow::Owned(saved)
+    }
+}
+
 /// A family's upgrade path: the steps written out by hand (designs' up to [`HAND_WRITTEN`]), the
 /// folded formats after them (each a list of changes) and the pending changes, which make the
 /// next format.
@@ -367,6 +450,32 @@ struct Formats<'a> {
 impl Formats<'_> {
     const fn current(&self) -> u32 {
         self.hand.len() as u32 + 1 + self.folded.len() as u32 + if self.pending.is_empty() { 0 } else { 1 }
+    }
+
+    /// The changes of this build's format: the pending ones, else the last folded format's.
+    fn newest(&self) -> &[Part] {
+        if self.pending.is_empty() { self.folded.last().map_or(&[], |(_, parts)| parts) } else { self.pending }
+    }
+
+    /// See [`Family::written_for`].
+    fn written_for(&self, v: &Value) -> (u32, Vec<String>) {
+        let unused = |part: &Part| part.used.is_some_and(|used| !used(v));
+        let mut format = self.current();
+        if !self.pending.is_empty() {
+            let listed: Vec<String> = self.pending.iter().filter(|part| !unused(part)).map(|part| part.name.to_string()).collect();
+            if !listed.is_empty() {
+                return (format, listed);
+            }
+            format -= 1;
+        }
+        // Folded formats, newest first; an empty one (none is) would stop the walk.
+        for (version, parts) in self.folded.iter().rev() {
+            if *version != format || parts.is_empty() || !parts.iter().all(unused) {
+                break;
+            }
+            format -= 1;
+        }
+        (format, Vec::new())
     }
 
     /// The changes format `version` is made of, if it is made of changes.
@@ -1275,7 +1384,7 @@ mod tests {
             o.entry("trace").or_insert_with(|| Value::Array(Vec::new())).as_array_mut().into_iter().for_each(|t| t.push(Value::from(s)));
             Ok(())
         }
-        Part { name, step: Some(if name.starts_with('a') { step_a } else { step_b }) }
+        Part { name, step: Some(if name.starts_with('a') { step_a } else { step_b }), used: None }
     }
 
     fn trace_of(v: &Value) -> Vec<&str> {
@@ -2624,3 +2733,7 @@ mod tests {
         assert_eq!(parallel, SweepOrientation::Parallel);
     }
 }
+
+#[cfg(test)]
+#[path = "format_written_tests.rs"]
+mod written_tests;

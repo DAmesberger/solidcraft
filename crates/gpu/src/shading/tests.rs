@@ -95,12 +95,19 @@ fn probe_all(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(
 /// Runs `body` (WGSL statements that read `i: vec4<f32>` and assign `o: vec4<f32>`) once per input
 /// on the GPU, with the library in front. `None` without a GPU.
 fn evaluate(body: &str, inputs: &[[f32; 4]]) -> Option<Vec<[f32; 4]>> {
+    evaluate_cases(body, inputs, 1)
+}
+
+/// [`evaluate`] with `stride` inputs per case: invocation `id.x` reads `inputs[id.x * stride + k]`
+/// (`i` is its first) and writes one output.
+pub(super) fn evaluate_cases(body: &str, inputs: &[[f32; 4]], stride: usize) -> Option<Vec<[f32; 4]>> {
     use wgpu::util::DeviceExt;
     let (_, device, queue) = crate::open_headless().ok()?;
     let source = format!(
-        "{}\n@group(0) @binding(0) var<storage, read> inputs: array<vec4<f32>>;\n@group(0) @binding(1) var<storage, read_write> outputs: array<vec4<f32>>;\n@compute @workgroup_size(1)\nfn probe(@builtin(global_invocation_id) id: vec3<u32>) {{\n    let i = inputs[id.x];\n    var o = vec4<f32>(0.0);\n{body}\n    outputs[id.x] = o;\n}}\n",
+        "{}\n@group(0) @binding(0) var<storage, read> inputs: array<vec4<f32>>;\n@group(0) @binding(1) var<storage, read_write> outputs: array<vec4<f32>>;\nconst stride: u32 = {stride}u;\n@compute @workgroup_size(1)\nfn probe(@builtin(global_invocation_id) id: vec3<u32>) {{\n    let i = inputs[id.x * stride];\n    var o = vec4<f32>(0.0);\n{body}\n    outputs[id.x] = o;\n}}\n",
         super::library()
     );
+    let cases = inputs.len() / stride.max(1);
     let module =
         device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shading probe"), source: wgpu::ShaderSource::Wgsl(source.into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -116,7 +123,7 @@ fn evaluate(body: &str, inputs: &[[f32; 4]]) -> Option<Vec<[f32; 4]>> {
         contents: &inputs.iter().flatten().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>(),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let size = (inputs.len() * 16) as u64;
+    let size = (cases.max(1) * 16) as u64;
     let output = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size,
@@ -142,7 +149,7 @@ fn evaluate(body: &str, inputs: &[[f32; 4]]) -> Option<Vec<[f32; 4]>> {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind, &[]);
-        pass.dispatch_workgroups(u32::try_from(inputs.len()).ok()?, 1, 1);
+        pass.dispatch_workgroups(u32::try_from(cases).ok()?, 1, 1);
     }
     encoder.copy_buffer_to_buffer(&output, 0, &read, 0, size);
     queue.submit([encoder.finish()]);

@@ -14,8 +14,9 @@
 //! and the path tracer's shader starts with it (`library_source!`). `bsdf` holds the opaque
 //! surface and its coat (extracted from `path.wgsl`'s expressions), `noise` the lattice noises
 //! (the path tracer's aging masks' and the viewport's former pattern noise), `projection` the
-//! planar, triplanar and cylindrical coordinates. Track C1 fills `patterns`; track C2 adds the
-//! viewport's anisotropic GGX and coat colour to `bsdf`.
+//! planar, triplanar and cylindrical coordinates. Track C1 fills `patterns`. `bsdf` also holds
+//! the viewport's anisotropic GGX (with its bent studio reflection), the coat colour and coat
+//! normal (`sc_layered_brdf`) and the see-through fallback for transmission (`sc_see_through`).
 
 /// Safe normalise, Schlick Fresnel with the IOR-1 rule, GGX D, separable Smith, the base BRDF,
 /// the coat lobe and its attenuation bound; anisotropic GGX for the viewport.
@@ -52,5 +53,7 @@ pub fn library() -> String {
     LIBRARY.iter().map(|(_, source)| *source).collect::<Vec<_>>().join("\n")
 }
 
+#[cfg(test)]
+mod bsdf_tests;
 #[cfg(test)]
 mod tests;

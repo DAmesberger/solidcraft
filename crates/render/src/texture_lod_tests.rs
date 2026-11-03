@@ -1,4 +1,5 @@
 use super::*;
+use crate::texture_input::MAX_MIP_LEVELS;
 
 fn close(a: f64, b: f64) {
     assert!((a - b).abs() <= 1e-12 * b.abs().max(1.0), "{a} != {b}");
@@ -61,7 +62,9 @@ fn rotation_sign_and_screen_axis_swap_preserve_the_footprint() {
 
 #[test]
 fn full_chain_saturation_is_explicit_for_odd_single_axis_and_single_texel_images() {
-    for (dimensions, last) in [([5, 3], 2), ([7, 1], 2), ([1, 7], 2), ([1, 1], 0), ([2048, 2048], 11)] {
+    for (dimensions, last) in
+        [([5, 3], 2), ([7, 1], 2), ([1, 7], 2), ([1, 1], 0), ([2048, 2048], 11), ([MAX_TEXTURE_EDGE, MAX_TEXTURE_EDGE], MAX_MIP_LEVELS as u32 - 1)]
+    {
         let result = select_isotropic_lod(dimensions, [MAX_UV_GRADIENT; 2], [MAX_UV_GRADIENT; 2]).unwrap();
         assert_eq!(result.max_level, last);
         close(result.lod, f64::from(last));

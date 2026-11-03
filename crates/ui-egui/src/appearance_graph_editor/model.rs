@@ -595,7 +595,13 @@ pub fn drive_with(
 ) -> Result<MaterialGraph, &'static str> {
     let n = node(graph, node_id).ok_or("appearance.graph.no_node")?;
     let spec = catalogue.port(&n.kind, port).ok_or("appearance.graph.no_port")?;
-    let present = shown_constant(n, port).cloned();
+    // The value the input shows now (its constant, or the fallback of the wire it replaces, or
+    // its default) is the new connection's fallback, so the standard view keeps it.
+    let present = shown_constant(n, port).cloned().or_else(|| {
+        let w = width(spec.ty);
+        (w > 0 && !matches!(spec.default, PortDefault::Required | PortDefault::Optional | PortDefault::Geometric))
+            .then(|| constant(&value_of(None, spec, w), spec.range))
+    });
     let before = reachable(graph);
     let mut g = graph.clone();
     let uv = match projection(&g) {
@@ -662,6 +668,94 @@ pub fn undrive(graph: &MaterialGraph, node_id: &str, port: &str, value: Option<C
     }
     prune(&mut g, &before);
     Ok(g)
+}
+
+/// The `appearance.graph.edit` ops that turn `old` into `new`, or `None` when an edit cannot
+/// say it (the output moves, an interface input or a param goes away). New nodes are added
+/// first, then inputs are set, connected (with their fallbacks) or disconnected, and nodes
+/// `new` no longer has are removed last. The layout is not part of an edit, so it is kept.
+pub fn ops_between(old: &MaterialGraph, new: &MaterialGraph) -> Option<Vec<Value>> {
+    if old.output != new.output || old.name != new.name || old.source != new.source {
+        return None;
+    }
+    if old.interface.iter().any(|i| !new.interface.iter().any(|n| n.name == i.name)) {
+        return None;
+    }
+    let mut adds = Vec::new();
+    let mut sets = Vec::new();
+    for n in &new.nodes {
+        let before = node(old, &n.id);
+        match before {
+            Some(b) if b.kind != n.kind => return None,
+            Some(_) => {}
+            None => adds.push(json!({"op": "add_node", "node": n.id, "kind": n.kind})),
+        }
+        let empty = Node { id: n.id.clone(), kind: n.kind.clone(), params: Default::default(), inputs: Default::default() };
+        let b = before.unwrap_or(&empty);
+        if b.params.keys().any(|k| !n.params.contains_key(k)) {
+            return None;
+        }
+        for (param, value) in &n.params {
+            if b.params.get(param) != Some(value) {
+                sets.push(set_param(&n.id, param, value));
+            }
+        }
+        for (port, value) in &n.inputs {
+            if b.inputs.get(port) == Some(value) {
+                continue;
+            }
+            sets.push(match value {
+                InputValue::Constant(c) => set_input(&n.id, port, c),
+                InputValue::Interface(i) => json!({"op": "set_input", "node": n.id, "port": port, "value": {"interface": i.interface}}),
+                InputValue::Connection(c) => {
+                    let mut op = json!({"op": "connect", "from": c.from, "node": n.id, "port": port});
+                    if let Some(fallback) = &c.fallback {
+                        op["fallback"] = json!(fallback);
+                    }
+                    op
+                }
+            });
+        }
+        if before.is_some() {
+            for port in b.inputs.keys().filter(|k| !n.inputs.contains_key(*k)) {
+                sets.push(json!({"op": "disconnect", "node": n.id, "port": port}));
+            }
+        }
+    }
+    for input in &new.interface {
+        if old.interface.iter().find(|i| i.name == input.name) != Some(input) {
+            sets.push(set_interface(input));
+        }
+    }
+    let removes = old.nodes.iter().filter(|n| node(new, &n.id).is_none()).map(|n| json!({"op": "remove_node", "node": n.id}));
+    let ops: Vec<Value> = adds.into_iter().chain(sets).chain(removes).collect();
+    (ops.len() <= 512).then_some(ops)
+}
+
+/// `graph` with one input set to a constant, as an edit would leave it (to check before sending).
+pub fn with_input(graph: &MaterialGraph, node_id: &str, port: &str, value: &Constant) -> MaterialGraph {
+    let mut g = graph.clone();
+    set_constant(&mut g, node_id, port, value.clone());
+    g
+}
+
+/// `graph` with one param set.
+pub fn with_param(graph: &MaterialGraph, node_id: &str, param: &str, value: &ParamValue) -> MaterialGraph {
+    let mut g = graph.clone();
+    if let Some(n) = node_mut(&mut g, node_id) {
+        n.params.insert(param.into(), value.clone());
+    }
+    g
+}
+
+/// `graph` with one interface input added or replaced.
+pub fn with_interface(graph: &MaterialGraph, input: &InterfaceInput) -> MaterialGraph {
+    let mut g = graph.clone();
+    match g.interface.iter_mut().find(|i| i.name == input.name) {
+        Some(i) => *i = input.clone(),
+        None => g.interface.push(input.clone()),
+    }
+    g
 }
 
 /// The `appearance.graph.set` parameters for `graph`.

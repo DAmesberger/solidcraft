@@ -129,6 +129,12 @@ pub trait Target {
     /// `sc_Texcoord` expression: an `sc_Image` expression. `default` is the node's default colour
     /// (a `vec3<f32>` expression). Triplanar images call this per plane and blend.
     fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String;
+    /// The world gradient (per mm, a `vec3<f32>` expression) of that sample's `value`, read when
+    /// it reaches a normal (`normal.from_height`): one-texel forward differences, as the
+    /// reference takes them. A target without it gives none.
+    fn image_slope(&self, _binding: u8, _tc: &str, _params: ImageParams) -> String {
+        ZERO3.to_owned()
+    }
 }
 
 /// The viewport's target: `material_eval`, records in the uniform page `mat_page`.
@@ -141,9 +147,29 @@ impl Target for Raster {
     fn vec4(&self, index: &str) -> String {
         format!("mat_page.m[{index}]")
     }
-    fn image(&self, _binding: u8, _tc: &str, default: &str, params: ImageParams) -> String {
-        // Sampling lands with the GPU textures (track C3): until then the node's `default`.
-        format!("sc_image_default({default}, {}u)", params.channel)
+    fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String {
+        // `textures::sampling_source`: the binding's texture (group 3, 4 + binding) with the wrap
+        // mode's sampler; the node's `default` until the texture is resident.
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_image_{binding}_{wrap}({tc}, {default}, {}u)", params.channel),
+            None => format!("sc_image_default({default}, {}u)", params.channel),
+        }
+    }
+    fn image_slope(&self, binding: u8, tc: &str, params: ImageParams) -> String {
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_slope_{binding}_{wrap}({tc}, {}u)", params.channel),
+            None => ZERO3.to_owned(),
+        }
+    }
+}
+
+impl Raster {
+    /// The sampler name of a binding the raster target has (`None` past its four).
+    fn sampler(binding: u8, params: ImageParams) -> Option<&'static str> {
+        if usize::from(binding) >= super::scene::TEXTURE_SLOTS {
+            return None;
+        }
+        super::textures::WRAPS.get(usize::try_from(params.wrap).ok()?).copied()
     }
 }
 
@@ -395,7 +421,14 @@ impl Gen<'_> {
                     let texcoord = Self::operand(self.instr(call)?, 0);
                     self.tangent_of(&texcoord)?
                 }
-                ("image", "value") => format!("s{c}.value"),
+                ("image", "value") => {
+                    if instr.slope {
+                        let slope = self.image_slope(self.instr(call)?)?;
+                        self.line(&format!("let g{n} = {slope};"));
+                        grad = true;
+                    }
+                    format!("s{c}.value")
+                }
                 ("image", "alpha") => format!("s{c}.alpha"),
                 ("separate3", "y" | "z") => {
                     let lane = if output == "y" { 1 } else { 2 };
@@ -532,11 +565,7 @@ impl Gen<'_> {
                     kind = Kind::F;
                 }
                 "image" => {
-                    let params = ImageParams {
-                        srgb: Self::param(&instr, 0) == 0,
-                        wrap: u32::try_from(Self::param(&instr, 1).clamp(0, 2)).unwrap_or(0),
-                        channel: u32::try_from(Self::param(&instr, 2).clamp(0, 4)).unwrap_or(0),
-                    };
+                    let params = Self::image_params(&instr);
                     let [default] = self.args_at(&instr, 2, [Kind::V3])?;
                     let binding = match Self::operand(&instr, 1) {
                         Operand::Texture(b) => Some(b),
@@ -615,6 +644,31 @@ impl Gen<'_> {
                 format!("sc_tc_tangent({}, c.n, {fallback})", self.raw(texcoord, false)?)
             }
             _ => fallback.to_owned(),
+        })
+    }
+
+    /// An `image` call's shape params.
+    fn image_params(instr: &Instr) -> ImageParams {
+        ImageParams {
+            srgb: Self::param(instr, 0) == 0,
+            wrap: u32::try_from(Self::param(instr, 1).clamp(0, 2)).unwrap_or(0),
+            channel: u32::try_from(Self::param(instr, 2).clamp(0, 4)).unwrap_or(0),
+        }
+    }
+
+    /// The world gradient of an `image` call's `value`: the target's per plane, blended by the
+    /// triplanar weights as the reference blends them.
+    fn image_slope(&self, image: &Instr) -> Result<String, CodegenError> {
+        let params = Self::image_params(image);
+        let Operand::Texture(binding) = Self::operand(image, 1) else { return Ok(ZERO3.to_owned()) };
+        let texcoord = Self::operand(image, 0);
+        Ok(match self.kind_of(&texcoord) {
+            Kind::Tri => {
+                let t = self.raw(&texcoord, false)?;
+                let plane = |p: &str| self.target.image_slope(binding, &format!("{t}.{p}"), params);
+                format!("({t}.w.x * {} + {t}.w.y * {} + {t}.w.z * {})", plane("x"), plane("y"), plane("z"))
+            }
+            _ => self.target.image_slope(binding, &self.arg(&texcoord, Kind::Tc)?, params),
         })
     }
 

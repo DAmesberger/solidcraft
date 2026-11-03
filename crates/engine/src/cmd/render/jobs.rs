@@ -229,8 +229,10 @@ fn prepare(s: &Session, params: &Value, command: &str) -> Result<Prepared> {
             normalized.as_ref().map(|n| &n.optics),
         );
     }
-    let gpu_raytrace =
-        params.get("raytrace").and_then(Value::as_object).is_some_and(|o| ["clear_coats", "textures"].iter().any(|key| o.contains_key(*key)));
+    let gpu_raytrace = params
+        .get("raytrace")
+        .and_then(Value::as_object)
+        .is_some_and(|o| ["clear_coats", "textures", "graph_values", "graph_textures"].iter().any(|key| o.contains_key(*key)));
     if gpu_raytrace
         || params.get("environment").is_some_and(|e| e.get("kind").is_some())
         || ["lens", "lighting", "tone_map"].iter().any(|key| params.get(*key).is_some())
@@ -456,7 +458,7 @@ fn prepare_progressive(
     let cpu_raytrace = params
         .get("raytrace")
         .and_then(Value::as_object)
-        .is_some_and(|o| o.keys().any(|key| !matches!(key.as_str(), "dielectrics" | "clear_coats" | "textures")));
+        .is_some_and(|o| o.keys().any(|key| !matches!(key.as_str(), "dielectrics" | "clear_coats" | "textures" | "graph_values" | "graph_textures")));
     if params.get("integrator").is_some_and(|v| v.as_str() != Some("raster"))
         || cpu_raytrace
         || params.get("led_strip").is_some()
@@ -481,6 +483,8 @@ fn prepare_progressive(
         && (!input.raytrace.dielectrics.is_empty()
             || !input.raytrace.clear_coats.is_empty()
             || !input.raytrace.textures.is_empty()
+            || !input.raytrace.graph_values.is_empty()
+            || !input.raytrace.graph_textures.is_empty()
             || input.lens.is_some()
             || input.lighting.is_some()
             || input.tone_map.is_some()
@@ -506,6 +510,8 @@ fn prepare_progressive(
     }
     super::transmission::apply(&mut scene, &input.raytrace.dielectrics, command)?;
     super::clear_coat::apply(&mut scene, &input.raytrace.clear_coats, command)?;
+    // The scene's graph looks with this job's runtime values, for the path back end.
+    let graphs = super::graphs::capture(s, &scene, &input.raytrace.graph_values, &input.raytrace.graph_textures, command)?;
     let settings = if let Some(name) = &input.setup {
         s.doc.render.setups.get(name).cloned().ok_or_else(|| bad(command, "no saved render setup with that name"))?
     } else if let Some(settings) = &input.settings {
@@ -637,6 +643,9 @@ fn prepare_progressive(
     let refraction = input.progressive && scene.has_transmission();
     let reply = json!({"stage_panels":settings.stage.len(),"resolved":resolved,"admission":admission,"request":request,"textures":request.textures.as_ref().map(|resources|resources.summary()),"scene_generation":s.revision,"host":host.kind(),"transparency":if refraction {"physical_transmission"} else if input.progressive {"opaque_only"} else {"sorted_alpha_approximation"},"options":options,"environment":request.environment.as_ref().map(|source|source.info()),"refraction":refraction,"dielectric_boundaries": if resolved.executor.as_str() == "gpu-path" {vec!["thin_sheet","closed_box","closed_mesh"]} else {Vec::<&str>::new()}});
     let mut reply = reply;
+    if let Some(graphs) = &graphs {
+        reply["graphs"] = graphs.summary();
+    }
     if options.denoise {
         reply["denoising"] = json!({
             "method":"edge_aware_atrous", "passes":3, "steps":[1,2,4],

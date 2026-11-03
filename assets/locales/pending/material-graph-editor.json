@@ -203,7 +203,19 @@
     "appearance.graph.kind.convert.float_to_color3": "Number to color",
     "appearance.graph.kind.convert.float_to_vector3": "Number to vector",
     "appearance.graph.kind.convert.color3_to_vector3": "Color to vector",
-    "appearance.graph.kind.convert.vector3_to_color3": "Vector to color"
+    "appearance.graph.kind.convert.vector3_to_color3": "Vector to color",
+    "appearance.graph.use_graph": "Use on picked objects",
+    "appearance.graph.apply_graph": "Apply to picked objects",
+    "appearance.graph.use_hint": "Give the picked objects this graph with this look's values.",
+    "appearance.graph.convert": "Convert to material graph",
+    "appearance.graph.convert_hint": "Make this look a one-node graph that draws the same, and point the picked objects' overrides with this look at it.",
+    "appearance.graph.converted": "Converted: {count} overrides now use the graph.",
+    "appearance.graph.look_uses": "This look uses the graph {graph}.",
+    "appearance.graph.not_made": "The change was not made: the graph would not be valid.",
+    "appearance.graph.at_rows": "{count} problems, shown at their inputs.",
+    "appearance.graph.values_hint": "These values belong to the look. Apply or OK gives them to the picked objects.",
+    "appearance.graph.defaults_hint": "These are the graph's defaults, used by every look that does not set its own.",
+    "appearance.graph.value_reset": "Use the graph's default"
   },
   "en-GB": {
     "appearance.graph.port.base_color": "Base colour",
@@ -424,7 +436,19 @@
     "appearance.graph.kind.convert.float_to_color3": "Zahl zu Farbe",
     "appearance.graph.kind.convert.float_to_vector3": "Zahl zu Vektor",
     "appearance.graph.kind.convert.color3_to_vector3": "Farbe zu Vektor",
-    "appearance.graph.kind.convert.vector3_to_color3": "Vektor zu Farbe"
+    "appearance.graph.kind.convert.vector3_to_color3": "Vektor zu Farbe",
+    "appearance.graph.use_graph": "Auf gewählte Objekte anwenden",
+    "appearance.graph.apply_graph": "Auf gewählte Objekte anwenden",
+    "appearance.graph.use_hint": "Gibt den gewählten Objekten diesen Graphen mit den Werten dieses Erscheinungsbilds.",
+    "appearance.graph.convert": "In Materialgraph umwandeln",
+    "appearance.graph.convert_hint": "Macht aus diesem Erscheinungsbild einen Graphen mit einem Knoten, der gleich aussieht, und verweist die Überschreibungen der gewählten Objekte mit diesem Erscheinungsbild darauf.",
+    "appearance.graph.converted": "Umgewandelt: {count} Überschreibungen verwenden jetzt den Graphen.",
+    "appearance.graph.look_uses": "Dieses Erscheinungsbild verwendet den Graphen {graph}.",
+    "appearance.graph.not_made": "Die Änderung wurde nicht vorgenommen: Der Graph wäre ungültig.",
+    "appearance.graph.at_rows": "{count} Probleme, bei ihren Eingängen angezeigt.",
+    "appearance.graph.values_hint": "Diese Werte gehören zum Erscheinungsbild. Übernehmen oder OK gibt sie den gewählten Objekten.",
+    "appearance.graph.defaults_hint": "Dies sind die Standardwerte des Graphen, die jedes Erscheinungsbild ohne eigene Werte verwendet.",
+    "appearance.graph.value_reset": "Standardwert des Graphen verwenden"
   },
   "ar": {
     "appearance.graph.section": "رسم المادة",
@@ -630,7 +654,19 @@
     "appearance.graph.kind.convert.float_to_color3": "رقم إلى لون",
     "appearance.graph.kind.convert.float_to_vector3": "رقم إلى متجه",
     "appearance.graph.kind.convert.color3_to_vector3": "لون إلى متجه",
-    "appearance.graph.kind.convert.vector3_to_color3": "متجه إلى لون"
+    "appearance.graph.kind.convert.vector3_to_color3": "متجه إلى لون",
+    "appearance.graph.use_graph": "استخدام على الكائنات المختارة",
+    "appearance.graph.apply_graph": "تطبيق على الكائنات المختارة",
+    "appearance.graph.use_hint": "يمنح الكائنات المختارة هذا الرسم بقيم هذا المظهر.",
+    "appearance.graph.convert": "تحويل إلى رسم مادة",
+    "appearance.graph.convert_hint": "يجعل هذا المظهر رسمًا من عقدة واحدة يبدو مثله، ويوجّه تجاوزات الكائنات المختارة التي تستخدمه إليه.",
+    "appearance.graph.converted": "تم التحويل: {count} تجاوزًا تستخدم الرسم الآن.",
+    "appearance.graph.look_uses": "يستخدم هذا المظهر الرسم {graph}.",
+    "appearance.graph.not_made": "لم يتم التغيير: سيصبح الرسم غير صالح.",
+    "appearance.graph.at_rows": "{count} مشكلات، معروضة عند مدخلاتها.",
+    "appearance.graph.values_hint": "هذه القيم تخص المظهر. يمنحها تطبيق أو موافق للكائنات المختارة.",
+    "appearance.graph.defaults_hint": "هذه القيم الافتراضية للرسم، ويستخدمها كل مظهر لا يحدد قيمه.",
+    "appearance.graph.value_reset": "استخدام القيمة الافتراضية للرسم"
   },
   "he": {
     "appearance.graph.section": "גרף חומר",
@@ -836,7 +872,19 @@
     "appearance.graph.kind.convert.float_to_color3": "מספר לצבע",
     "appearance.graph.kind.convert.float_to_vector3": "מספר לווקטור",
     "appearance.graph.kind.convert.color3_to_vector3": "צבע לווקטור",
-    "appearance.graph.kind.convert.vector3_to_color3": "ווקטור לצבע"
+    "appearance.graph.kind.convert.vector3_to_color3": "ווקטור לצבע",
+    "appearance.graph.use_graph": "שימוש בעצמים שנבחרו",
+    "appearance.graph.apply_graph": "החלה על העצמים שנבחרו",
+    "appearance.graph.use_hint": "נותן לעצמים שנבחרו את הגרף הזה עם ערכי המראה הזה.",
+    "appearance.graph.convert": "המרה לגרף חומר",
+    "appearance.graph.convert_hint": "הופך את המראה הזה לגרף בן צומת אחד שנראה אותו דבר, ומפנה אליו את העקיפות של העצמים שנבחרו עם המראה הזה.",
+    "appearance.graph.converted": "הומר: {count} עקיפות משתמשות עכשיו בגרף.",
+    "appearance.graph.look_uses": "המראה הזה משתמש בגרף {graph}.",
+    "appearance.graph.not_made": "השינוי לא בוצע: הגרף לא יהיה תקין.",
+    "appearance.graph.at_rows": "{count} בעיות, מוצגות ליד הקלטים שלהן.",
+    "appearance.graph.values_hint": "הערכים האלה שייכים למראה. החלה או אישור נותנים אותם לעצמים שנבחרו.",
+    "appearance.graph.defaults_hint": "אלה ברירות המחדל של הגרף, שבהן משתמש כל מראה שאינו קובע ערכים משלו.",
+    "appearance.graph.value_reset": "שימוש בברירת המחדל של הגרף"
   },
   "ja": {
     "appearance.graph.section": "マテリアルグラフ",
@@ -1042,7 +1090,19 @@
     "appearance.graph.kind.convert.float_to_color3": "数値からカラー",
     "appearance.graph.kind.convert.float_to_vector3": "数値からベクトル",
     "appearance.graph.kind.convert.color3_to_vector3": "カラーからベクトル",
-    "appearance.graph.kind.convert.vector3_to_color3": "ベクトルからカラー"
+    "appearance.graph.kind.convert.vector3_to_color3": "ベクトルからカラー",
+    "appearance.graph.use_graph": "選択したオブジェクトに使う",
+    "appearance.graph.apply_graph": "選択したオブジェクトに適用",
+    "appearance.graph.use_hint": "選択したオブジェクトに、この外観の値でこのグラフを割り当てます。",
+    "appearance.graph.convert": "マテリアルグラフに変換",
+    "appearance.graph.convert_hint": "この外観を同じ見た目の 1 ノードのグラフにし、選択したオブジェクトでこの外観を使う上書きをそのグラフに向けます。",
+    "appearance.graph.converted": "変換しました: {count} 件の上書きがこのグラフを使います。",
+    "appearance.graph.look_uses": "この外観はグラフ {graph} を使います。",
+    "appearance.graph.not_made": "変更しませんでした: グラフが無効になります。",
+    "appearance.graph.at_rows": "{count} 件の問題を各入力に表示しています。",
+    "appearance.graph.values_hint": "これらの値は外観のものです。適用または OK で選択したオブジェクトに割り当てます。",
+    "appearance.graph.defaults_hint": "これはグラフの既定値で、独自の値を持たないすべての外観が使います。",
+    "appearance.graph.value_reset": "グラフの既定値を使う"
   },
   "ko": {
     "appearance.graph.section": "재질 그래프",
@@ -1248,7 +1308,19 @@
     "appearance.graph.kind.convert.float_to_color3": "숫자를 색상으로",
     "appearance.graph.kind.convert.float_to_vector3": "숫자를 벡터로",
     "appearance.graph.kind.convert.color3_to_vector3": "색상을 벡터로",
-    "appearance.graph.kind.convert.vector3_to_color3": "벡터를 색상으로"
+    "appearance.graph.kind.convert.vector3_to_color3": "벡터를 색상으로",
+    "appearance.graph.use_graph": "선택한 개체에 사용",
+    "appearance.graph.apply_graph": "선택한 개체에 적용",
+    "appearance.graph.use_hint": "선택한 개체에 이 모양의 값으로 이 그래프를 지정합니다.",
+    "appearance.graph.convert": "재질 그래프로 변환",
+    "appearance.graph.convert_hint": "이 모양을 같은 모습의 단일 노드 그래프로 만들고, 선택한 개체에서 이 모양을 쓰는 재정의를 그 그래프로 바꿉니다.",
+    "appearance.graph.converted": "변환했습니다: 재정의 {count}개가 이제 이 그래프를 사용합니다.",
+    "appearance.graph.look_uses": "이 모양은 그래프 {graph}을(를) 사용합니다.",
+    "appearance.graph.not_made": "변경하지 않았습니다: 그래프가 유효하지 않게 됩니다.",
+    "appearance.graph.at_rows": "문제 {count}개를 해당 입력에 표시했습니다.",
+    "appearance.graph.values_hint": "이 값은 모양에 속합니다. 적용 또는 확인을 누르면 선택한 개체에 지정됩니다.",
+    "appearance.graph.defaults_hint": "그래프의 기본값으로, 자체 값을 정하지 않은 모든 모양이 사용합니다.",
+    "appearance.graph.value_reset": "그래프 기본값 사용"
   },
   "vi": {
     "appearance.graph.section": "Đồ thị vật liệu",
@@ -1454,7 +1526,19 @@
     "appearance.graph.kind.convert.float_to_color3": "Số thành màu",
     "appearance.graph.kind.convert.float_to_vector3": "Số thành vectơ",
     "appearance.graph.kind.convert.color3_to_vector3": "Màu thành vectơ",
-    "appearance.graph.kind.convert.vector3_to_color3": "Vectơ thành màu"
+    "appearance.graph.kind.convert.vector3_to_color3": "Vectơ thành màu",
+    "appearance.graph.use_graph": "Dùng cho đối tượng đã chọn",
+    "appearance.graph.apply_graph": "Áp dụng cho đối tượng đã chọn",
+    "appearance.graph.use_hint": "Gán đồ thị này cho các đối tượng đã chọn với giá trị của diện mạo này.",
+    "appearance.graph.convert": "Chuyển thành đồ thị vật liệu",
+    "appearance.graph.convert_hint": "Biến diện mạo này thành đồ thị một nút trông giống hệt, và trỏ các ghi đè dùng diện mạo này của đối tượng đã chọn tới nó.",
+    "appearance.graph.converted": "Đã chuyển: {count} ghi đè giờ dùng đồ thị.",
+    "appearance.graph.look_uses": "Diện mạo này dùng đồ thị {graph}.",
+    "appearance.graph.not_made": "Chưa thực hiện thay đổi: đồ thị sẽ không hợp lệ.",
+    "appearance.graph.at_rows": "{count} vấn đề, hiển thị tại đầu vào của chúng.",
+    "appearance.graph.values_hint": "Các giá trị này thuộc về diện mạo. Áp dụng hoặc OK sẽ gán chúng cho đối tượng đã chọn.",
+    "appearance.graph.defaults_hint": "Đây là giá trị mặc định của đồ thị, dùng cho mọi diện mạo không tự đặt giá trị.",
+    "appearance.graph.value_reset": "Dùng giá trị mặc định của đồ thị"
   },
   "zh": {
     "appearance.graph.section": "材质图",
@@ -1660,6 +1744,18 @@
     "appearance.graph.kind.convert.float_to_color3": "数值转颜色",
     "appearance.graph.kind.convert.float_to_vector3": "数值转向量",
     "appearance.graph.kind.convert.color3_to_vector3": "颜色转向量",
-    "appearance.graph.kind.convert.vector3_to_color3": "向量转颜色"
+    "appearance.graph.kind.convert.vector3_to_color3": "向量转颜色",
+    "appearance.graph.use_graph": "用于所选对象",
+    "appearance.graph.apply_graph": "应用到所选对象",
+    "appearance.graph.use_hint": "以此外观的值把此图赋给所选对象。",
+    "appearance.graph.convert": "转换为材质图",
+    "appearance.graph.convert_hint": "把此外观变为外观相同的单节点图，并让所选对象中使用此外观的覆盖指向它。",
+    "appearance.graph.converted": "已转换：{count} 个覆盖现在使用此图。",
+    "appearance.graph.look_uses": "此外观使用图 {graph}。",
+    "appearance.graph.not_made": "未进行更改：图将无效。",
+    "appearance.graph.at_rows": "{count} 个问题，显示在各自的输入处。",
+    "appearance.graph.values_hint": "这些值属于此外观。应用或确定会把它们赋给所选对象。",
+    "appearance.graph.defaults_hint": "这些是图的默认值，未设置自身值的每个外观都会使用。",
+    "appearance.graph.value_reset": "使用图的默认值"
   }
 }

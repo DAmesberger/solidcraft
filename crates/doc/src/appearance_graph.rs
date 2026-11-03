@@ -522,16 +522,22 @@ mod tests {
         assert!(v["appearances"]["textures"][&key].get("image_blob").is_none());
         assert_eq!(v["appearances"]["graphs"]["copper"]["name"], "Copper - Clean PBR");
         assert!(graphs_used(&v));
-        // Connection fallbacks are data: a texture one names counts as used, and round-trips.
+        // Connection fallbacks are data and round-trip.
         let mut fallback = doc.clone();
-        let graph = fallback.appearances.tables.graphs.get_mut(&id("copper")).unwrap();
-        let fb = json!({ "from": "noise", "fallback": { "texture": key } });
-        graph.nodes[0].inputs.insert("base_color".into(), serde_json::from_value(fb.clone()).unwrap());
-        fallback.appearances.bodies.clear();
+        let graph = fallback.appearances.tables.graphs.get_mut(&id("etched")).unwrap();
+        let fb = json!({ "from": "pits", "fallback": 0.45 });
+        let plain = graph.nodes.iter_mut().find(|n| n.id == "plain").unwrap();
+        plain.inputs.insert("specular_roughness".into(), serde_json::from_value(fb.clone()).unwrap());
         let text = fallback.to_json();
         let back = Document::from_json(&text).unwrap();
-        assert_eq!(serde_json::to_value(&back.appearances.tables.graphs[&id("copper")].nodes[0].inputs["base_color"]).unwrap(), fb);
-        assert!(back.referenced_textures().contains(&key));
+        let plain = back.appearances.tables.graphs[&id("etched")].nodes.iter().find(|n| n.id == "plain").unwrap();
+        assert_eq!(serde_json::to_value(&plain.inputs["specular_roughness"]).unwrap(), fb);
+        // Validation refuses a texture fallback (texture ports take none), but the reference walk
+        // still counts one, so a texture is never dropped from under a graph.
+        let mut copper: MaterialGraph = serde_json::from_str(COPPER).unwrap();
+        let fb = json!({ "from": "noise", "fallback": { "texture": key } });
+        copper.nodes[0].inputs.insert("base_color".into(), serde_json::from_value(fb).unwrap());
+        assert!(graph_textures(&copper).any(|k| k == key));
     }
 
     #[test]

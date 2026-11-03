@@ -7,7 +7,7 @@ pub const MAX_MIP_TAIL_BYTES: usize = 32 * 1024 * 1024;
 /// Include this recipe in preparation/cache identity, alongside source/role/policies.
 /// V1 means floor-halved linear area filtering, opaque RGB and generated alpha=1.
 pub const MIP_RECIPE_ID: &str = "solidcraft.opaque-linear-area-mips/1";
-const MAX_LEVELS: usize = 12;
+const MAX_LEVELS: usize = crate::texture_input::MAX_MIP_LEVELS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MipError {
@@ -168,7 +168,7 @@ fn required_bytes(mut width: usize, mut height: usize) -> Result<usize, MipError
 
 fn area_average(source: TextureView<'_>, x: usize, y: usize, width: usize, height: usize) -> Result<[f64; 3], MipError> {
     // Integer overlap numerators avoid dropping the final row/column at odd sizes.
-    // All factors are bounded by the validated 2048 edge; at most 3x3 source cells.
+    // All factors are bounded by the validated texture-input edge; at most 3x3 source cells.
     let x_start = x * source.width;
     let x_end = (x + 1) * source.width;
     let y_start = y * source.height;
