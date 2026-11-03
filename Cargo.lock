@@ -4332,6 +4332,7 @@ dependencies = [
  "solidcraft-kernel",
  "solidcraft-render",
  "thiserror 2.0.21",
+ "web-time",
  "wgpu",
 ]
 
