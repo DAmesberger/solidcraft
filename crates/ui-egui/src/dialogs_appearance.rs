@@ -192,6 +192,8 @@ pub struct Ap {
     pub applied: Option<Value>,
     /// What the last drop or Apply did.
     pub note: Option<String>,
+    /// The Material graph section (docs/material-graph.md §7.1).
+    pub material: Box<crate::appearance_graph_editor::Editor>,
 }
 
 /// The dialog for the Appearance command.
@@ -232,6 +234,7 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
                 remove_override: false,
                 applied: None,
                 note: None,
+                material: Default::default(),
             }),
             vec![SelInput::new("Objects", if faces { FACES } else { BODIES }, true)],
         )
@@ -445,6 +448,8 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
             k.pbr = Some(parameters);
         }
     }
+    let look = k.pbr.unwrap_or_default().surface(k.color).ok();
+    crate::appearance_graph_editor::section(app, ui, &mut k.material, look);
     let picked: Vec<Sel> = inputs.first().map(|i| i.items.clone()).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
         let has_target = !picked.is_empty() || k.component.is_some();

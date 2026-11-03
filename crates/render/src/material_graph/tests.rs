@@ -117,11 +117,13 @@ fn constants_take_every_documented_form() {
     assert_eq!(c.source(), ("lines", Some("tangent")));
 }
 
-/// Until track A lands, the unbuilt steps refuse instead of guessing.
+/// Track A's steps are built: the fixtures validate (its own tests are in `validate_tests.rs`).
 #[test]
-fn unbuilt_steps_refuse() {
-    let graph: MaterialGraph = serde_json::from_str(FIXTURES[4].1).unwrap();
-    assert!(matches!(validate(&graph), Err(GraphError::NotBuilt(_))));
+fn the_fixtures_validate() {
+    for (name, text) in FIXTURES {
+        let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+        assert!(validate(&graph).is_ok(), "{name}");
+    }
 }
 
 #[test]

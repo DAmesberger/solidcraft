@@ -7,29 +7,13 @@ struct AgingLayer {
     color: vec4<f32>, // linear coat RGB, perceptual roughness
     finish: vec4<f32>, // metallic, reserved
 };
-fn aging_hash(cell: vec3<i32>, seed: u32) -> f32 {
-    let c=bitcast<vec3<u32>>(cell)&vec3<u32>(4095u);
-    var h=(c.x*0x8da6b343u)^(c.y*0xd8163841u)^(c.z*0xcb1ab31fu)^(seed*0x9e3779b9u);
-    h=(h^(h>>16u))*0x7feb352du;
-    h=(h^(h>>15u))*0x846ca68bu;
-    h=h^(h>>16u);
-    return f32(h>>8u)/16777216.0;
-}
-fn aging_noise(point: vec3<f32>, seed: u32) -> f32 {
-    let base=vec3<i32>(floor(point));
-    let f=fract(point);
-    let w=f*f*(vec3<f32>(3.0)-2.0*f);
-    let low=mix(mix(aging_hash(base,seed),aging_hash(base+vec3<i32>(1,0,0),seed),w.x),
-                mix(aging_hash(base+vec3<i32>(0,1,0),seed),aging_hash(base+vec3<i32>(1,1,0),seed),w.x),w.y);
-    let high=mix(mix(aging_hash(base+vec3<i32>(0,0,1),seed),aging_hash(base+vec3<i32>(1,0,1),seed),w.x),
-                 mix(aging_hash(base+vec3<i32>(0,1,1),seed),aging_hash(base+vec3<i32>(1,1,1),seed),w.x),w.y);
-    return mix(low,high,w.z);
-}
+// The masks' lattice hash and value noise are the shared library's `sc_hash3` and
+// `sc_value_noise3`.
 fn aging_mask(layer: AgingLayer, point:vec3<f32>, normal:vec3<f32>)->vec2<f32> {
     let q=point*layer.mask.z+layer.origin.xyz;
     let seed=u32(layer.identity.w);
-    let coarse=aging_noise(q,seed);
-    let fine=aging_noise(q*3.0+vec3<f32>(19.0,7.0,3.0),seed+1u);
+    let coarse=sc_value_noise3(q,seed);
+    let fine=sc_value_noise3(q*3.0+vec3<f32>(19.0,7.0,3.0),seed+1u);
     let field=coarse*0.75+fine*0.25;
     let threshold=1.0-layer.mask.y;
     var coverage=smoothstep(threshold-0.09,threshold+0.09,field);
@@ -42,7 +26,7 @@ fn aging_mask(layer: AgingLayer, point:vec3<f32>, normal:vec3<f32>)->vec2<f32> {
         var uv=q.xy;
         if n.x>n.y && n.x>n.z {uv=q.yz;} else if n.y>n.z {uv=q.xz;}
         let band=i32(floor(uv.y*0.8));
-        let line=abs(fract(uv.x*24.0+aging_hash(vec3<i32>(band,0,0),seed)*0.7)-0.5);
+        let line=abs(fract(uv.x*24.0+sc_hash3(vec3<i32>(band,0,0),seed)*0.7)-0.5);
         coverage*=1.0-smoothstep(0.025,0.09,line);
         coverage*=smoothstep(0.18,0.48,fine);
     }

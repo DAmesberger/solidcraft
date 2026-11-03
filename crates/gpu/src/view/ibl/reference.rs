@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use super::{Rgb, StudioEnvironment, dot, env_brdf, sample};
 
 /// The split-sum scale and bias (A, B) of the viewport's BRDF (GGX, separable Smith, Schlick
-/// Fresnel; `pbr_brdf`) at `nv` and perceptual roughness `r`, by GGX importance sampling with
+/// Fresnel; `sc_base_brdf`) at `nv` and perceptual roughness `r`, by GGX importance sampling with
 /// `n` stratified samples: the white-furnace albedo is F0·A + F90·B.
 pub(crate) fn dfg(nv: f64, r: f64, n: u32) -> (f64, f64) {
     let a2 = r.powi(4);

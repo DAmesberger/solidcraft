@@ -23,49 +23,21 @@ macro_rules! shade_source {
 @group(3) @binding(1) var studio_smp: sampler;
 struct Studio { irradiance: array<vec4<f32>, 9>, levels: vec4<f32>, room: vec4<f32>, lights: array<vec4<f32>, 16>, };
 @group(3) @binding(2) var<uniform> studio: Studio;
-fn pbr_unit(v: vec3<f32>) -> vec3<f32> {
-    let scale = max(max(abs(v.x), abs(v.y)), abs(v.z));
-    if (scale == 0.0) { return vec3<f32>(0.0, 0.0, 1.0); }
-    let s = v / scale;
-    return s / length(s);
-}
-
 fn pbr_encode(c: vec3<f32>) -> vec3<f32> {
     return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
 }
 
-fn pbr_fresnel(f0: vec3<f32>, cosine: f32, metallic: f32, ior: f32) -> vec3<f32> {
-    let t = 1.0 - cosine;
-    // Match the shared surface: an index-matched dielectric has no interface.
-    let grazing = select(1.0, metallic, ior == 1.0);
-    return f0 + (vec3<f32>(grazing) - f0) * (t * t * t * t * t);
-}
-
+// The viewport's base BRDF: the shared library's (`sc_base_brdf`), under the name its oracle
+// probes call.
 fn pbr_brdf(base: vec3<f32>, parameters: vec3<f32>, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
-    let nv = clamp(dot(n, v), -1.0, 1.0);
-    let nl = clamp(dot(n, l), -1.0, 1.0);
-    if (nv <= 0.0 || nl <= 0.0) { return vec3<f32>(0.0); }
-    let h = pbr_unit(v + l);
-    let nh = clamp(dot(n, h), 0.0, 1.0);
-    let vh = clamp(dot(v, h), 0.0, 1.0);
-    let alpha = parameters.y * parameters.y;
-    let a2 = alpha * alpha;
-    let denominator = (1.0 - nh * nh) + nh * nh * a2;
-    let distribution = a2 / (3.141592653589793 * denominator * denominator);
-    let gv = 2.0 / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
-    let gl = 2.0 / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
-    let ratio = (parameters.z - 1.0) / (parameters.z + 1.0);
-    let f0 = mix(vec3<f32>(ratio * ratio), base, parameters.x);
-    let specular = pbr_fresnel(f0, vh, parameters.x, parameters.z) * (distribution * 0.25 * gv * gl);
-    let diffuse = base * ((1.0 - parameters.x) / 3.141592653589793);
-    return specular + (vec3<f32>(1.0) - pbr_fresnel(f0, nv, parameters.x, parameters.z)) * (vec3<f32>(1.0) - pbr_fresnel(f0, nl, parameters.x, parameters.z)) * diffuse;
+    return sc_base_brdf(base, parameters, n, v, l);
 }
 
 fn pbr_poly(c0: vec4<f32>, c1: vec4<f32>, c2: vec4<f32>, r: f32, t: vec4<f32>) -> f32 {
     return dot(c0, t) + r * (dot(c1, t) + r * dot(c2, t));
 }
 
-// The split-sum scale and bias (x: A, y: B; albedo F0·A + F90·B) of `pbr_brdf` in a uniform
+// The split-sum scale and bias (x: A, y: B; albedo F0·A + F90·B) of `sc_base_brdf` in a uniform
 // environment: SolidCraft's own polynomial fit (`ibl::ENV_BRDF_A`, `ibl::ENV_BRDF_B`).
 fn pbr_env_brdf(cosine: f32, r: f32) -> vec2<f32> {
     let nv = clamp(cosine, 0.0001, 1.0);
@@ -185,38 +157,6 @@ fn pbr_rig_irradiance(q: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return e;
 }
 
-// The clear coat over `pbr_brdf` (`clear_coat.rs`, `path.wgsl`): a single-scattering GGX
-// dielectric lobe (weight, perceptual roughness, IOR) over the base, which it attenuates at entry
-// and exit by an upper bound of its directional reflectance. Weight 0 or IOR 1 is no coat.
-fn pbr_coat_bound(f0: f32, cosine: f32) -> f32 {
-    let minimum_vh = cosine / sqrt(2.0 * (1.0 + sqrt(max(0.0, 1.0 - cosine * cosine))));
-    let t = 1.0 - clamp(minimum_vh, 0.0, 1.0);
-    return f0 + (1.0 - f0) * (t * t * t * t * t);
-}
-
-fn pbr_coated(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
-    let under = pbr_brdf(base, parameters, n, v, l);
-    if (coat.x <= 0.0 || coat.z == 1.0) { return under; }
-    let nv = clamp(dot(n, v), -1.0, 1.0);
-    let nl = clamp(dot(n, l), -1.0, 1.0);
-    if (nv <= 0.0 || nl <= 0.0) { return under; }
-    let h = pbr_unit(v + l);
-    let nh = clamp(dot(n, h), 0.0, 1.0);
-    let vh = clamp(dot(v, h), 0.0, 1.0);
-    let alpha = coat.y * coat.y;
-    let a2 = alpha * alpha;
-    let denominator = (1.0 - nh * nh) + nh * nh * a2;
-    let distribution = a2 / (3.141592653589793 * denominator * denominator);
-    let gv = 2.0 / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
-    let gl = 2.0 / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
-    let ratio = (coat.z - 1.0) / (coat.z + 1.0);
-    let f0 = ratio * ratio;
-    let t = 1.0 - vh;
-    let fresnel = f0 + (1.0 - f0) * (t * t * t * t * t);
-    let attenuation = (1.0 - coat.x * pbr_coat_bound(f0, nv)) * (1.0 - coat.x * pbr_coat_bound(f0, nl));
-    return under * attenuation + vec3<f32>(coat.x * fresnel * distribution * 0.25 * gv * gl);
-}
-
 // The studio's light reflected toward `v`, in parts: the base's specular, the coat's specular
 // and the diffuse layer. Split-sum specular with multiple-scattering compensation; diffuse from
 // the irradiance polynomial weighted by what the specular lobe leaves; a coat reflects its own
@@ -302,7 +242,7 @@ fn pbr_fragment(pos: vec4<f32>, wp: vec3<f32>, n: vec3<f32>) -> PbrFragment {
     let footprint = fwidth(wp);
     var view = u.back.xyz;
     if (u.eye.w > 0.5) { view = u.eye.xyz - wp; }
-    return PbrFragment(pos, wp, n, pbr_unit(view), footprint);
+    return PbrFragment(pos, wp, n, sc_unit(view), footprint);
 }
 
 // One evaluated surface point, as a material gives it to `pbr_shade`: the WGSL mirror of
@@ -379,7 +319,7 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
     // The fixed studio lights only the default preview: the look's studio replaces it.
     for (var k = 0u; k < 3u && u.product_lights_meta.x == 0.0 && !look; k += 1u) {
         let light = lights[k];
-        radiance += pbr_coated(base, parameters, coat, n, v, light.xyz) * (light.w * max(dot(n, light.xyz), 0.0));
+        radiance += sc_coated_brdf(base, parameters, coat, n, v, light.xyz) * (light.w * max(dot(n, light.xyz), 0.0));
     }
     for (var k = 0u; k < min(u32(u.product_lights_meta.y),21u) && u.product_lights_meta.x > 0.0; k += 1u) {
         let source=u.product_lights[k*4u];
@@ -391,7 +331,7 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
             continue;
         }
         let sample=product_light_sample(k,f.wp);
-        radiance += pbr_coated(base,parameters,lit_coat,n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
+        radiance += sc_coated_brdf(base,parameters,lit_coat,n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
     }
     if (look) {
         // The product look: the studio (occluded), exposure, PBR Neutral and a dithered encode.
@@ -458,7 +398,7 @@ struct MatCtx { frag: PbrFragment, base: vec3<f32>, parameters: vec3<f32>, };
 // The built-in "vertex constant" material: the vertex's base colour and optical parameters at the
 // fragment's unit normal, uncoated (PBR vertices carry no coat).
 fn material_eval(c: MatCtx) -> Surface {
-    return surface_from_opaque(c.base, c.parameters, vec3<f32>(0.0, 1.0, 1.0), pbr_unit(c.frag.n));
+    return surface_from_opaque(c.base, c.parameters, vec3<f32>(0.0, 1.0, 1.0), sc_unit(c.frag.n));
 }
 
 @fragment
@@ -473,7 +413,8 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
 /// [`SOURCE`]'s shared shading alone, for shaders that bring their own material and entries
 /// (material graphs' generated shaders, which drop the gate when they use it).
 #[cfg(test)]
-pub const SHADE: &str = shade_source!();
+pub const SHADE: &str = concat!(crate::shading::library_source!(), "\n", shade_source!());
 
-/// The PBR shader appended to the viewport's: the shared shading, then the vertex stream.
-pub const SOURCE: &str = concat!(shade_source!(), vertex_source!());
+/// The PBR shader appended to the viewport's: the shared shading library (`crate::shading`), the
+/// shared shading, then the vertex stream.
+pub const SOURCE: &str = concat!(crate::shading::library_source!(), "\n", shade_source!(), vertex_source!());

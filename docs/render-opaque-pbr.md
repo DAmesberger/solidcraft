@@ -316,8 +316,8 @@ The look also draws things the default preview leaves out:
 - **Clear coat.** A surface's `ClearCoat` (weight, roughness, IOR) reaches the shader
   through a material graph's surface, not through PBR vertices, which carry none; until
   graphs are drawn, the vertex path draws the uncoated surface. For direct light
-  `pbr_coated` is the shared
-  coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
+  `sc_coated_brdf` (the shared shading library, `crates/gpu/src/shading/bsdf.wgsl`, which the
+  viewport and the path tracer both compile) is the coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
   GGX dielectric lobe over the base, which it attenuates at entry and exit by an upper bound
   of its directional reflectance. In the studio the coat reflects its single-scattering
   albedo w·(F0·A + B) at its own roughness and passes the rest to the base; the ambient
@@ -361,7 +361,7 @@ showing that a frame without the look draws the documented Reinhard preview with
 dither (against the CPU BRDF) while the look dithers, follows PBR Neutral and adds the
 studio once installed (and never bakes it in `prepare`: a look naming a studio that is
 not installed draws the lights alone), supersampled and cached too. For the coat and
-occlusion: the actual `pbr_coated` against the f64 `OpaqueSurface::with_clear_coat` oracle
+occlusion: the actual `sc_coated_brdf` against the f64 `OpaqueSurface::with_clear_coat` oracle
 on any native GPU, a coated white furnace and the coated studio term against its CPU
 reference, the 48-byte vertex, and GPU frames showing that without the look a coated
 surface draws uncoated and an occlusion radius changes no pixel, while with it a block

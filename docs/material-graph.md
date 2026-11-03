@@ -310,7 +310,7 @@ onto the lid):
   {"id": "pit_n", "kind": "normal.from_height", "inputs": {"height": {"from": "pits"}, "relief_mm": 0.003}},
   {"id": "plain", "kind": "standard_surface", "inputs": {"base_color": [0.80,0.77,0.70], "base_metalness": 1, "specular_roughness": 0.45}},
   {"id": "etched", "kind": "standard_surface", "inputs": {"base_color": [0.30,0.29,0.27], "base_metalness": 1, "specular_roughness": 0.70, "geometry_normal": {"from": "pit_n"}}},
-  {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "etched"}, "bg": {"from": "plain"}, "mix": {"from": "mask"}}}],
+  {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "etched"}, "bg": {"from": "plain"}, "mix": {"from": "mask.value"}}}],
  "output": "surface"}
 ```
 
@@ -370,7 +370,7 @@ an image on the same cylindrical projection):
   {"id": "stripe", "kind": "smoothstep", "inputs": {"edge0": 2.6, "edge1": 2.62, "in": {"from": "ang.x"}}},
   {"id": "text", "kind": "image", "params": {"space": "linear", "wrap": "repeat", "channel": "a"},
    "inputs": {"texcoord": {"from": "cyl"}, "file": {"interface": "print"}}},
-  {"id": "ink", "kind": "max", "inputs": {"a": {"from": "stripe"}, "b": {"from": "text"}}},
+  {"id": "ink", "kind": "max", "inputs": {"a": {"from": "stripe"}, "b": {"from": "text.value"}}},
   {"id": "pvc", "kind": "standard_surface", "inputs": {"base_color": {"interface": "sleeve"}, "specular_roughness": 0.35, "specular_ior": 1.54}},
   {"id": "printed", "kind": "standard_surface", "inputs": {"base_color": [0.80,0.80,0.78], "specular_roughness": 0.45, "specular_ior": 1.5}},
   {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "printed"}, "bg": {"from": "pvc"}, "mix": {"from": "ink"}}}],

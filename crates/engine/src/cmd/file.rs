@@ -2002,6 +2002,30 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Hostile material graphs and textures (docs/material-graph.md §4) refuse the file, and the
+    /// design that is open stays as it was.
+    #[test]
+    fn a_design_with_hostile_material_graphs_is_refused_and_the_open_design_stays() {
+        let dir = name_dir("graphs");
+        let mut s = Session::default();
+        let before = s.doc.to_json();
+        let key = "c".repeat(64);
+        let tex = json!({ "name": "t.png", "width": 1, "height": 1, "format": "png", "data": "iVBORw0KGgo=" });
+        for (what, appearances) in [
+            ("a missing graph", json!({ "bodies": { "A": { "name": "x", "color": [1, 2, 3], "graph": "missing" } } })),
+            ("a texture that is not its hash", json!({ "textures": { (key.clone()): tex } })),
+            ("graph and pbr", json!({ "bodies": { "A": { "name": "x", "color": [1, 2, 3], "graph": "g", "pbr": {} } } })),
+        ] {
+            let mut design: Value = serde_json::from_str(&Document::new("Hostile").to_json()).unwrap();
+            design["appearances"] = appearances;
+            let path = dir.join("hostile.solidcraft");
+            std::fs::write(&path, design.to_string()).unwrap();
+            assert!(s.execute("doc.open", &json!({"path":path})).is_err(), "{what} opened");
+            assert_eq!(s.doc.to_json(), before, "{what}: the open design changed");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn opening_an_untitled_file_shows_its_file_name() {
         let dir = name_dir("open");

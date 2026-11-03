@@ -2,15 +2,31 @@
 //! §5.7). One front end, two back ends: the viewport (uniform pages, WebGL2-safe) and the path
 //! tracer (a storage-buffer material table, native only).
 //!
-//! Contract status: the types below are fixed; [`validate`], [`lower`] and [`base_response`]
-//! refuse with [`GraphError::NotBuilt`] until track A lands them.
+//! [`validate`] checks a graph, [`lower`] builds the IR and [`base_response`] reads the output
+//! node's constants; the work lives in `validate.rs`, `lower.rs` and `base.rs`. Nothing here
+//! evaluates a graph.
+//!
+//! IR conventions the back ends rely on:
+//! - `instrs` are in a canonical order (a post-order walk from the surface operands, inputs in
+//!   catalogue order), independent of node ids and their order in the file; unreachable nodes
+//!   are left out.
+//! - A call's value is its node's **first** output. A multi-output node's other outputs are
+//!   selection instructions (`op` = `kind.output`, see [`Instr::kind`]) whose one argument is
+//!   the call. The back end decides how a call returns several outputs (a struct).
+//! - `geometry.*` nodes are not instructions: their outputs are [`Operand::Geometry`].
+//! - Surface nodes are not instructions: [`Ir::surface`] and [`Ir::mix_layers`] hold their
+//!   operands. Every constant, default and interface input is a uniform slot, so a value never
+//!   changes the shape; [`Ir::slots`] says what each slot holds and [`uniform_words`] fills them.
+//! - An operand narrower than its input (a float into a colour) broadcasts.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::Serialize;
 
 use super::catalogue::PortType;
-use super::graph::MaterialGraph;
+use super::graph::{Constant, MaterialGraph};
+use super::sample::SurfaceSample;
 use crate::surface::OpaqueSurface;
 
 /// One problem with a graph, located where possible. `code` is stable, `message` is for people.
@@ -56,6 +72,9 @@ pub struct Validated {
 }
 
 impl Validated {
+    pub(super) fn new(graph: MaterialGraph) -> Self {
+        Validated { graph }
+    }
     pub fn graph(&self) -> &MaterialGraph {
         &self.graph
     }
@@ -83,6 +102,9 @@ pub enum Operand {
     Texture(u8),
     /// Supplied by the geometry: position, normal or the tangent of the active texcoord.
     Geometry(GeometryInput),
+    /// An unconnected optional input (a noise's `texcoord` or `position`); the node's params say
+    /// which input it reads. (Added by track A.)
+    Absent,
 }
 
 /// Inputs the geometry supplies.
@@ -95,6 +117,9 @@ pub enum GeometryInput {
     WorldNormal,
     /// |n·v|.
     Facing,
+    /// The default of an unconnected `geometry_tangent`: a tangent the back end derives from the
+    /// geometry (unit, perpendicular to the normal). (Added by track A.)
+    Tangent,
 }
 
 /// One instruction: a node output, with its resolved type.
@@ -115,6 +140,17 @@ pub struct Instr {
     pub triplanar: bool,
 }
 
+impl Instr {
+    /// The node kind (`separate3` for `separate3.y`).
+    pub fn kind(&self) -> &'static str {
+        super::lower::op_kind(self.op)
+    }
+    /// For an output selection, the output it selects (`y` for `separate3.y`).
+    pub fn selects(&self) -> Option<&'static str> {
+        super::lower::SELECTIONS.iter().find(|s| s.2 == self.op).map(|s| s.1)
+    }
+}
+
 /// A texture the material reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TextureBinding {
@@ -122,6 +158,41 @@ pub struct TextureBinding {
     pub source: String,
     /// The `image` node's colour space, part of the shape.
     pub srgb: bool,
+}
+
+impl TextureBinding {
+    /// How `source` names an interface input rather than an asset hash.
+    pub const INTERFACE_PREFIX: &'static str = "interface:";
+
+    /// The asset's SHA-256, when a constant supplies the texture.
+    pub fn sha256(&self) -> Option<&str> {
+        (!self.source.starts_with(Self::INTERFACE_PREFIX)).then_some(self.source.as_str())
+    }
+    /// The interface input that supplies the texture (a look's value, else its default, else
+    /// none: the `image` node's `default` colour).
+    pub fn interface(&self) -> Option<&str> {
+        self.source.strip_prefix(Self::INTERFACE_PREFIX)
+    }
+}
+
+/// What one uniform slot holds. (Added by track A: the back ends need it to fill pages.)
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UniformSlot {
+    /// In floats from the material's first float; a vec2 starts on an even float and a vec3 on
+    /// a vec4 boundary, so no value straddles a vec4.
+    pub offset: u32,
+    pub width: u8,
+    /// `Float`, `Int` (a seed, written as its `u32` bits), `Color3`, `Vector2` or `Vector3`.
+    #[serde(rename = "type")]
+    pub ty: PortType,
+    /// The constant, or the interface input's default, linear, `width` components.
+    pub value: Vec<f64>,
+    /// The interface input a look may override this slot with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+    /// For an interface slot, the range every input it feeds admits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<(f64, f64)>,
 }
 
 /// A validated graph lowered for code generation: straight-line SSA in topological order,
@@ -144,6 +215,8 @@ pub struct Ir {
     /// Whether the generated code reads the object-space position (a 40-byte vertex).
     pub object_space: bool,
     pub shape: ShapeKey,
+    /// Every uniform slot, by offset. (Added by track A.)
+    pub slots: Vec<UniformSlot>,
 }
 
 /// One parameter-blended layer of a `surface.mix` chain.
@@ -155,23 +228,36 @@ pub struct MixLayer {
 
 /// Check a graph against the catalogue and the limits: known kinds, ports and params, typed
 /// connections, no cycles, constants in range, one surface output, cost and texture budgets.
-/// Never panics on hostile input.
+/// Never panics on hostile input. The validated copy drops layout entries for missing nodes.
 pub fn validate(graph: &MaterialGraph) -> Result<Validated, GraphError> {
-    let _ = graph;
-    Err(GraphError::NotBuilt("material graph validation (track A)"))
+    super::validate::validate(graph).map_err(GraphError::Invalid)
 }
 
 /// Lower a validated graph to the IR both code generators read. `uniform_floats` and the slot
 /// offsets are assigned here, so the viewport and the path tracer lay out values identically.
 pub fn lower(graph: &Validated) -> Result<Ir, GraphError> {
-    let _ = graph;
-    Err(GraphError::NotBuilt("material graph lowering (track A)"))
+    let analysis = super::validate::analyse(graph.graph()).map_err(GraphError::Invalid)?;
+    super::lower::build(&analysis).map_err(GraphError::Invalid)
 }
 
 /// The base response: a static read of the output node, constant inputs as they are and driven
 /// inputs at their `fallback` (or default). No evaluation. It gives a look's display colour and
 /// the drawing used while a shape compiles. For `surface.mix`, the `bg` surface's response.
 pub fn base_response(graph: &Validated) -> Result<OpaqueSurface, GraphError> {
-    let _ = graph;
-    Err(GraphError::NotBuilt("material graph base response (track A)"))
+    base_sample(graph).map(|s| s.opaque)
+}
+
+/// The base response with every `standard_surface` input, read the same way: what the
+/// constant-graph pipeline draws while a shape compiles. (Added by track A.)
+pub fn base_sample(graph: &Validated) -> Result<SurfaceSample, GraphError> {
+    let analysis = super::validate::analyse(graph.graph()).map_err(GraphError::Invalid)?;
+    super::base::sample(&analysis).map_err(GraphError::Invalid)
+}
+
+/// One material's uniform data: `ir.uniform_floats` 32-bit words (`f32` bits; seeds as `u32`),
+/// with interface slots taken from `values` where given, else their defaults. Values are checked
+/// for type and range; names that no slot reads (a texture, an unused input) are ignored.
+/// (Added by track A.)
+pub fn uniform_words(ir: &Ir, values: &BTreeMap<String, Constant>) -> Result<Vec<u32>, GraphError> {
+    super::base::uniform_words(ir, values).map_err(GraphError::Invalid)
 }

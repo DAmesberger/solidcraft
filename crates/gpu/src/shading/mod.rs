@@ -10,9 +10,12 @@
 //! - modules are joined by plain concatenation (decision O11), in [`LIBRARY`] order, which is
 //!   also their dependency order.
 //!
-//! Contract status: the modules and their order are fixed; track S fills `bsdf` and `noise` from
-//! `path.wgsl`'s exact expressions and ports both shaders onto them, track C1 fills `patterns`
-//! and `projection`, track C2 adds the viewport's anisotropic GGX and coat colour to `bsdf`.
+//! Both shaders are on the library: the viewport's `pbr::SOURCE` and `pbr::SHADE` start with it,
+//! and the path tracer's shader starts with it (`library_source!`). `bsdf` holds the opaque
+//! surface and its coat (extracted from `path.wgsl`'s expressions), `noise` the lattice noises
+//! (the path tracer's aging masks' and the viewport's former pattern noise), `projection` the
+//! planar, triplanar and cylindrical coordinates. Track C1 fills `patterns`; track C2 adds the
+//! viewport's anisotropic GGX and coat colour to `bsdf`.
 
 /// Safe normalise, Schlick Fresnel with the IOR-1 rule, GGX D, separable Smith, the base BRDF,
 /// the coat lobe and its attenuation bound; anisotropic GGX for the viewport.
@@ -23,6 +26,23 @@ pub const NOISE: &str = include_str!("noise.wgsl");
 pub const PATTERNS: &str = include_str!("patterns.wgsl");
 /// Planar, triplanar and cylindrical projections.
 pub const PROJECTION: &str = include_str!("projection.wgsl");
+
+/// The whole library as one literal, joined as [`library`] joins it, for `concat!` into a
+/// shader's constant source.
+macro_rules! library_source {
+    () => {
+        concat!(
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/bsdf.wgsl")),
+            "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/noise.wgsl")),
+            "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/patterns.wgsl")),
+            "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/projection.wgsl"))
+        )
+    };
+}
+pub(crate) use library_source;
 
 /// The modules in dependency order.
 pub const LIBRARY: &[(&str, &str)] = &[("bsdf", BSDF), ("noise", NOISE), ("patterns", PATTERNS), ("projection", PROJECTION)];
