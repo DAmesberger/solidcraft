@@ -72,3 +72,15 @@ f64 oracle is `clear_coat::tinted_coat_brdf`, compiled only for tests (the rende
 crate's `test-reference` feature, enabled by the GPU crate's tests); no CPU renderer shades a
 coat colour. The GPU path tracer has no lobe for it and draws the coat untinted,
 reporting the approximation (decision O10).
+
+## Specular tint (viewport, material graphs)
+
+`standard_surface`'s `specular_weight` and `specular_color` tint the base's own
+interface under the coat. The dielectric's normal-incidence reflectance is scaled by
+the colour; a metal keeps its base colour at normal incidence and takes the colour
+as its grazing reflectance (an edge tint, Schlick from one to the other rather than
+OpenPBR's F82 curve); both are scaled by the weight. The diffuse layer takes what the
+tinted interface passes, so a white dielectric still reflects all it receives. The
+viewport evaluates it only off the defaults (`sc_tinted_base_brdf`, and a tinted
+split sum in the studio), so a surface at weight 1 and a white colour draws exactly as
+before. The f64 oracle is `clear_coat::tinted_brdf` (feature `test-reference`).

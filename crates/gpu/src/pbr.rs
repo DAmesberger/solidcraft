@@ -171,9 +171,9 @@ fn pbr_ibl_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec
 
 // `pbr_ibl_parts` with the inputs a material graph adds (see `pbr_studio_layers`): the coat's
 // colour and normal, and the direction `r` the base's specular looks up from.
-fn pbr_ibl_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, r: vec3<f32>, rotation: f32) -> PbrIbl {
+fn pbr_ibl_layers(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, r: vec3<f32>, rotation: f32) -> PbrIbl {
     let rc = 2.0 * max(dot(coat_n, v), 0.0001) * coat_n - v;
-    return pbr_studio_layers(base, parameters, coat, coat_color, n, coat_n, v, pbr_turn(r, rotation), pbr_turn(rc, rotation), pbr_irradiance(pbr_turn(n, rotation)), 1.0, 1.0);
+    return pbr_studio_layers(base, parameters, specular, coat, coat_color, n, coat_n, v, pbr_turn(r, rotation), pbr_turn(rc, rotation), pbr_irradiance(pbr_turn(n, rotation)), 1.0, 1.0);
 }
 
 // The studio's parts at a world point `wp` in the room: the reflection box-projected against the
@@ -191,7 +191,7 @@ fn pbr_room_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: ve
 // `pbr_room_parts` with the inputs a material graph adds: the base's reflection `r` (the mirror
 // direction, or `sc_aniso_reflect`'s for an anisotropic base) and the coat's own mirror direction
 // about `coat_n` are each box-projected and floor-darkened; the coat colour tints the base.
-fn pbr_room_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, r: vec3<f32>, rotation: f32, wp: vec3<f32>) -> PbrIbl {
+fn pbr_room_layers(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, r: vec3<f32>, rotation: f32, wp: vec3<f32>) -> PbrIbl {
     let q = pbr_studio_point(wp, rotation);
     let ns = pbr_turn(n, rotation);
     let hit = pbr_room_exit(q, pbr_turn(r, rotation));
@@ -204,7 +204,7 @@ fn pbr_room_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, coat
         coat_contact = pbr_floor_contact(coat_hit, rotation);
     }
     let irradiance = pbr_irradiance(ns) + pbr_rig_irradiance(q, ns);
-    return pbr_studio_layers(base, parameters, coat, coat_color, n, coat_n, v, hit, coat_hit, irradiance, contact, coat_contact);
+    return pbr_studio_layers(base, parameters, specular, coat, coat_color, n, coat_n, v, hit, coat_hit, irradiance, contact, coat_contact);
 }
 
 // Whether `r` is not the mirror direction of `v` about `n` (an anisotropic base's bent lookup).
@@ -215,14 +215,14 @@ fn pbr_bent(r: vec3<f32>, n: vec3<f32>, v: vec3<f32>) -> bool {
 // The studio's parts given where the reflection looks in the cube (`lookup`, studio frame), the
 // diffuse irradiance and the reflection's floor contact.
 fn pbr_studio_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec3<f32>, v: vec3<f32>, lookup: vec3<f32>, irradiance: vec3<f32>, contact: f32) -> PbrIbl {
-    return pbr_studio_layers(base, parameters, coat, vec3<f32>(1.0), n, n, v, lookup, lookup, irradiance, contact, contact);
+    return pbr_studio_layers(base, parameters, vec4<f32>(1.0), coat, vec3<f32>(1.0), n, n, v, lookup, lookup, irradiance, contact, contact);
 }
 
-// `pbr_studio_parts` with a material graph's coat: its colour tints the base on the way in and
+// `pbr_studio_parts` with a material graph's specular tint `tint` = (weight, colour) and coat: its colour tints the base on the way in and
 // out (`sc_coat_tint`), and it reflects about its own unit normal `coat_n`, looking up
 // `coat_lookup` with its floor contact. The base's split-sum albedo stays the isotropic one at
 // its roughness, whatever its lookup.
-fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, lookup: vec3<f32>, coat_lookup: vec3<f32>, irradiance: vec3<f32>, contact: f32, coat_contact: f32) -> PbrIbl {
+fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, lookup: vec3<f32>, coat_lookup: vec3<f32>, irradiance: vec3<f32>, contact: f32, coat_contact: f32) -> PbrIbl {
     let nv = max(dot(n, v), 0.0001);
     let metallic = parameters.x;
     let roughness = parameters.y;
@@ -230,8 +230,14 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, co
     let f0 = mix(vec3<f32>(ratio * ratio), base, metallic);
     let f90 = select(1.0, metallic, parameters.z == 1.0);
     let ab = pbr_env_brdf(nv, roughness);
-    let single = f0 * ab.x + vec3<f32>(f90 * ab.y);
-    let compensation = vec3<f32>(1.0) + f0 * (1.0 / max(ab.x + ab.y, 0.0001) - 1.0);
+    var single = f0 * ab.x + vec3<f32>(f90 * ab.y);
+    var compensation = vec3<f32>(1.0) + f0 * (1.0 / max(ab.x + ab.y, 0.0001) - 1.0);
+    // A specular tint off its default (`sc_specular_f0`, `sc_specular_f90`).
+    if (any(tint != vec4<f32>(1.0))) {
+        let tinted = sc_specular_f0(base, metallic, parameters.z, tint);
+        single = tinted * ab.x + sc_specular_f90(metallic, parameters.z, tint) * ab.y;
+        compensation = vec3<f32>(1.0) + tinted * (1.0 / max(ab.x + ab.y, 0.0001) - 1.0);
+    }
     let prefiltered = textureSampleLevel(studio_cube, studio_smp, lookup, roughness * studio.levels.x).rgb * contact;
     // The diffuse layer takes what the specular lobe does not reflect, so a white lossless
     // surface reflects exactly what it receives.
@@ -247,8 +253,8 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, co
         out = PbrIbl(out.specular * (1.0 - albedo), seen * albedo, out.diffuse * (1.0 - albedo));
     }
     if (coat.x > 0.0 && any(coat_color != vec3<f32>(1.0))) {
-        let tint = sc_coat_tint(coat.x, coat_color);
-        out = PbrIbl(out.specular * (tint * tint), out.coat, out.diffuse * (tint * tint));
+        let through = sc_coat_tint(coat.x, coat_color);
+        out = PbrIbl(out.specular * (through * through), out.coat, out.diffuse * (through * through));
     }
     return out;
 }
@@ -314,6 +320,7 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
     let v = f.v;
     let parameters = vec3<f32>(s.metalness, s.roughness, s.ior);
     let coat = vec3<f32>(s.coat_weight, s.coat_roughness, s.coat_ior);
+    let specular = vec4<f32>(s.specular_weight, s.specular_color);
     // An anisotropic lobe's direction; zero (isotropic) without anisotropy or a usable tangent.
     var t = vec3<f32>(0.0);
     if (s.anisotropy > 0.0) { t = sc_aniso_tangent(n, s.tangent, s.rotation); }
@@ -339,7 +346,7 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
     // The fixed studio lights only the default preview: the look's studio replaces it.
     for (var k = 0u; k < 3u && u.product_lights_meta.x == 0.0 && !look; k += 1u) {
         let light = lights[k];
-        radiance += sc_layered_brdf(base, parameters, s.anisotropy, t, coat, s.coat_color, n, coat_n, v, light.xyz) * (light.w * max(dot(n, light.xyz), 0.0));
+        radiance += sc_layered_brdf(base, parameters, specular, s.anisotropy, t, coat, s.coat_color, n, coat_n, v, light.xyz) * (light.w * max(dot(n, light.xyz), 0.0));
     }
     for (var k = 0u; k < min(u32(u.product_lights_meta.y),21u) && u.product_lights_meta.x > 0.0; k += 1u) {
         let source=u.product_lights[k*4u];
@@ -351,13 +358,13 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
             continue;
         }
         let sample=product_light_sample(k,f.wp);
-        radiance += sc_layered_brdf(base,parameters,s.anisotropy,t,lit_coat,s.coat_color,n,coat_n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
+        radiance += sc_layered_brdf(base,parameters,specular,s.anisotropy,t,lit_coat,s.coat_color,n,coat_n,v,sample[0])*sample[1]*max(dot(n,sample[0]),0.0);
     }
     if (look) {
         // The product look: the studio (occluded), exposure, PBR Neutral and a dithered encode.
         let p = look_params();
         let r = sc_aniso_reflect(n, t, v, parameters.y, s.anisotropy);
-        let parts = pbr_room_layers(base, parameters, coat, s.coat_color, n, coat_n, v, r, p.z, f.wp);
+        let parts = pbr_room_layers(base, parameters, specular, coat, s.coat_color, n, coat_n, v, r, p.z, f.wp);
         let nv = dot(n, v);
         let indirect = parts.diffuse * ao + parts.specular * pbr_specular_occlusion(nv, ao, parameters.y)
             + parts.coat * pbr_specular_occlusion(dot(coat_n, v), ao, coat.y);
