@@ -532,7 +532,9 @@ in the code" break every user's files for the last release.
   current format and steps down past every format whose parts all declare `used` and are
   all unused by this design. It stops at the first format with an undeclared or used part,
   or at the last hand-written format. The result is that format's number, and, if it is a
-  pending format, its full `format_pending` list as today.
+  pending format, a `format_pending` list of only the changes the design may use (used or
+  undeclared), in file order. A step of a change that declares `used` must leave a design
+  that doesn't use it unchanged, because that design runs the step when it opens later.
 - The rule lives in one place (the design writer, JSON and container alike, and autosave
   and recovery). The in-memory `Document::format` stays `FORMAT`.
 - `appearance-graphs.rs` declares `used = appearances.graphs is non-empty`. A design
@@ -553,6 +555,26 @@ the bytes with the output of the build before the change. Also tested:
 - another pending part without a predicate still forces N+1, so the rule is conservative;
 - track I's evidence includes the last release's `solidcraft-cli` opening the down-levelled
   files.
+
+**"Readable by the last release" is relative to the pending changes upstream already has.**
+On upstream main after 0.30.1 (format 48), `join-to-body-apart` is pending and declares no
+`used`, so today every design upstream saves is format 49 with `["join-to-body-apart"]`, and
+0.30.1 refuses it. The package doesn't change that: a design without graphs is saved byte for
+byte as the build without the package saves it (checked against the pre-package commit for
+every corpus design and both Selene models, JSON and container). The rule's guarantee is that
+material-free designs never take a newer number than the build's other pending changes give
+them. Once the release that folds those changes ships, it opens them. Giving
+`join-to-body-apart` its own `used` (`to_body_apart: true` anywhere) would make such designs
+format 48 today, and 0.30.1 opened all of them in a trial (branch `mg-k-join`). That edits
+upstream's own change, so it is left out of the package. The PR text says so.
+
+**Evidence steps (track I).** Fetch the last release's CLI:
+`gh release download v0.30.1 -R tangency-labs/solidcraft -p 'solidcraft-cli-0.30.1-macos-universal.zip' -p SHA256SUMS.txt`,
+check the SHA-256, unzip, and run `solidcraft-cli eval <design>.solidcraft` on designs this
+build saved, JSON and container. On the package as it is, they show the refusal above (format
+49, from `join-to-body-apart`). They open once the release that folds the pending changes is
+the comparison. A design with a graph must always be refused with the "saved by a newer
+SolidCraft" message.
 
 If upstream declines the `format.rs` change, the package still works. The only loss is that
 material-free designs saved during the release cycle get N+1, as every change does today
