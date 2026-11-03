@@ -23,7 +23,7 @@ const LEGACY_VERSION: &str = "solvecraft-container/1";
 const PREVIEW_VERSION: &str = "solidcraft-preview/1";
 const MAX_ENTRIES: usize = 10_000;
 /// The design file limit in force ([`crate::limits`]): the largest design file read or saved.
-fn max_design() -> usize {
+pub(crate) fn max_design() -> usize {
     crate::limits::max_design_bytes()
 }
 /// An embedded STEP source may be as large as an import accepts. It is always stored
@@ -79,11 +79,11 @@ fn fields(pairs: impl IntoIterator<Item = (&'static str, Value)>) -> Map<String,
     pairs.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
 }
 
-fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-struct PackageWriter {
+pub(crate) struct PackageWriter {
     zip: zip::ZipWriter<Cursor<Vec<u8>>>,
     names: BTreeSet<String>,
     expanded: usize,
@@ -103,13 +103,13 @@ fn part_limit(name: &str) -> usize {
 }
 
 impl PackageWriter {
-    fn new() -> PackageWriter {
+    pub(crate) fn new() -> PackageWriter {
         PackageWriter { zip: zip::ZipWriter::new(Cursor::new(Vec::new())), names: BTreeSet::new(), expanded: 0, resolved: 0 }
     }
-    fn finish(self) -> Result<Vec<u8>> {
+    pub(crate) fn finish(self) -> Result<Vec<u8>> {
         Ok(self.zip.finish().map_err(invalid)?.into_inner())
     }
-    fn part(&mut self, name: &str, bytes: &[u8], compressed: bool) -> Result<()> {
+    pub(crate) fn part(&mut self, name: &str, bytes: &[u8], compressed: bool) -> Result<()> {
         if bytes.len() > part_limit(name) {
             return Err(invalid("part too large"));
         }
@@ -147,7 +147,7 @@ impl PackageWriter {
         let directory = self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536);
         budget.saturating_sub(written.saturating_add(directory)).min(max_expanded().saturating_sub(self.expanded))
     }
-    fn blob(&mut self, bytes: &[u8], extension: &str, compressed: bool) -> Result<Value> {
+    pub(crate) fn blob(&mut self, bytes: &[u8], extension: &str, compressed: bool) -> Result<Value> {
         self.resolved =
             self.resolved.checked_add(bytes.len()).filter(|&n| n <= max_expanded()).ok_or_else(|| invalid("resolved payloads too large"))?;
         let name = format!("blobs/{}.{extension}", digest(bytes));
@@ -273,6 +273,9 @@ fn write_container(
     budget: usize,
 ) -> Result<Vec<u8>> {
     doc.render.validate().map_err(invalid)?;
+    // Textures nothing references are dropped on save (docs/material-graph.md §4.1).
+    let pruned = doc.without_unreferenced_textures();
+    let doc: &Document = &pruned;
     let mut writer = PackageWriter::new();
     let mut features = Vec::with_capacity(doc.features.len());
     for feature in &doc.features {
@@ -330,6 +333,21 @@ fn write_container(
         clouds.push(value);
     }
     let mut replacements = fields([("features", Value::Array(features)), ("canvases", Value::Array(canvases))]);
+    // Texture assets are `png`/`jpeg` blobs, as canvases are, keyed by their SHA-256.
+    let textures = &doc.appearances.tables.textures;
+    if !textures.is_empty() {
+        let mut stored = Map::new();
+        for (key, texture) in textures {
+            let bytes = texture.bytes(key).map_err(invalid)?;
+            let blob = writer.blob(&bytes, &texture.format, false)?;
+            let mut value = replace(texture, fields([("data", Value::Null)])).map_err(invalid)?;
+            let entry = value.as_object_mut().ok_or_else(|| invalid("texture metadata"))?;
+            entry.remove("data");
+            entry.insert("image_blob".into(), blob);
+            stored.insert(key.clone(), value);
+        }
+        replacements.insert("appearances".into(), replace(&doc.appearances, fields([("textures", Value::Object(stored))])).map_err(invalid)?);
+    }
     if !clouds.is_empty() {
         replacements.insert("point_clouds".into(), Value::Array(clouds));
     }
@@ -486,7 +504,7 @@ fn decode_cloud(bytes: &[u8], cloud: &mut solidcraft_doc::point_cloud::PointClou
     cloud.check().map_err(invalid)
 }
 
-struct PackageReader<R: Read + Seek> {
+pub(crate) struct PackageReader<R: Read + Seek> {
     zip: zip::ZipArchive<R>,
     blobs: BTreeMap<String, Vec<u8>>,
     hydrated: usize,
@@ -494,7 +512,7 @@ struct PackageReader<R: Read + Seek> {
 }
 
 impl<R: Read + Seek> PackageReader<R> {
-    fn new(mut source: R) -> Result<Self> {
+    pub(crate) fn new(mut source: R) -> Result<Self> {
         let length = source.seek(SeekFrom::End(0)).map_err(invalid)?;
         crate::limits::check(crate::limits::Kind::Design, length).map_err(invalid)?;
         let tail_length = length.min(65_557) as usize;
@@ -558,7 +576,7 @@ impl<R: Read + Seek> PackageReader<R> {
     fn has_part(&self, name: &str) -> bool {
         self.zip.index_for_name(name).is_some()
     }
-    fn limited_part(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
+    pub(crate) fn limited_part(&mut self, name: &str, limit: usize) -> Result<Vec<u8>> {
         let part = self.zip.by_name(name).map_err(|e| invalid(format!("required part `{name}`: {e}")))?;
         let expected = part.size();
         if expected > limit as u64 {
@@ -577,7 +595,7 @@ impl<R: Read + Seek> PackageReader<R> {
     fn blob(&mut self, value: &Value, field: &str, extension: &str) -> Result<&[u8]> {
         self.limited_blob(value, field, extension, part_limit(&format!("blob.{extension}")))
     }
-    fn limited_blob(&mut self, value: &Value, field: &str, extension: &str, limit: usize) -> Result<&[u8]> {
+    pub(crate) fn limited_blob(&mut self, value: &Value, field: &str, extension: &str, limit: usize) -> Result<&[u8]> {
         let name = value.get(field).and_then(Value::as_str).ok_or_else(|| invalid(format!("missing `{field}` reference")))?;
         let hash = name
             .strip_prefix("blobs/")
@@ -823,8 +841,9 @@ fn read_document<R: Read + Seek>(reader: &mut PackageReader<R>) -> Result<Docume
     // HDR's typed JSON representation is deliberately strict: no empty placeholders or
     // container-only blob fields may reach the document deserializer.
     let hydrated_hdr = hydrate_hdr_resources(&mut metadata, reader)?;
+    let hydrated_textures = hydrate_textures(&mut metadata, reader)?;
     let hydrated_text;
-    let text = if hydrated_hdr {
+    let text = if hydrated_hdr || hydrated_textures {
         hydrated_text = serde_json::to_string(&metadata).map_err(invalid)?;
         &hydrated_text
     } else {
@@ -955,6 +974,38 @@ fn check_hdr_manifest(bytes: &[u8]) -> Result<()> {
     }
     let Metadata { render: Render { resources: () } } = serde_json::from_slice(bytes).map_err(invalid)?;
     Ok(())
+}
+
+/// Put each texture asset's blob back as base64 `data`, as a plain JSON design holds it. Each
+/// entry needs exactly one `image_blob` of its format, whose bytes hash to its key; the document
+/// check then reads the bytes' header and the design's texture budgets.
+fn hydrate_textures<R: Read + Seek>(metadata: &mut Value, reader: &mut PackageReader<R>) -> Result<bool> {
+    use solidcraft_doc::appearance_graph::{is_texture_key, limits};
+    let Some(textures) = metadata.get_mut("appearances").and_then(|a| a.get_mut("textures")) else {
+        return Ok(false);
+    };
+    let textures = textures.as_object_mut().ok_or_else(|| invalid("textures must be an object"))?;
+    if textures.len() > limits::TEXTURES_PER_DESIGN {
+        return Err(invalid(format!("at most {} textures", limits::TEXTURES_PER_DESIGN)));
+    }
+    for (key, value) in textures.iter_mut() {
+        let format = value.get("format").and_then(Value::as_str).filter(|f| matches!(*f, "png" | "jpeg")).map(str::to_owned);
+        let (Some(format), true) = (format, is_texture_key(key)) else {
+            return Err(invalid("a texture is keyed by its SHA-256 and is png or jpeg"));
+        };
+        if value.get("data").is_some() {
+            return Err(invalid("a texture in a container is one blob; inline data plus blob is ambiguous"));
+        }
+        let bytes = reader.limited_blob(value, "image_blob", &format, limits::TEXTURE_BYTES)?;
+        if digest(bytes) != *key {
+            return Err(invalid("texture key does not match its blob hash"));
+        }
+        let encoded = solidcraft_doc::canvas::base64_encode(bytes);
+        let entry = value.as_object_mut().ok_or_else(|| invalid("invalid texture metadata"))?;
+        entry.remove("image_blob");
+        entry.insert("data".into(), Value::String(encoded));
+    }
+    Ok(!textures.is_empty())
 }
 
 fn hydrate_hdr_resources<R: Read + Seek>(metadata: &mut Value, reader: &mut PackageReader<R>) -> Result<bool> {
@@ -2357,5 +2408,157 @@ mod tests {
             times.sort_by(f64::total_cmp);
         }
         eprintln!("{label}: median atomic-save ms json={:.3} container={:.3}", saves[0][4], saves[1][4]);
+    }
+
+    /// A real 2×1 RGBA PNG (original test data).
+    const PNG_2X1: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68,
+        65, 84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    /// A design whose look reads a texture through a material graph, plus an unused texture.
+    fn textured_design() -> (Document, String, String) {
+        use solidcraft_doc::appearance::Look;
+        use solidcraft_doc::appearance_graph::{Constant, GraphId, TextureAsset};
+        let mut doc = Document::new("Textured");
+        let (key, texture) = TextureAsset::from_bytes("mark.png", PNG_2X1).unwrap();
+        let mut spare_png = PNG_2X1.to_vec();
+        spare_png.extend(b"trailing bytes make another asset");
+        let (spare, spare_texture) = TextureAsset::from_bytes("spare.png", &spare_png).unwrap();
+        let tables = &mut doc.appearances.tables;
+        let graph = include_str!("../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
+        tables.graphs.insert(GraphId::new("etched").unwrap(), serde_json::from_str(graph).unwrap());
+        tables.textures.insert(key.clone(), texture);
+        tables.textures.insert(spare.clone(), spare_texture);
+        let mut look = Look::custom([200, 198, 190], 1.0);
+        look.graph = Some(GraphId::new("etched").unwrap());
+        look.values.insert("mark".into(), serde_json::from_value(json!({ "texture": key })).unwrap());
+        assert!(matches!(look.values["mark"], Constant::Texture(_)));
+        doc.appearances.bodies.insert("Can".into(), look);
+        (doc, key, spare)
+    }
+
+    #[test]
+    fn graph_textures_are_container_blobs_and_unreferenced_ones_are_dropped() {
+        let (doc, key, spare) = textured_design();
+        let bytes = write_design_container(&doc).unwrap();
+        let stored = parts(&bytes);
+        assert_eq!(stored.get(&format!("blobs/{key}.png")).map(Vec::as_slice), Some(PNG_2X1), "the exact encoded bytes, by SHA-256");
+        assert!(!stored.keys().any(|name| name.contains(&spare)), "an unreferenced texture is not saved");
+        let metadata: Value = serde_json::from_slice(&stored["document.json"]).unwrap();
+        let entry = &metadata["appearances"]["textures"][&key];
+        assert_eq!(entry["image_blob"], format!("blobs/{key}.png"));
+        assert!(entry.get("data").is_none());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&stored["container.json"]).unwrap(),
+            json!({ "format": VERSION }),
+            "the container format is unchanged"
+        );
+        let back = crate::read_design(&bytes).unwrap();
+        let expected = doc.without_unreferenced_textures().into_owned();
+        assert_eq!(back.appearances, expected.appearances);
+        assert_eq!(back.to_json(), expected.to_json());
+        // Plain JSON keeps base64 and drops the same texture.
+        let json = crate::write_design(&doc);
+        let back = crate::read_design(&json).unwrap();
+        assert_eq!(back.appearances, expected.appearances);
+        assert_eq!(crate::write_design(&back), json);
+        assert_eq!(crate::read_design(&write_design_container(&back).unwrap()).unwrap().to_json(), back.to_json());
+    }
+
+    #[test]
+    fn hostile_texture_containers_are_refused() {
+        let (doc, key, _) = textured_design();
+        let good = parts(&write_design_container(&doc).unwrap());
+        let other = "b".repeat(64);
+        let edit = |change: &dyn Fn(&mut Value, &mut BTreeMap<String, Vec<u8>>)| {
+            let mut parts = good.clone();
+            let mut metadata: Value = serde_json::from_slice(&parts["document.json"]).unwrap();
+            change(&mut metadata, &mut parts);
+            parts.insert("document.json".into(), serde_json::to_vec(&metadata).unwrap());
+            crate::read_design(&package(&parts))
+        };
+        assert!(edit(&|_, _| {}).is_ok(), "the unchanged package reads");
+        let cases: Vec<(&str, Box<dyn Fn(&mut Value, &mut BTreeMap<String, Vec<u8>>)>)> = vec![
+            (
+                "blob bytes changed",
+                Box::new(|_, p| {
+                    p.insert(format!("blobs/{key}.png"), b"\x89PNG\r\n\x1a\nchanged".to_vec());
+                }),
+            ),
+            (
+                "key is not the blob's hash",
+                Box::new(|m, p| {
+                    // A sound blob of other bytes, under its own hash.
+                    let mut bytes = PNG_2X1.to_vec();
+                    bytes.push(0);
+                    let name = format!("blobs/{}.png", digest(&bytes));
+                    p.insert(name.clone(), bytes);
+                    m["appearances"]["textures"][&key]["image_blob"] = json!(name);
+                }),
+            ),
+            (
+                "a blob under another name",
+                Box::new(|m, p| {
+                    let blob = p[&format!("blobs/{key}.png")].clone();
+                    p.insert(format!("blobs/{other}.png"), blob);
+                    m["appearances"]["textures"][&key]["image_blob"] = json!(format!("blobs/{other}.png"));
+                }),
+            ),
+            (
+                "the blob is missing",
+                Box::new(|_, p| {
+                    p.remove(&format!("blobs/{key}.png"));
+                }),
+            ),
+            ("inline data beside the blob", Box::new(|m, _| m["appearances"]["textures"][&key]["data"] = json!(""))),
+            (
+                "no blob reference",
+                Box::new(|m, _| {
+                    m["appearances"]["textures"][&key].as_object_mut().unwrap().remove("image_blob");
+                }),
+            ),
+            ("a blob of another format", Box::new(|m, _| m["appearances"]["textures"][&key]["format"] = json!("jpeg"))),
+            ("a blob outside blobs/", Box::new(|m, _| m["appearances"]["textures"][&key]["image_blob"] = json!("document.json"))),
+            ("the look names a missing graph", Box::new(|m, _| m["appearances"]["bodies"]["Can"]["graph"] = json!("gone"))),
+            ("textures is not a table", Box::new(|m, _| m["appearances"]["textures"] = json!([]))),
+        ];
+        for (what, change) in cases {
+            assert!(edit(&*change).is_err(), "{what} was read");
+        }
+    }
+
+    /// Designs without graphs gain none of the new fields: every design of the CLI corpus saves
+    /// without `graphs`, `textures`, `graph` or `values`, in JSON and in a container, and saves
+    /// the same bytes again after reading what it saved. (Track K compares the written format
+    /// number with the last release's.)
+    #[test]
+    fn corpus_designs_save_without_the_material_graph_tables() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/solidcraft-cli/tests/corpus");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "solidcraft") {
+                continue;
+            }
+            let doc = crate::read_design(&std::fs::read(&path).unwrap()).unwrap();
+            assert!(doc.appearances.tables.is_empty());
+            let json = crate::write_design(&doc);
+            let container = parts(&write_design_container(&doc).unwrap());
+            for saved in [&json, &container["document.json"]] {
+                let saved: Value = serde_json::from_slice(saved).unwrap();
+                // Looks live in the appearances, the materials, the links and the configurations.
+                for field in ["appearances", "user_materials", "links", "configs"] {
+                    let text = saved.get(field).map(Value::to_string).unwrap_or_default();
+                    for key in ["\"graphs\"", "\"textures\"", "\"graph\"", "\"values\""] {
+                        assert!(!text.contains(key), "{}: {key} in {field}", path.display());
+                    }
+                }
+            }
+            assert!(!container.keys().any(|name| name.ends_with(".png") || name.ends_with(".jpeg")), "{}", path.display());
+            assert_eq!(crate::write_design(&crate::read_design(&json).unwrap()), json, "{}", path.display());
+            seen += 1;
+        }
+        assert!(seen >= 7, "corpus designs in {}", dir.display());
     }
 }

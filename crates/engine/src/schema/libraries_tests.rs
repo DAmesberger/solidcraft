@@ -35,7 +35,7 @@ fn strict_keeps_todays_errors() {
         ("library.inspect", json!({"path": ""})),
         ("library.inspect", json!({"path": file.0})),
         ("library.export", json!({"path": file.0.replace(".json", ".txt")})),
-        ("library.export", json!({"path": file.0, "format": "solidcraft-library/3"})),
+        ("library.export", json!({"path": file.0, "format": "solidcraft-library/4"})),
         ("library.export", json!({"path": file.0, "id": "Not An Id"})),
         ("library.export", json!({"path": file.0, "provenance": {"license": ""}})),
         ("library.apply", json!({"path": file.0, "entry": "user.local/appearance-0", "revision": "0"})),

@@ -5,11 +5,25 @@ use solidcraft_doc::{pbr_appearance::PbrParameters, physical_material::Validated
 fn catalog() -> Catalog {
     let entry = Entry::new(
         "user.test",
-        Definition::Appearance(LibraryLook { name: "Warm oak colour".into(), color: [180, 120, 70], opacity: 0.8, pbr: None }),
+        Definition::Appearance(LibraryLook {
+            name: "Warm oak colour".into(),
+            color: [180, 120, 70],
+            opacity: 0.8,
+            pbr: None,
+            graph: None,
+            values: Default::default(),
+        }),
         Provenance::default(),
     )
     .unwrap();
-    Catalog { format: FORMAT.into(), id: "user.test".into(), name: "Original test library".into(), entries: vec![entry] }
+    Catalog {
+        format: FORMAT.into(),
+        id: "user.test".into(),
+        name: "Original test library".into(),
+        entries: vec![entry],
+        graphs: Default::default(),
+        textures: Default::default(),
+    }
 }
 #[test]
 fn catalog_roundtrip_is_deterministic_and_revision_covers_provenance_and_definition() {
@@ -105,8 +119,12 @@ fn scalar_validation_refuses_nonfinite_density_opacity_counts_strings_and_oversi
     }
     for name in ["".into(), "x".repeat(129), "bad\nname".into(), " leading".into()] {
         assert!(
-            Entry::new("user.test", Definition::Appearance(LibraryLook { name, color: [1, 2, 3], opacity: 1.0, pbr: None }), Provenance::default())
-                .is_err()
+            Entry::new(
+                "user.test",
+                Definition::Appearance(LibraryLook { name, color: [1, 2, 3], opacity: 1.0, pbr: None, graph: None, values: Default::default() }),
+                Provenance::default()
+            )
+            .is_err()
         );
     }
     assert!(Catalog::decode(&vec![b' '; MAX_BYTES + 1]).is_err());
@@ -116,7 +134,9 @@ fn scalar_validation_refuses_nonfinite_density_opacity_counts_strings_and_oversi
 #[test]
 fn design_export_deduplicates_exact_looks_and_keeps_physical_properties_distinct() {
     let mut doc = Document::default();
-    let look = LibraryLook { name: "Warm oak colour".into(), color: [180, 120, 70], opacity: 0.8, pbr: None }.to_look();
+    let look =
+        LibraryLook { name: "Warm oak colour".into(), color: [180, 120, 70], opacity: 0.8, pbr: None, graph: None, values: Default::default() }
+            .to_look();
     doc.appearances.bodies.insert("Body1".into(), look.clone());
     doc.appearances.bodies.insert("Body2".into(), look.clone());
     doc.user_materials.push(UserMaterial { name: "Timber density".into(), density: 0.7, appearance: Some(look), physical_card: None });
@@ -131,7 +151,9 @@ fn design_export_deduplicates_exact_looks_and_keeps_physical_properties_distinct
 #[test]
 fn scalar_export_refuses_pbr_in_every_design_owned_appearance_location() {
     use solidcraft_doc::{appearance::FaceLook, pbr_appearance::PbrParameters};
-    let mut look = LibraryLook { name: "Original PBR specimen".into(), color: [180, 120, 70], opacity: 1.0, pbr: None }.to_look();
+    let mut look =
+        LibraryLook { name: "Original PBR specimen".into(), color: [180, 120, 70], opacity: 1.0, pbr: None, graph: None, values: Default::default() }
+            .to_look();
     look.pbr = Some(PbrParameters::new(1.0, 0.3, 1.5).unwrap());
     for location in 0..4 {
         let mut doc = Document::default();
@@ -248,7 +270,14 @@ fn pinned_v1_bytes_revisions_and_scalar_material_canonical_fields_are_preserved(
     let material = LibraryMaterial {
         name: "Original scalar material".into(),
         density_g_cm3: 0.7,
-        appearance: Some(LibraryLook { name: "Original scalar material".into(), color: [180, 120, 70], opacity: 1.0, pbr: None }),
+        appearance: Some(LibraryLook {
+            name: "Original scalar material".into(),
+            color: [180, 120, 70],
+            opacity: 1.0,
+            pbr: None,
+            graph: None,
+            values: Default::default(),
+        }),
         physical_card: None,
     };
     let provenance = Provenance {
@@ -294,7 +323,14 @@ fn wire_versions_unknown_fields_invalid_optics_and_hostile_cards_refuse() {
     let scalar_material = LibraryMaterial {
         name: "Scalar candidate".into(),
         density_g_cm3: 0.8,
-        appearance: Some(LibraryLook { name: "Scalar default".into(), color: [1, 2, 3], opacity: 1.0, pbr: None }),
+        appearance: Some(LibraryLook {
+            name: "Scalar default".into(),
+            color: [1, 2, 3],
+            opacity: 1.0,
+            pbr: None,
+            graph: None,
+            values: Default::default(),
+        }),
         physical_card: None,
     };
     let mut legacy_material = catalog().in_format(V1_FORMAT).unwrap();
@@ -357,4 +393,121 @@ fn rich_export_bounds_retained_definitions_before_whole_catalog_encoding() {
         doc.user_materials.push(UserMaterial { name: format!("Candidate {i}"), density: 0.8, appearance: None, physical_card: Some(record.clone()) });
     }
     assert!(Catalog::from_document(&doc, "user.test", "Original large fixture", Default::default()).unwrap_err().to_string().contains("4 MiB"));
+}
+
+/// A real 2×1 RGBA PNG (original test data).
+const PNG_2X1: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68, 65,
+    84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+/// A design with a textured graph look, a plain graph look and an unused graph.
+fn graph_design(textured: bool) -> Document {
+    use solidcraft_doc::appearance_graph::{GraphId, TextureAsset};
+    let mut doc = Document::default();
+    let copper = include_str!("../../render/tests/fixtures/material_graph/pbr-copper.json");
+    let etched = include_str!("../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
+    let tables = &mut doc.appearances.tables;
+    tables.graphs.insert(GraphId::new("copper").unwrap(), serde_json::from_str(copper).unwrap());
+    tables.graphs.insert(GraphId::new("unused").unwrap(), serde_json::from_str(copper).unwrap());
+    let mut look = Look::custom([204, 122, 80], 1.0);
+    look.name = "Graph copper".into();
+    look.graph = Some(GraphId::new("copper").unwrap());
+    doc.appearances.bodies.insert("A".into(), look);
+    if textured {
+        let (key, texture) = TextureAsset::from_bytes("mark.png", PNG_2X1).unwrap();
+        tables.graphs.insert(GraphId::new("etched").unwrap(), serde_json::from_str(etched).unwrap());
+        tables.textures.insert(key.clone(), texture);
+        let mut look = Look::custom([200, 198, 190], 1.0);
+        look.name = "Etched lid".into();
+        look.graph = Some(GraphId::new("etched").unwrap());
+        look.values.insert("mark".into(), serde_json::from_value(json!({ "texture": key })).unwrap());
+        doc.appearances.bodies.insert("B".into(), look);
+    }
+    doc
+}
+
+#[test]
+fn catalog_v3_carries_graphs_and_textures_and_only_when_needed() {
+    // Graphs without textures: plain JSON v3 with only the graphs the looks name.
+    let plain = Catalog::from_document(&graph_design(false), "user.test", "Original graph library", Default::default()).unwrap();
+    assert_eq!(plain.format, V3_FORMAT);
+    assert_eq!(plain.graphs.keys().map(|k| k.as_str()).collect::<Vec<_>>(), ["copper"]);
+    let bytes = plain.encode().unwrap();
+    assert!(bytes.starts_with(b"{"));
+    assert_eq!(Catalog::decode(&bytes).unwrap(), plain);
+    assert!(plain.clone().in_format(FORMAT).is_err(), "v2 cannot keep a graph");
+    // With textures: a container of catalog.json and blobs.
+    let rich = Catalog::from_document(&graph_design(true), "user.test", "Original graph library", Default::default()).unwrap();
+    assert_eq!(rich.textures.len(), 1);
+    let bytes = rich.encode().unwrap();
+    assert!(crate::is_design_container(&bytes));
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut header = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("container.json").unwrap(), &mut header).unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&header).unwrap(), json!({ "format": CONTAINER_FORMAT }));
+    let key = rich.textures.keys().next().unwrap().clone();
+    assert!(zip.by_name(&format!("blobs/{key}.png")).is_ok());
+    let back = Catalog::decode(&bytes).unwrap();
+    assert_eq!(back, rich);
+    assert_eq!(back.encode().unwrap(), bytes, "a second write is the same container");
+    // A library without graphs stays v2, byte for byte as before.
+    let scalar = Catalog::from_document(&Document::default(), "user.test", "Empty", Default::default()).unwrap();
+    assert_eq!(scalar.format, FORMAT);
+    assert!(!String::from_utf8(scalar.encode().unwrap()).unwrap().contains("graphs"));
+}
+
+#[test]
+fn hostile_v3_catalogs_are_refused() {
+    let rich = Catalog::from_document(&graph_design(true), "user.test", "Original graph library", Default::default()).unwrap();
+    let key = rich.textures.keys().next().unwrap().clone();
+    let good: serde_json::Value =
+        serde_json::from_slice(&Catalog::from_document(&graph_design(false), "user.test", "L", Default::default()).unwrap().encode().unwrap())
+            .unwrap();
+    for (what, change) in [
+        ("a look names a missing graph", json!({ "/graphs": {} })),
+        ("v2 with graphs", json!({ "/format": FORMAT })),
+        ("an unknown graph field", json!({ "/graphs/copper/shader": "x" })),
+    ] {
+        let mut bad = good.clone();
+        for (pointer, value) in change.as_object().unwrap() {
+            let (parent, field) = pointer.rsplit_once('/').unwrap();
+            bad.pointer_mut(parent).unwrap().as_object_mut().unwrap().insert(field.into(), value.clone());
+        }
+        assert!(Catalog::decode(&serde_json::to_vec(&bad).unwrap()).is_err(), "{what} was read");
+    }
+    // Containers: a blob that does not hash to its key, a missing blob, a wrong header.
+    let bytes = rich.encode().unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut parts = BTreeMap::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).unwrap();
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+        parts.insert(entry.name().unwrap().into_owned(), data);
+    }
+    let package = |parts: &BTreeMap<String, Vec<u8>>| {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data) in parts {
+            zip.start_file(name.as_str(), zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut zip, data).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    };
+    assert_eq!(Catalog::decode(&package(&parts)).unwrap(), rich);
+    let blob = format!("blobs/{key}.png");
+    let mut changed = parts.clone();
+    changed.get_mut(&blob).unwrap().push(0);
+    assert!(Catalog::decode(&package(&changed)).is_err(), "changed blob");
+    let mut missing = parts.clone();
+    missing.remove(&blob);
+    assert!(Catalog::decode(&package(&missing)).is_err(), "missing blob");
+    let mut header = parts.clone();
+    header.insert("container.json".into(), br#"{"format":"solidcraft-container/1"}"#.to_vec());
+    assert!(Catalog::decode(&package(&header)).is_err(), "a design container is not a library");
+    let mut inline = parts.clone();
+    let mut catalog: serde_json::Value = serde_json::from_slice(&parts["catalog.json"]).unwrap();
+    catalog["textures"][&key]["data"] = json!(solidcraft_doc::canvas::base64_encode(PNG_2X1));
+    inline.insert("catalog.json".into(), serde_json::to_vec(&catalog).unwrap());
+    assert!(Catalog::decode(&package(&inline)).is_err(), "inline data beside a blob");
 }
