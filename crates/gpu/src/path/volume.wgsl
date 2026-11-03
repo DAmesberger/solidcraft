@@ -71,7 +71,7 @@ fn volume_direct(position: vec3<f32>, incoming: vec3<f32>, remaining: u32, rng: 
             let delta=point-position;
             distance=length(delta);
             if distance<=u.lighting.x { continue; }
-            sample=EnvironmentSample(unit(delta),light.radiance.xyz,area_pdf(light,delta));
+            sample=EnvironmentSample(sc_unit(delta),light.radiance.xyz,area_pdf(light,delta));
         } else if source==count {
             if u.environment_map.w<=0.0 && !any(u.environment.xyz>vec3<f32>(0.0)) { continue; }
             sample=env_sample(rng);

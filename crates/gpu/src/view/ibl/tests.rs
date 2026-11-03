@@ -560,7 +560,7 @@ fn pbr_vertices_are_48_bytes_without_a_coat() {
     assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.0, 1.0, 0.2, 0.4, 0.6, 0.25, 0.5, 1.45]);
 }
 
-/// The viewport's clear coat (the actual `pbr_coated`, fed the coat's weight, roughness and
+/// The viewport's clear coat (the shared library's actual `sc_coated_brdf`, fed the coat's weight, roughness and
 /// IOR) against the f64 surface oracle (`OpaqueSurface::with_clear_coat`), as the path
 /// tracer's `gpu_clear_coat_brdf_matches_f64_surface_oracle` does, on any native GPU.
 #[test]
@@ -574,7 +574,7 @@ fn gpu_viewport_clear_coat_matches_f64_surface_oracle() {
 @compute @workgroup_size(1)
 fn probe_coat(@builtin(global_invocation_id) id: vec3<u32>) {
     let b = id.x * 5u;
-    result[id.x] = vec4<f32>(pbr_coated(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, vec3<f32>(0.0, 0.0, 1.0), probes[b + 3u].xyz, probes[b + 4u].xyz), 1.0);
+    result[id.x] = vec4<f32>(sc_coated_brdf(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, vec3<f32>(0.0, 0.0, 1.0), probes[b + 3u].xyz, probes[b + 4u].xyz), 1.0);
 }
 "#;
     let base = Vec3::new(0.8, 0.5, 0.2);
