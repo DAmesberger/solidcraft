@@ -310,6 +310,7 @@ pub mod update;
 mod value_step;
 pub(crate) mod view_angles;
 mod view_confirm;
+pub(crate) mod view_look;
 pub mod view_pick;
 pub mod viewport;
 mod viewport_details;
@@ -375,8 +376,10 @@ pub struct UiState {
     /// 0: shaded with edges, 1: shaded, 2: wireframe, 3: shaded with hidden edges.
     pub visual_style: u8,
     /// The modelling view's look (`view.look`): 0 Standard (the default), 1 Realistic. A view
-    /// setting kept with the preferences, never in the design. Track V draws Realistic.
+    /// setting kept with the preferences, never in the design ([`view_look`]).
     pub view_look: u8,
+    /// The Render workspace preview's own look, as [`UiState::view_look`].
+    pub render_preview_look: u8,
     /// A soft shadow on the ground under the model (seen from above).
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, axis view, home view and ground follow it.
@@ -426,6 +429,7 @@ impl Default for UiState {
             lasso_select: false,
             visual_style: 0,
             view_look: 0,
+            render_preview_look: 0,
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
@@ -1028,7 +1032,6 @@ impl SolveApp {
             "pick_bodies": self.ui.pick_bodies,
             "auto_project": self.session.auto_project,
             "visual_style": self.ui.visual_style,
-            "view_look": self.ui.view_look,
             "browser_collapsed": self.tree.collapsed,
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
@@ -1045,6 +1048,9 @@ impl SolveApp {
             "preferences": self.preferences,
             "gpu_path_setup_seconds": self.render_workspace.setup_seconds,
         });
+        if let Some(obj) = v.as_object_mut() {
+            obj.extend(view_look::prefs(self).map(|(key, value)| (key.to_owned(), value)));
+        }
         // While the Preferences dialog is open the file holds what Cancel would restore: a change
         // that was never applied must not reach disk through the periodic save, a quit or a
         // window close (#9730). One change covers every writer — desktop save and on_exit, the
@@ -1097,10 +1103,7 @@ impl SolveApp {
         if let Some(s) = v.get("visual_style").and_then(Value::as_u64) {
             self.ui.visual_style = u8::try_from(s.min(3)).unwrap_or(0);
         }
-        if v.get("view_look").and_then(Value::as_u64).is_some() {
-            // Only Standard exists until track V; a saved Realistic falls back to it.
-            self.ui.view_look = 0;
-        }
+        view_look::load(self, &v);
         // Browser folders the user opened or closed.
         let keys = |k: &str| -> std::collections::BTreeSet<String> {
             v.get(k)
@@ -1188,6 +1191,8 @@ impl SolveApp {
             render_workspace::light::validate_visibility(self, &params)?;
         }
         let params = if matches!(id, "render.start" | "render.preflight") { render_workspace::light::filter_request(self, params)? } else { params };
+        // The look is the window's: a toggle or a missing view is resolved here, against it.
+        let params = if id == "view.look" { view_look::resolve(self, params)? } else { params };
         let selected_before = self.session.selection.clone();
         let r = self.session.execute(id, &params).map_err(|e| e.to_string()).and_then(|reply| {
             render_workspace::apply_command(self, id, &reply)?;
@@ -1258,12 +1263,7 @@ impl SolveApp {
                         self.ui.visual_style = index;
                     }
                 }
-                "view.look" => {
-                    // The engine accepts only Standard until track V builds the Realistic view.
-                    if v.get("look").and_then(Value::as_str) == Some("standard") && v.get("view").and_then(Value::as_str) == Some("model") {
-                        self.ui.view_look = 0;
-                    }
-                }
+                "view.look" => view_look::apply(self, v),
                 "view.grid" => self.ui.show_grid = v.get("on").and_then(Value::as_bool).unwrap_or(!self.ui.show_grid),
                 "view.ground_shadow" => self.ui.ground_shadow = v.get("on").and_then(Value::as_bool).unwrap_or(!self.ui.ground_shadow),
                 "view.navigation_bar" => {
@@ -1692,6 +1692,12 @@ impl SolveApp {
                 | "view.previous_tab"
         ) {
             let _ = self.run(id, json!({}));
+            return;
+        }
+        if id == "view.look" {
+            if let Err(why) = self.run(id, json!({})) {
+                self.set_status(why, true);
+            }
             return;
         }
         if id == "view.layout" {
