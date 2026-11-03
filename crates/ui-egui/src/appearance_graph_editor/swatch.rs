@@ -6,8 +6,11 @@
 //! viewport's or the Render preview's uploads. It is created on the first swatch frame with the
 //! window renderer's targets, and its studio is baked off the window thread like the viewport's.
 //!
-//! Today each vertex carries the surface as an `OpaqueSurface` (the graph's base response);
-//! when the raster back end lands, the same scene carries the graph's material instead.
+//! A graph is drawn as itself: its lowered IR, the look's uniform values and its base response
+//! go into the scene's material-graph surfaces (`GpuScene::graphs`), whose generated pipeline
+//! compiles beside the window; until it has, the base response is drawn. A look without a graph
+//! is drawn as its `OpaqueSurface`. Image textures draw as their node's default until the GPU
+//! textures land (track C3).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +20,49 @@ use solidcraft_engine::geom::Vec3;
 use solidcraft_engine::render::Camera;
 use solidcraft_engine::render::surface::OpaqueSurface;
 
+use solidcraft_engine::render::material_graph::{self as mg, Constant, Ir, MaterialGraph, SurfaceSample};
+
 use crate::gpu::{Frame, GpuScene, GpuTarget, ProductLook, Renderer};
+
+/// A graph ready to draw: its IR, the look's uniform words and its base response.
+#[derive(Debug)]
+pub(crate) struct Material {
+    ir: Arc<Ir>,
+    words: Vec<u32>,
+    base: SurfaceSample,
+    key: u64,
+}
+
+impl Material {
+    /// `graph` with the look's `values`; `None` when it does not lower (the swatch then shows
+    /// the look's surface).
+    pub(crate) fn new(graph: &MaterialGraph, values: &std::collections::BTreeMap<String, Constant>) -> Option<Material> {
+        let valid = mg::validate(graph).ok()?;
+        let ir = mg::lower(&valid).ok()?;
+        let base = mg::base_sample(&valid).ok()?;
+        let words = mg::uniform_words(&ir, values).ok()?;
+        let record = solidcraft_gpu::material::base_record(&base);
+        let bytes =
+            ir.shape.0.into_iter().chain(words.iter().flat_map(|w| w.to_le_bytes())).chain(record.iter().flat_map(|x| x.to_bits().to_le_bytes()));
+        let key = fnv(bytes);
+        Some(Material { ir: Arc::new(ir), words, base, key })
+    }
+}
+
+/// What the swatch draws.
+#[derive(Clone, Debug)]
+pub(crate) enum Sample {
+    Surface(OpaqueSurface),
+    Graph(Arc<Material>),
+}
+
+fn fnv(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    h | 1
+}
 
 /// The targets the window's renderer draws with; [`crate::gpu::install`] publishes them so the
 /// swatch renderer draws into the same kind of pass.
@@ -54,9 +99,25 @@ fn v(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], p[2])
 }
 
-/// The swatch's geometry with `surface` on every vertex.
-pub(crate) fn scene(surface: OpaqueSurface) -> GpuScene {
+/// The swatch's geometry with `sample` on every vertex.
+pub(crate) fn scene(sample: &Sample) -> GpuScene {
     let mut scene = GpuScene::default();
+    match sample {
+        Sample::Surface(surface) => geometry(|p, n| scene.pbr_tri(p.to_f32(), n.to_f32(), *surface)),
+        Sample::Graph(m) => match scene.graphs.material(&m.ir, &m.words, &m.base) {
+            Ok(material) => {
+                let graphs = &mut scene.graphs;
+                // The samples sit at the origin, so object space is world space.
+                geometry(|p, n| graphs.vertex(material, p.to_f32(), n.to_f32(), p.to_f32()));
+            }
+            Err(e) => log::warn!("material swatch: {e}"),
+        },
+    }
+    scene
+}
+
+/// The sphere's and the coupon's triangles, three vertices (position, unit normal) at a time.
+fn geometry(mut vertex: impl FnMut(Vec3, Vec3)) {
     let centre = v(SPHERE_CENTRE);
     let point = |ring: u32, sector: u32| {
         let theta = std::f64::consts::PI * f64::from(ring) / f64::from(RINGS);
@@ -68,7 +129,7 @@ pub(crate) fn scene(surface: OpaqueSurface) -> GpuScene {
             let [a, b, c, d] = [point(ring, sector), point(ring + 1, sector), point(ring + 1, sector + 1), point(ring, sector + 1)];
             for tri in [[a, b, c], [a, c, d]] {
                 for n in tri {
-                    scene.pbr_tri((centre + n).to_f32(), n.to_f32(), surface);
+                    vertex(centre + n, n);
                 }
             }
         }
@@ -83,7 +144,7 @@ pub(crate) fn scene(surface: OpaqueSurface) -> GpuScene {
     let mut quad = |p: [Vec3; 4], n: Vec3| {
         for tri in [[p[0], p[1], p[2]], [p[0], p[2], p[3]]] {
             for q in tri {
-                scene.pbr_tri(q.to_f32(), n.to_f32(), surface);
+                vertex(q, n);
             }
         }
     };
@@ -93,7 +154,6 @@ pub(crate) fn scene(surface: OpaqueSurface) -> GpuScene {
     quad([corner(1.0, -1.0, t), corner(1.0, 1.0, t), corner(1.0, 1.0, 0.0), corner(1.0, -1.0, 0.0)], u);
     quad([corner(-1.0, 1.0, t), corner(-1.0, -1.0, t), corner(-1.0, -1.0, 0.0), corner(-1.0, 1.0, 0.0)], -u);
     quad([corner(1.0, 1.0, t), corner(-1.0, 1.0, t), corner(-1.0, 1.0, 0.0), corner(1.0, 1.0, 0.0)], w);
-    scene
 }
 
 /// The swatch camera: from the front, a little above, framing both samples.
@@ -104,18 +164,22 @@ pub(crate) fn camera() -> Camera {
 /// Scene radius for the clipping planes.
 pub(crate) const RADIUS: f64 = 3.0;
 
-/// A key for the renderer's upload cache: equal surfaces share an upload.
-pub(crate) fn key(surface: OpaqueSurface) -> u64 {
-    let coat = surface.clear_coat().map_or([0.0; 3], |c| [c.weight(), c.roughness(), c.ior()]);
-    let parts =
-        surface.base_color().to_f32().into_iter().chain([surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32]);
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for x in parts.chain(coat.map(|x| x as f32)) {
-        for b in x.to_bits().to_le_bytes() {
-            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+/// A key for the renderer's upload cache: equal samples share an upload.
+pub(crate) fn key(sample: &Sample) -> u64 {
+    match sample {
+        Sample::Graph(m) => m.key,
+        Sample::Surface(surface) => {
+            let coat = surface.clear_coat().map_or([0.0; 3], |c| [c.weight(), c.roughness(), c.ior()]);
+            let parts = surface
+                .base_color()
+                .to_f32()
+                .into_iter()
+                .chain([surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32])
+                .chain(coat.map(|x| x as f32));
+            // Distinct from every graph key's low bit pattern only by chance; both are FNV.
+            fnv(parts.flat_map(|x| x.to_bits().to_le_bytes()).chain([0xff]))
         }
     }
-    h | 1
 }
 
 /// What the swatch shows: the slot it uploads from and its key.
@@ -169,13 +233,13 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
 }
 
 /// Paint the swatch of `surface` into `rect`. The scene is rebuilt only when the surface changes.
-pub(crate) fn paint(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, surface: OpaqueSurface) {
-    let key = key(surface);
+pub(crate) fn paint(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, sample: Sample) {
+    let key = key(&sample);
     let slot = ui.ctx().data_mut(|d| {
         let state = d.get_temp_mut_or_default::<Slot>(id);
         if state.key != key {
             if let Ok(mut s) = state.slot.lock() {
-                *s = Some(scene(surface));
+                *s = Some(scene(&sample));
             }
             state.key = key;
         }
@@ -184,10 +248,14 @@ pub(crate) fn paint(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, surface: Opaq
     let ppp = ui.ctx().pixels_per_point();
     let frame = frame(slot, key, [rect.width() * ppp, rect.height() * ppp]);
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, SwatchCallback(frame)));
-    if !studio_ready() {
+    // Repaint until the studio is baked and the material's pipeline has compiled.
+    if !studio_ready() || MATERIAL_PENDING.load(Ordering::Relaxed) {
         ui.ctx().request_repaint();
     }
 }
+
+/// Whether the swatch's material pipeline was still compiling in the last frame.
+static MATERIAL_PENDING: AtomicBool = AtomicBool::new(false);
 
 struct SwatchCallback(Frame);
 
@@ -215,6 +283,7 @@ impl egui_wgpu::CallbackTrait for SwatchCallback {
             STUDIO_READY.store(swatch.renderer.has_studio_environment(look.studio), Ordering::Relaxed);
         }
         swatch.renderer.prepare(device, queue, encoder, &self.0);
+        MATERIAL_PENDING.store(swatch.renderer.material_stats().pending > 0, Ordering::Relaxed);
         Vec::new()
     }
 

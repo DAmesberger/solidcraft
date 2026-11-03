@@ -3,10 +3,13 @@
 //! body or face in the viewport, or onto a body's row in the Browser, applies at once; Apply
 //! (and OK) gives the picked objects the current look.
 
+use std::collections::BTreeMap;
+
 use egui::Color32;
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::pbr_appearance::PbrParameters;
+use solidcraft_engine::render::material_graph::Constant as GraphConstant;
 
 use crate::SolveApp;
 use crate::dialogs::{Kind, combo};
@@ -23,6 +26,21 @@ pub struct Look {
     pub color: [u8; 3],
     pub opacity: f64,
     pub pbr: Option<PbrParameters>,
+    /// The material graph the look names, with its own values of the graph's inputs.
+    pub graph: Option<String>,
+    pub values: BTreeMap<String, GraphConstant>,
+}
+
+/// A look's graph and values as `appearance.list` gives them.
+fn graph_of(x: &Value) -> (Option<String>, BTreeMap<String, GraphConstant>) {
+    let graph = x.get("graph").and_then(Value::as_str).filter(|g| !g.is_empty() && g.len() <= 64).map(str::to_string);
+    let values = x.get("values").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    (graph, values)
+}
+
+/// The editor's link for a look that names a graph.
+fn link_of(graph: Option<&String>, values: &BTreeMap<String, GraphConstant>) -> Option<crate::appearance_graph_editor::Link> {
+    graph.map(|g| crate::appearance_graph_editor::Link { graph: g.clone(), values: values.clone() })
 }
 
 /// Transient library admission metadata, never saved as a second catalog.
@@ -69,6 +87,8 @@ fn library_look(x: &Value) -> Option<Look> {
         color: parse_color(x.get("color")?)?,
         opacity: x.get("opacity").and_then(Value::as_f64).unwrap_or(1.0),
         pbr: x.get("pbr").and_then(|p| serde_json::from_value(p.clone()).ok()),
+        graph: graph_of(x).0,
+        values: graph_of(x).1,
     })
 }
 
@@ -85,6 +105,7 @@ fn choose_look(k: &mut Ap, look: &Look) -> Result<(), String> {
     k.preset_id = look.preset.as_ref().map(|p| p.id.clone());
     k.note = look.preset.as_ref().map(|p| p.preview_note.clone()).filter(|note| !note.is_empty());
     k.remove_override = false;
+    k.material.link_to(link_of(look.graph.as_ref(), &look.values));
     Ok(())
 }
 
@@ -111,8 +132,16 @@ fn matches_library_filter(look: &Look, category: Option<&str>, query: &str, only
 
 /// Built-in looks, used until the engine offers a library (`appearance.library`).
 pub(crate) fn builtin() -> Vec<Look> {
-    let l =
-        |cat: &str, name: &str, c: [u8; 3], o: f64| Look { preset: None, name: name.into(), category: cat.into(), color: c, opacity: o, pbr: None };
+    let l = |cat: &str, name: &str, c: [u8; 3], o: f64| Look {
+        preset: None,
+        name: name.into(),
+        category: cat.into(),
+        color: c,
+        opacity: o,
+        pbr: None,
+        graph: None,
+        values: BTreeMap::new(),
+    };
     vec![
         l("Metal", "Aluminum - Satin", [196, 199, 204], 1.0),
         l("Metal", "Steel - Brushed", [160, 164, 170], 1.0),
@@ -218,6 +247,8 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
                 .and_then(|b| app.session.doc.face_colors(b).into_iter().find(|(i, _)| i == index).map(|(_, look)| look).or_else(|| body_look(b))),
             _ => None,
         });
+        let graph = existing.as_ref().and_then(|l| l.graph.as_ref().map(|g| g.as_str().to_string()));
+        let values = existing.as_ref().map(|l| l.values.clone()).unwrap_or_default();
         (
             Kind::Appearance(Ap {
                 preset_id: None,
@@ -234,7 +265,12 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
                 remove_override: false,
                 applied: None,
                 note: None,
-                material: Default::default(),
+                material: {
+                    // A look that names a graph opens the editor on that graph.
+                    let mut editor = Box::<crate::appearance_graph_editor::Editor>::default();
+                    editor.link_to(link_of(graph.as_ref(), &values));
+                    editor
+                },
             }),
             vec![SelInput::new("Objects", if faces { FACES } else { BODIES }, true)],
         )
@@ -296,6 +332,18 @@ pub(super) fn selected_params(k: &Ap, items: &[Sel]) -> Option<Value> {
     }?;
     // All entry points apply the complete owned response, including explicit clearing.
     p["pbr"] = json!(k.pbr);
+    // A look that names a graph: its colour comes from the graph, and it has no PBR of its own.
+    if let Some(link) = &k.material.link {
+        p["graph"] = json!(link.graph);
+        p["pbr"] = Value::Null;
+        if !link.values.is_empty() {
+            p["values"] = json!(link.values);
+        }
+        if let Some(object) = p.as_object_mut() {
+            object.remove("appearance");
+        }
+        return Some(p);
+    }
     if let Some(id) = &k.preset_id {
         if let Some(object) = p.as_object_mut() {
             object.remove("name");
@@ -350,6 +398,8 @@ fn in_design(app: &mut SolveApp) -> Vec<(Look, usize)> {
                         color: parse_color(x.get("color")?)?,
                         opacity: x.get("opacity").and_then(Value::as_f64).unwrap_or(1.0),
                         pbr: x.get("pbr").and_then(|p| serde_json::from_value(p.clone()).ok()),
+                        graph: graph_of(x).0,
+                        values: graph_of(x).1,
                     },
                     count(x, "bodies") + count(x, "faces") + count(x, "components"),
                 ))
@@ -358,7 +408,16 @@ fn in_design(app: &mut SolveApp) -> Vec<(Look, usize)> {
     }
     let mut out: Vec<(Look, usize)> = Vec::new();
     for l in app.session.doc.appearances.bodies.values() {
-        let look = Look { preset: None, name: l.name.clone(), category: "In This Design".into(), color: l.color, opacity: l.opacity, pbr: l.pbr };
+        let look = Look {
+            preset: None,
+            name: l.name.clone(),
+            category: "In This Design".into(),
+            color: l.color,
+            opacity: l.opacity,
+            pbr: l.pbr,
+            graph: l.graph.as_ref().map(|g| g.as_str().to_string()),
+            values: l.values.clone(),
+        };
         match out.iter_mut().find(|(x, _)| *x == look) {
             Some(e) => e.1 += 1,
             None => out.push((look, 1)),
@@ -407,6 +466,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
             detach_preset(k);
             k.look = None;
             k.remove_override = false;
+            k.material.unlink();
         }
         ui_kit::text(ui, &k.look.clone().unwrap_or_else(|| hex(k.color)), ui_kit::Text::MonoCell);
     });
@@ -422,6 +482,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
     crate::scenario::publish_handle("appearance:pbr", toggle.rect.center());
     if toggle.changed() {
         detach_preset(k);
+        k.material.unlink();
         k.pbr = enabled.then(PbrParameters::default);
         if enabled {
             k.opacity = 1.0;
@@ -442,18 +503,26 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
             if response.changed() {
                 detach_preset(k);
                 k.remove_override = false;
+                k.material.unlink();
             }
         }
         if let Ok(parameters) = PbrParameters::new(metallic, roughness, ior) {
             k.pbr = Some(parameters);
         }
     }
-    let look = k.pbr.unwrap_or_default().surface(k.color).ok();
-    crate::appearance_graph_editor::section(app, ui, &mut k.material, look);
     let picked: Vec<Sel> = inputs.first().map(|i| i.items.clone()).unwrap_or_default();
+    let context = look_context(k, &picked);
+    let outcome = crate::appearance_graph_editor::section(app, ui, &mut k.material, &context);
+    if outcome == Some(crate::appearance_graph_editor::Outcome::Apply) {
+        // The look now names the graph: it has no colour recipe or PBR of its own.
+        detach_preset(k);
+        k.pbr = None;
+        k.look = None;
+    }
     ui.horizontal_wrapped(|ui| {
         let has_target = !picked.is_empty() || k.component.is_some();
-        if ui_kit::button(ui, "Apply to selection", ui_kit::Button::Enabled(has_target)).clicked()
+        let use_graph = outcome == Some(crate::appearance_graph_editor::Outcome::Apply) && has_target;
+        if (ui_kit::button(ui, "Apply to selection", ui_kit::Button::Enabled(has_target)).clicked() || use_graph)
             && let Some(p) = selected_params(k, &picked)
         {
             k.remove_override = false;
@@ -562,6 +631,13 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
             if let Some(pbr) = look.pbr {
                 p["pbr"] = json!(pbr);
             }
+            if let Some(graph) = &look.graph {
+                p["graph"] = json!(graph);
+                p["pbr"] = Value::Null;
+                if !look.values.is_empty() {
+                    p["values"] = json!(look.values);
+                }
+            }
             if let Some(id) = &k.preset_id {
                 if let Some(object) = p.as_object_mut() {
                     object.remove("name");
@@ -581,6 +657,31 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
         ui_kit::text(ui, n, ui_kit::Text::Report("appearance_status", false));
     }
     false
+}
+
+/// What the Material graph section needs to know about the look being edited.
+fn look_context(k: &Ap, picked: &[Sel]) -> crate::appearance_graph_editor::LookContext {
+    let mut look = json!({"name": k.look.clone().unwrap_or_else(|| hex(k.color)), "color": hex(k.color), "opacity": k.opacity});
+    if let Some(pbr) = k.pbr {
+        look["pbr"] = json!(pbr);
+    }
+    // Convert rewrites the picked bodies' (or the component's) overrides with that look.
+    let mut bodies: Vec<String> = picked
+        .iter()
+        .filter_map(|s| match s {
+            Sel::Body { name } => Some(name.clone()),
+            Sel::Face { body, .. } => Some(body.clone()),
+            _ => None,
+        })
+        .collect();
+    bodies.dedup();
+    let scope = match &k.component {
+        Some(component) => Some(json!({"components": [component]})),
+        None if !bodies.is_empty() => Some(json!({"bodies": bodies})),
+        None => None,
+    };
+    let surface = k.pbr.unwrap_or_default().surface(k.color).ok();
+    crate::appearance_graph_editor::LookContext { look, scope, surface }
 }
 
 fn target_names(targets: &[Sel]) -> String {
