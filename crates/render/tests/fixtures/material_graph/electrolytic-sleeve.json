@@ -87,7 +87,7 @@
      "from": "stripe"
     },
     "b": {
-     "from": "text"
+     "from": "text.value"
     }
    }
   },
