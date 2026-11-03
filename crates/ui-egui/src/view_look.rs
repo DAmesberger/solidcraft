@@ -94,6 +94,14 @@ pub(crate) fn product_look(app: &SolveApp, view: &str) -> Option<crate::gpu::Pro
     (current(app, view) == REALISTIC && unavailable(app).is_none()).then(crate::gpu::ProductLook::default)
 }
 
+/// [`product_look`] with the studio's room fitted to the shown subject's `bounds`, so its lights
+/// stand about the subject and reflections are box-projected (`StudioRoom::around`). An empty box
+/// leaves the studio at infinity.
+pub(crate) fn product_look_around(app: &SolveApp, view: &str, bounds: &solidcraft_engine::geom::Aabb3) -> Option<crate::gpu::ProductLook> {
+    let room = (!bounds.is_empty()).then(|| solidcraft_gpu::view::StudioRoom::around(bounds.min.to_f32(), bounds.max.to_f32())).flatten();
+    product_look(app, view).map(|look| crate::gpu::ProductLook { room, ..look })
+}
+
 /// The preference entries [`SolveApp::prefs`] writes.
 pub(crate) fn prefs(app: &SolveApp) -> [(&'static str, Value); 2] {
     [("view_look", json!(app.ui.view_look)), ("render_preview_look", json!(app.ui.render_preview_look))]

@@ -82,7 +82,9 @@ fn parts(dir: &Path, prefix: &str, out: &mut String, mods: &mut String) {
         assert!(text.trim_start().starts_with("//!"), "{}: start a format change with a `//!` note", path.display());
         let module = format!("{prefix}_{}", name.replace('-', "_"));
         let step = if text.contains("fn step(") { format!("Some({module}::step)") } else { "None".into() };
-        let _ = writeln!(out, "        Part {{ name: {name:?}, step: {step} }},");
+        // A change may say which files use it (`pub const USED`); one that doesn't is always used.
+        let used = if text.contains("pub const USED:") { format!("Some({module}::USED)") } else { "None".into() };
+        let _ = writeln!(out, "        Part {{ name: {name:?}, step: {step}, used: {used} }},");
         let _ = writeln!(mods, "#[path = {:?}]\nmod {module};", path.display().to_string());
     }
 }

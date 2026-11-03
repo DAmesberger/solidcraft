@@ -22,6 +22,8 @@ struct U {
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
     look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
     units: vec4<f32>,  // x: world units per millimetre (`Frame::units_per_mm`), the scale of material lengths
+    look_room: vec4<f32>, // the product look's room (`ibl::StudioRoom`): subject centre x, y, ground z, extent (0: none)
+    look_foot: vec4<f32>, // its floor-contact ellipse radii x, y (world units)
     sky: vec4<f32>,    // xyz = world up; w = 1: shade in linear light with a sky fill (#7974)
 };
 
@@ -656,8 +658,8 @@ fn face_lit(i: TOut, visibility: f32) -> vec4<f32> {
     if (look_on() && length(i.n) > 0.5) {
         var view = u.back.xyz;
         if (u.eye.w > 0.5) { view = u.eye.xyz - i.wp; }
-        let v = pbr_unit(view);
-        var n = pbr_unit(i.n);
+        let v = sc_unit(view);
+        var n = sc_unit(i.n);
         if (dot(n, v) < 0.0) { n = -n; }
         let surface = surface_from_opaque(srgb_decode(i.c.rgb), vec3<f32>(0.0, 0.5, 1.5), vec3<f32>(0.0, 1.0, 1.0), n);
         let shaded = pbr_shade(surface, PbrFragment(i.pos, i.wp, n, v, vec3<f32>(0.0)));

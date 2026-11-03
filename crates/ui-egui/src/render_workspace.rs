@@ -2208,7 +2208,7 @@ fn paint_product(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, camera
         }
         // The preview's own look (`view.look` with `view: render_preview`); the window repaints
         // until the studio is baked.
-        let product_look = crate::view_look::product_look(app, "render_preview");
+        let product_look = crate::view_look::product_look_around(app, "render_preview", &scene.bounds);
         if product_look.is_some() && !crate::gpu::studio_ready() {
             ui.ctx().request_repaint();
         }

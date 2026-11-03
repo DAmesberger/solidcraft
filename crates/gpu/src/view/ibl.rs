@@ -1,8 +1,10 @@
-//! The opt-in *product look* of the real-time PBR preview (`pbr::SOURCE`): a procedural studio
-//! (softboxes, a gradient cyclorama and a dark floor) baked on the CPU into a small prefiltered
-//! cube map and nine spherical-harmonic irradiance terms, split-sum specular with an analytic
-//! environment-BRDF fit and multiple-scattering compensation, Khronos PBR Neutral tone mapping
-//! with exposure, and a ±1 LSB triangular dither.
+//! The opt-in *product look* of the real-time PBR preview (`pbr::SOURCE`): a studio built from one
+//! of upstream's starter lighting rigs ([`rig`]: graded area lights in a finite room sized to the
+//! scene, over a cyclorama) baked on the CPU into a small prefiltered cube map, with nine
+//! spherical-harmonic irradiance terms of the cyclorama and the rig's lights as direct lights;
+//! box-projected split-sum specular with an analytic environment-BRDF fit and multiple-scattering
+//! compensation, a calibrated exposure per studio, Khronos PBR Neutral tone mapping and a ±1 LSB
+//! triangular dither.
 //!
 //! Nothing changes unless a frame names a [`ProductLook`] (`Frame::product_look`): the fixed
 //! studio and the per-channel Reinhard preview stay the default (docs/render-opaque-pbr.md). The
@@ -26,20 +28,24 @@ pub(crate) const ENV_SIZE: u32 = 128;
 pub(crate) const ENV_MIPS: u32 = 6;
 /// GGX samples per texel of each rough level (filtered importance sampling keeps them smooth).
 const SPECULAR_SAMPLES: u32 = 64;
-/// The source level the irradiance terms are projected from (32 × 32 texels a face).
+/// The irradiance terms are projected from the cyclorama at this level's size (32 × 32 texels a
+/// face).
 const SH_LEVEL: usize = 2;
-/// The environment uniform: nine irradiance terms and (largest level, 0, 0, 0).
-const ENV_UNIFORM_SIZE: u64 = 10 * 16;
+/// The environment uniform: nine irradiance terms, (largest level, light count, 0, 0), the room
+/// (half size, floor, ceiling, 0) and four lights of four `vec4`s ([`StudioEnvironment::uniform_bytes`]).
+const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
 
-/// A procedural studio the product look lights with.
+/// A studio the product look lights with: each binds one of upstream's starter lighting rigs
+/// (`assets/render/starter/lighting/`) over a cyclorama.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StudioPreset {
-    /// Four softboxes (key, fill, an overhead strip and a rim strip) over a light grey cyclorama.
+    /// `STU-002`, three-point product studio: a graded key above front-left, a fill card
+    /// front-right and a strip rim behind. The Realistic default.
     #[default]
     Product,
-    /// Two large softboxes and a bright cyclorama: low contrast, soft highlights.
+    /// `STU-004`: two broad side panels and a bright cyclorama: low contrast, soft highlights.
     Soft,
-    /// Two tall strip lights and an overhead panel in a dark studio: crisp highlights on metal.
+    /// `STU-005`: two tall strips and a low front fill in a darker room: crisp highlights on metal.
     Contrast,
 }
 
@@ -57,6 +63,59 @@ impl StudioPreset {
 
     pub fn from_id(id: u32) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.id() == id)
+    }
+
+    /// The upstream starter rig the studio binds (`STU-*`).
+    pub fn rig_id(self) -> &'static str {
+        studio(self).preset
+    }
+}
+
+/// Where the studio stands: the scene's ground and extent, so the rig's lights sit in multiples of
+/// the subject's extent B about it and reflections are projected against a room sized to it
+/// ([`rig`]). Fit it once from the scene's bounds ([`StudioRoom::around`]), not per view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StudioRoom {
+    /// The subject's centre across (x, y), and the ground's height (z), in world units.
+    pub origin: [f32; 3],
+    /// The subject's extent B (its bounding box's largest side), in world units.
+    pub extent: f32,
+    /// The radii along x and y of the contact darkening the floor shows under the subject in
+    /// reflections, in world units: the viewport's ground-shadow ellipse ([`StudioRoom::around`]).
+    pub footprint: [f32; 2],
+}
+
+impl StudioRoom {
+    /// The room around a subject's bounding box (`None` for an empty, non-finite or flat-to-a-point
+    /// box). The ground is the box's bottom; the footprint is the ellipse the viewport's ground
+    /// shadow draws (0.62 of each side plus 0.15 of the height).
+    pub fn around(min: [f32; 3], max: [f32; 3]) -> Option<Self> {
+        if !min.iter().chain(&max).all(|v| v.is_finite()) {
+            return None;
+        }
+        let size: [f32; 3] = std::array::from_fn(|k| max[k] - min[k]);
+        let extent = size[0].max(size[1]).max(size[2]);
+        if !(extent > 0.0) || size.iter().any(|s| *s < 0.0) || !extent.is_finite() {
+            return None;
+        }
+        StudioRoom {
+            origin: [0.5 * (min[0] + max[0]), 0.5 * (min[1] + max[1]), min[2]],
+            extent,
+            footprint: [0.62 * size[0] + 0.15 * size[2], 0.62 * size[1] + 0.15 * size[2]],
+        }
+        .sanitized()
+    }
+
+    /// Largest coordinate, extent and footprint a room keeps (world units); the smallest extent.
+    pub const MAX_SIZE: f32 = 1e12;
+    pub const MIN_EXTENT: f32 = 1e-6;
+
+    /// The room as drawn: `None` unless every value is finite and within [`StudioRoom::MAX_SIZE`],
+    /// the extent at least [`StudioRoom::MIN_EXTENT`] and the footprint not negative.
+    pub fn sanitized(self) -> Option<Self> {
+        let bounded = self.origin.iter().chain(&self.footprint).all(|v| v.is_finite() && v.abs() <= Self::MAX_SIZE);
+        let extent = (Self::MIN_EXTENT..=Self::MAX_SIZE).contains(&self.extent);
+        (bounded && extent && self.footprint.iter().all(|f| *f >= 0.0)).then_some(self)
     }
 }
 
@@ -77,11 +136,14 @@ pub struct ProductLook {
     pub rotation: f32,
     /// Scale of the studio's radiance (0: only the product lights).
     pub intensity: f32,
+    /// Where the studio stands. `None`: the studio at infinity, its lights as seen from the
+    /// subject's centre, and reflections without box projection.
+    pub room: Option<StudioRoom>,
 }
 
 impl Default for ProductLook {
     fn default() -> Self {
-        ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0 }
+        ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0, room: None }
     }
 }
 
@@ -96,12 +158,27 @@ impl ProductLook {
         [look.exposure, look.intensity, look.rotation, 1.0]
     }
 
+    /// The room's uniform: (origin x, y, ground z, extent B), then (footprint radii x, y, 0, 0);
+    /// all zero without a room.
+    pub(crate) fn room_uniform(&self) -> [f32; 8] {
+        match self.room.and_then(StudioRoom::sanitized) {
+            Some(r) => [r.origin[0], r.origin[1], r.origin[2], r.extent, r.footprint[0], r.footprint[1], 0.0, 0.0],
+            None => [0.0; 8],
+        }
+    }
+
     /// The look the renderer draws: out-of-range values clamped, non-finite ones replaced by the
     /// defaults, the rotation within [0, 2π).
     pub fn sanitized(self) -> Self {
         let scale = |x: f32| if x.is_finite() { x.clamp(0.0, Self::MAX_SCALE) } else { 1.0 };
         let rotation = if self.rotation.is_finite() { self.rotation.rem_euclid(std::f32::consts::TAU) } else { 0.0 };
-        ProductLook { exposure: scale(self.exposure), studio: self.studio, rotation, intensity: scale(self.intensity) }
+        ProductLook {
+            exposure: scale(self.exposure),
+            studio: self.studio,
+            rotation,
+            intensity: scale(self.intensity),
+            room: self.room.and_then(StudioRoom::sanitized),
+        }
     }
 }
 
@@ -136,111 +213,12 @@ fn mix(a: Rgb, b: Rgb, t: f64) -> Rgb {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
-/// A rectangular light seen from the studio's centre: its centre direction (degrees: azimuth
-/// from +X toward +Y, elevation above the horizon), its angular half extents across and along the
-/// elevation (degrees), and its relative radiance (linear RGB).
-struct Softbox {
-    azimuth: f64,
-    elevation: f64,
-    half_width: f64,
-    half_height: f64,
-    radiance: Rgb,
-}
-
-/// A procedural studio: up to four softboxes over a cyclorama that runs from `horizon` to
-/// `zenith` overhead and sweeps down into a dark `floor` below the horizon. Radiance is relative
-/// (no photometric calibration); [`ProductLook::intensity`] scales it.
-struct Studio {
-    boxes: &'static [Softbox],
-    zenith: Rgb,
-    horizon: Rgb,
-    floor: Rgb,
-}
-
-const WARM: Rgb = [1.0, 0.97, 0.93];
-const NEUTRAL: Rgb = [1.0, 1.0, 1.0];
-const COOL: Rgb = [0.93, 0.97, 1.0];
-
-const fn scaled(c: Rgb, s: f64) -> Rgb {
-    [c[0] * s, c[1] * s, c[2] * s]
-}
-
-const PRODUCT: Studio = Studio {
-    boxes: &[
-        Softbox { azimuth: 135.0, elevation: 40.0, half_width: 22.0, half_height: 16.0, radiance: scaled(WARM, 4.0) },
-        Softbox { azimuth: 20.0, elevation: 25.0, half_width: 18.0, half_height: 14.0, radiance: scaled(NEUTRAL, 1.4) },
-        Softbox { azimuth: 270.0, elevation: 72.0, half_width: 34.0, half_height: 5.0, radiance: scaled(NEUTRAL, 3.0) },
-        Softbox { azimuth: 300.0, elevation: 18.0, half_width: 5.0, half_height: 20.0, radiance: scaled(COOL, 3.0) },
-    ],
-    zenith: [0.05, 0.05, 0.055],
-    horizon: [0.26, 0.26, 0.27],
-    floor: [0.02, 0.02, 0.02],
-};
-
-const SOFT: Studio = Studio {
-    boxes: &[
-        Softbox { azimuth: 120.0, elevation: 45.0, half_width: 35.0, half_height: 25.0, radiance: scaled(WARM, 2.0) },
-        Softbox { azimuth: 300.0, elevation: 35.0, half_width: 35.0, half_height: 25.0, radiance: scaled(NEUTRAL, 1.3) },
-    ],
-    zenith: [0.22, 0.22, 0.23],
-    horizon: [0.45, 0.45, 0.46],
-    floor: [0.06, 0.06, 0.06],
-};
-
-const CONTRAST: Studio = Studio {
-    boxes: &[
-        Softbox { azimuth: 150.0, elevation: 30.0, half_width: 6.0, half_height: 30.0, radiance: scaled(NEUTRAL, 7.0) },
-        Softbox { azimuth: 330.0, elevation: 30.0, half_width: 6.0, half_height: 30.0, radiance: scaled(COOL, 5.0) },
-        Softbox { azimuth: 0.0, elevation: 80.0, half_width: 20.0, half_height: 10.0, radiance: scaled(WARM, 2.0) },
-    ],
-    zenith: [0.01, 0.01, 0.012],
-    horizon: [0.04, 0.04, 0.045],
-    floor: [0.005, 0.005, 0.005],
-};
-
-fn studio(preset: StudioPreset) -> &'static Studio {
+fn studio(preset: StudioPreset) -> &'static rig::Rig {
     match preset {
-        StudioPreset::Product => &PRODUCT,
-        StudioPreset::Soft => &SOFT,
-        StudioPreset::Contrast => &CONTRAST,
+        StudioPreset::Product => &rig::PRODUCT,
+        StudioPreset::Soft => &rig::SOFT,
+        StudioPreset::Contrast => &rig::CONTRAST,
     }
-}
-
-/// Softbox edges fade over this angle (radians), about a texel of the sharpest level.
-const EDGE: f64 = 0.75 * PI / 180.0;
-
-/// The studio's radiance arriving from unit direction `d` (Z up, unrotated).
-fn studio_radiance(studio: &Studio, d: Rgb) -> Rgb {
-    let z = d[2].clamp(-1.0, 1.0);
-    let mut c = if z >= 0.0 {
-        mix(studio.horizon, studio.zenith, smoothstep(0.0, 1.0, z.sqrt()))
-    } else {
-        // The cyclorama's sweep: from the wall's colour at the horizon into the floor.
-        mix(studio.horizon, studio.floor, smoothstep(0.0, 0.2, -z))
-    };
-    for b in studio.boxes {
-        let (sa, ca) = b.azimuth.to_radians().sin_cos();
-        let (se, ce) = b.elevation.to_radians().sin_cos();
-        let centre = [ca * ce, sa * ce, se];
-        let across = unit(cross([0.0, 0.0, 1.0], centre));
-        let along = cross(centre, across);
-        let forward = dot(d, centre);
-        if forward <= 0.0 {
-            continue;
-        }
-        let x = dot(d, across).atan2(forward);
-        let y = dot(d, along).atan2(forward);
-        let (w, h) = (b.half_width.to_radians(), b.half_height.to_radians());
-        let inside = (1.0 - smoothstep(w - EDGE, w + EDGE, x.abs())) * (1.0 - smoothstep(h - EDGE, h + EDGE, y.abs()));
-        if inside <= 0.0 {
-            continue;
-        }
-        // A diffuser is a little brighter at its centre.
-        let (u, v) = ((x / w).clamp(-1.0, 1.0), (y / h).clamp(-1.0, 1.0));
-        let profile = 0.85 + 0.15 * (1.0 - u * u) * (1.0 - v * v);
-        add(&mut c, b.radiance, inside * profile);
-    }
-    c
 }
 
 /// The unit direction through cube face `face` (+X, −X, +Y, −Y, +Z, −Z) at face coordinates
@@ -342,25 +320,57 @@ fn hammersley(i: u32, n: u32) -> (f64, f64) {
 pub struct StudioEnvironment {
     preset: StudioPreset,
     levels: Vec<Level>,
-    /// Irradiance E(n) = Σ k_i p_i(n) over p = (1, x, y, z, xy, yz, xz, z², x² − y²).
+    /// The rig's lights (none for a test furnace), at [`StudioEnvironment::calibration`].
+    lights: &'static [rig::RigLight],
+    /// The cyclorama's irradiance E(n) = Σ k_i p_i(n) over p = (1, x, y, z, xy, yz, xz, z²,
+    /// x² − y²); the rig's lights reach diffuse surfaces directly instead ([`rig`]).
     irradiance: [Rgb; 9],
+    /// The scale the studio's radiance is baked at ([`rig::Rig::calibration`]).
+    calibration: f64,
 }
 
 /// Where a bake's radiance comes from.
 #[derive(Clone, Copy)]
 enum Radiance {
-    Studio(&'static Studio),
+    /// A rig at its calibrated scale, with its key white ([`rig::Rig::key_white`]).
+    Studio(&'static rig::Rig, f64, f64),
     /// The same radiance everywhere (the white furnace of the tests).
     #[cfg(test)]
     Constant(f64),
 }
 
 impl Radiance {
+    /// Everything seen from the studio's centre along `d`: what reflections show.
     fn at(self, d: Rgb) -> Rgb {
         match self {
-            Radiance::Studio(s) => studio_radiance(s, d),
+            Radiance::Studio(r, scale, white) => r.radiance_in(d, white).map(|c| c * scale),
             #[cfg(test)]
             Radiance::Constant(c) => [c; 3],
+        }
+    }
+
+    /// The radiance without the rig's lights (which diffuse shading takes directly).
+    fn ambient(self, d: Rgb) -> Rgb {
+        match self {
+            Radiance::Studio(r, scale, white) => r.ambient_in(d, white).map(|c| c * scale),
+            #[cfg(test)]
+            Radiance::Constant(c) => [c; 3],
+        }
+    }
+
+    fn calibration(self) -> f64 {
+        match self {
+            Radiance::Studio(_, scale, _) => scale,
+            #[cfg(test)]
+            Radiance::Constant(_) => 1.0,
+        }
+    }
+
+    fn lights(self) -> &'static [rig::RigLight] {
+        match self {
+            Radiance::Studio(r, _, _) => r.lights,
+            #[cfg(test)]
+            Radiance::Constant(_) => &[],
         }
     }
 }
@@ -397,7 +407,8 @@ impl StudioBake {
     pub const FRAME_WORK: usize = 16_384;
 
     pub fn new(preset: StudioPreset) -> Self {
-        Self::with_radiance(preset, Radiance::Studio(studio(preset)))
+        let rig = studio(preset);
+        Self::with_radiance(preset, Radiance::Studio(rig, rig.calibration(), rig.key_white()))
     }
 
     fn with_radiance(preset: StudioPreset, radiance: Radiance) -> Self {
@@ -440,7 +451,9 @@ impl StudioBake {
 
     /// The baked studio, once [`StudioBake::is_done`] (`None` before).
     pub fn finish(self) -> Option<StudioEnvironment> {
-        self.is_done().then_some(StudioEnvironment { preset: self.preset, levels: self.levels, irradiance: self.irradiance })
+        let (preset, calibration) = (self.preset, self.radiance.calibration());
+        let lights = self.radiance.lights();
+        self.is_done().then_some(StudioEnvironment { preset, levels: self.levels, irradiance: self.irradiance, calibration, lights })
     }
 
     /// One row of the level in progress; its work units.
@@ -489,7 +502,7 @@ impl StudioBake {
                 let next = last.halved();
                 source.push(next);
             }
-            self.irradiance = StudioEnvironment::project(source.get(SH_LEVEL).or(source.last()));
+            self.irradiance = StudioEnvironment::project(Some(&self.ambient_level()));
             if let Some(sharp) = source.first() {
                 self.levels.push(sharp.clone());
             }
@@ -497,6 +510,25 @@ impl StudioBake {
             self.row = 0;
         }
         size * Self::SHARP_SAMPLES
+    }
+}
+
+impl StudioBake {
+    /// The radiance without the rig's lights at the irradiance level's resolution, one sample at
+    /// each texel's centre: what the irradiance terms are projected from.
+    fn ambient_level(&self) -> Level {
+        let size = (ENV_SIZE as usize >> SH_LEVEL).max(1);
+        let n = size as f64;
+        let mut texels = Vec::with_capacity(6 * size * size);
+        for face in 0..6 {
+            for y in 0..size {
+                for x in 0..size {
+                    let d = face_direction(face, 2.0 * (x as f64 + 0.5) / n - 1.0, 2.0 * (y as f64 + 0.5) / n - 1.0);
+                    texels.push(self.radiance.ambient(d).map(|v| v as f32));
+                }
+            }
+        }
+        Level { size, texels }
     }
 }
 
@@ -563,7 +595,7 @@ impl StudioEnvironment {
     fn run(mut bake: StudioBake) -> Self {
         let preset = bake.preset;
         while !bake.step(usize::MAX) {}
-        bake.finish().unwrap_or(StudioEnvironment { preset, levels: Vec::new(), irradiance: [[0.0; 3]; 9] })
+        bake.finish().unwrap_or(StudioEnvironment { preset, levels: Vec::new(), irradiance: [[0.0; 3]; 9], calibration: 1.0, lights: &[] })
     }
 
     /// The studio this was baked from.
@@ -630,10 +662,49 @@ impl StudioEnvironment {
         ]
     }
 
-    /// The uniform the shader reads: the nine irradiance terms, then (largest level, 0, 0, 0).
+    /// The scale the studio's radiance is baked at: its exposure calibration
+    /// ([`rig::Rig::calibration`]; 1 for a test furnace).
+    pub fn calibration(&self) -> f64 {
+        self.calibration
+    }
+
+    /// The uniform the shader reads: the nine irradiance terms, (largest level, light count, 0,
+    /// 0), the room (half size, floor, ceiling, 0), then each light's (centre, half width),
+    /// (width axis, half height), (height axis, 0) and (calibrated radiance, 0).
     fn uniform_bytes(&self) -> Vec<u8> {
         let mut v: Vec<f32> = self.irradiance.iter().flat_map(|t| [t[0] as f32, t[1] as f32, t[2] as f32, 0.0]).collect();
-        v.extend([self.levels.len().saturating_sub(1) as f32, 0.0, 0.0, 0.0]);
+        let lights = &self.lights[..self.lights.len().min(rig::MAX_LIGHTS)];
+        v.extend([self.levels.len().saturating_sub(1) as f32, lights.len() as f32, 0.0, 0.0]);
+        v.extend([rig::ROOM.half, rig::ROOM.floor, rig::ROOM.ceiling, 0.0].map(|x| x as f32));
+        for slot in 0..rig::MAX_LIGHTS {
+            match lights.get(slot) {
+                Some(l) => {
+                    let c = l.radiance.map(|x| x * self.calibration);
+                    v.extend(
+                        [
+                            l.centre[0],
+                            l.centre[1],
+                            l.centre[2],
+                            l.half_width,
+                            l.width_axis[0],
+                            l.width_axis[1],
+                            l.width_axis[2],
+                            l.half_height,
+                            l.height_axis[0],
+                            l.height_axis[1],
+                            l.height_axis[2],
+                            0.0,
+                            c[0],
+                            c[1],
+                            c[2],
+                            0.0,
+                        ]
+                        .map(|x| x as f32),
+                    );
+                }
+                None => v.extend([0.0; 16]),
+            }
+        }
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
 }
@@ -704,8 +775,10 @@ pub(crate) fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
 /// A studio on the GPU.
 pub(crate) struct EnvGpu {
     pub(crate) bind: wgpu::BindGroup,
+    /// Its cube and uniform, which the material-graph pipelines' group 3 binds again.
+    view: wgpu::TextureView,
     _texture: wgpu::Texture,
-    _uniform: wgpu::Buffer,
+    uniform: wgpu::Buffer,
 }
 
 fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, texture: wgpu::Texture, uniform: wgpu::Buffer) -> EnvGpu {
@@ -719,7 +792,7 @@ fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::S
             wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
         ],
     });
-    EnvGpu { bind, _texture: texture, _uniform: uniform }
+    EnvGpu { bind, view, _texture: texture, uniform }
 }
 
 fn cube(device: &wgpu::Device, size: u32, mips: u32) -> wgpu::Texture {
@@ -794,12 +867,79 @@ pub(crate) fn upload(
     bind(device, layout, sampler, texture, uniform)
 }
 
+/// Group 3 of the material-graph pipelines, "studio + material" (docs/material-graph.md §5.3):
+/// WebGL2 allows four bind groups and the viewport uses all four, so the material page and its
+/// textures join the studio. Bindings 0–2 are [`layout`]'s; 3 is the uniform page
+/// (`material::PAGE_BYTES`, WebGL2's block limit); 4–7 the material's textures (at most
+/// `limits::TEXTURES_PER_GRAPH`, so with the studio cube and the AO maps a stage samples well
+/// under WebGL2's 16 textures); 8–10 their samplers by wrap mode (repeat, clamp, mirror).
+pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let visibility = wgpu::ShaderStages::FRAGMENT;
+    let texture = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let sampler = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sc_studio_material"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            sampler(1),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(crate::material::PAGE_BYTES),
+                },
+                count: None,
+            },
+            texture(4),
+            texture(5),
+            texture(6),
+            texture(7),
+            sampler(8),
+            sampler(9),
+            sampler(10),
+        ],
+    })
+}
+
 /// The renderer's studios: the stand-in and each preset uploaded so far (at most one per preset).
 pub(crate) struct Studios {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     placeholder: EnvGpu,
     baked: Vec<(StudioPreset, EnvGpu)>,
+    /// Counts installations, so binds made from an older studio are known stale.
+    generation: u64,
 }
 
 impl Studios {
@@ -807,7 +947,7 @@ impl Studios {
         let layout = layout(device, wgpu::ShaderStages::FRAGMENT);
         let sampler = sampler(device);
         let placeholder = placeholder(device, &layout, &sampler);
-        Studios { layout, sampler, placeholder, baked: Vec::new() }
+        Studios { layout, sampler, placeholder, baked: Vec::new(), generation: 0 }
     }
 
     pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
@@ -824,6 +964,45 @@ impl Studios {
         let gpu = upload(device, queue, &self.layout, &self.sampler, env);
         self.baked.retain(|(p, _)| *p != env.preset());
         self.baked.push((env.preset(), gpu));
+        self.generation += 1;
+    }
+
+    /// How many studios have been installed: binds of an older generation are stale.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// A material-graph group 3 ([`material_layout`]): the frame's studio (as [`Studios::bind`]
+    /// picks it), a uniform `page`, the material `textures` and their `samplers`.
+    pub(crate) fn material_bind(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        preset: Option<StudioPreset>,
+        page: &wgpu::Buffer,
+        textures: [&wgpu::TextureView; 4],
+        samplers: [&wgpu::Sampler; 3],
+    ) -> wgpu::BindGroup {
+        let env = preset.and_then(|preset| self.baked.iter().find(|(p, _)| *p == preset)).map_or(&self.placeholder, |(_, gpu)| gpu);
+        let [t0, t1, t2, t3] = textures;
+        let [s0, s1, s2] = samplers;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sc_studio_material"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&env.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: env.uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(t0) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(t1) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(t2) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(t3) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(s0) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(s1) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(s2) },
+            ],
+        })
     }
 
     /// The bind group for a frame's look (the stand-in without one, or before its studio is up).
@@ -894,6 +1073,8 @@ pub(crate) fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     let g = 1.0 - 1.0 / (DESATURATION * (peak - new_peak) + 1.0);
     c.map(|v| v + (new_peak - v) * g)
 }
+
+mod rig;
 
 #[cfg(test)]
 mod reference;

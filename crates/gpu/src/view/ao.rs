@@ -46,6 +46,55 @@ pub(super) struct Resources {
     prepass: OpaquePipelines,
     term: OpaquePipelines,
     blur: wgpu::RenderPipeline,
+    /// The material-graph streams' prepass and term pipelines (plain and object vertices), made
+    /// the first time a scene with material surfaces is drawn with the product look.
+    graph: Option<[[wgpu::RenderPipeline; 2]; 2]>,
+    module: wgpu::ShaderModule,
+    prepass_layout: wgpu::PipelineLayout,
+    term_layout: wgpu::PipelineLayout,
+    reversed: bool,
+}
+
+/// A pipeline of one AO pass for material-graph vertices.
+#[allow(clippy::too_many_arguments)]
+fn graph_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    fragment: &str,
+    format: wgpu::TextureFormat,
+    depth_write_enabled: bool,
+    compare: wgpu::CompareFunction,
+    reversed: bool,
+    object: bool,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sc_ao_material"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some(crate::material::cache::vertex_entry(object)),
+            buffers: &[Some(crate::material::cache::vertex_layout(object))],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(depth_write_enabled),
+            depth_compare: Some(depth_compare(reversed, compare)),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(fragment),
+            targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::RED })],
+            compilation_options: Default::default(),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn maps(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, size: [u32; 2]) -> Maps {
@@ -93,7 +142,14 @@ fn term_target(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachme
 
 /// The opaque triangles of `batches`, as neither pass counts them in the performance overlay;
 /// `pbr` adds the PBR surfaces (the product look's, which they occlude and are occluded by).
-fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, binds: [&wgpu::BindGroup; 2], batches: [&Batches; 2], pbr: bool) {
+fn draw_opaque(
+    pass: &mut wgpu::RenderPass<'_>,
+    pipelines: &OpaquePipelines,
+    graph: Option<&[wgpu::RenderPipeline; 2]>,
+    binds: [&wgpu::BindGroup; 2],
+    batches: [&Batches; 2],
+    pbr: bool,
+) {
     for (batch, bind) in batches.into_iter().zip(binds) {
         pass.set_bind_group(0, bind, &[]);
         pass.set_pipeline(&pipelines.built);
@@ -126,6 +182,9 @@ fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, bin
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
             }
+        }
+        if let Some(graph) = graph.filter(|_| pbr) {
+            batch.graphs.draw_ao(pass, graph);
         }
     }
 }
@@ -236,7 +295,7 @@ impl Resources {
             cache: None,
         });
         let maps = maps(device, &layout, [1, 1]);
-        Self { layout, maps, size: [1, 1], prepass, term, blur }
+        Self { layout, maps, size: [1, 1], prepass, term, blur, graph: None, module: module.clone(), prepass_layout, term_layout, reversed }
     }
 
     /// Draw the maps when `radius` is positive; `pbr` adds the PBR surfaces.
@@ -262,6 +321,16 @@ impl Resources {
         if !enabled {
             return;
         }
+        if pbr && self.graph.is_none() && batches.iter().any(|b| !b.graphs.is_empty()) {
+            let (m, r) = (&self.module, self.reversed);
+            let make = |layout, fragment, format, write, compare| {
+                [false, true].map(|object| graph_pipeline(device, m, layout, fragment, format, write, compare, r, object))
+            };
+            self.graph = Some([
+                make(&self.prepass_layout, "fs_ao_depth_mat", wgpu::TextureFormat::R32Uint, true, wgpu::CompareFunction::Less),
+                make(&self.term_layout, "fs_ao_term_mat", TERM_FORMAT, false, wgpu::CompareFunction::LessEqual),
+            ]);
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("sc_ao_prepass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -282,7 +351,7 @@ impl Resources {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        draw_opaque(&mut pass, &self.prepass, binds, batches, pbr);
+        draw_opaque(&mut pass, &self.prepass, self.graph.as_ref().map(|g| &g[0]), binds, batches, pbr);
         drop(pass);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("sc_ao_term"),
@@ -297,7 +366,7 @@ impl Resources {
             multiview_mask: None,
         });
         pass.set_bind_group(2, &self.maps.bind, &[]);
-        draw_opaque(&mut pass, &self.term, binds, batches, pbr);
+        draw_opaque(&mut pass, &self.term, self.graph.as_ref().map(|g| &g[1]), binds, batches, pbr);
         drop(pass);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("sc_ao_blur"),

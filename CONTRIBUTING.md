@@ -261,11 +261,16 @@ mean something else, it needs a format change. **Add one file, and edit nothing 
    formats' steps.
 3. Don't touch `FORMAT`, `JSON_STEPS`, the history in `crates/doc/src/format.rs`, another
    change's file, or any `v<N>/` folder: those are fixed once released.
+4. Optional: if you can tell from a design's saved JSON whether it uses your change, say so with
+   `pub const USED: fn(&serde_json::Value) -> bool` in the same file. A design that uses none of
+   a format's changes, all of which say so, is then saved in the older format, byte for byte,
+   and the last release still opens it. Its `step` (if any) must leave such a design unchanged,
+   since it runs when the design opens later.
 
 That's all. The build counts the files: while any are pending it writes the next format number,
 which no release reads, so a release refuses a design that has your change instead of losing it.
-A file also lists the pending changes it has (`format_pending`), so a later development build
-runs only the steps that file is missing. Two pull requests that each add a change merge without
+A file also lists the pending changes it has (`format_pending`; with step 4, only the ones it
+may use), so a later development build runs only the steps that file is missing. Two pull requests that each add a change merge without
 a conflict. `crates/doc/src/format/pending/README.md` has an example.
 
 **At release time** the maintainer runs `scripts/fold-format-pending.sh`, which moves the pending
