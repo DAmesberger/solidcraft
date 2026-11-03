@@ -1,0 +1,797 @@
+# Material node graph (design note)
+
+Status: proposal for the `DAmesberger/solidcraft` fork, to be offered upstream once it is
+proven. Nothing here is implemented. It follows the photoreal product look, which is being
+prepared as a renderer-only upstream PR ([opaque PBR](render-opaque-pbr.md#opt-in-product-look),
+[clear coat](render-clear-coat.md)). Performance figures are **targets** until they are
+measured. Work estimates are in agent-hours.
+
+## 1. Why and what
+
+Today a saved look is `Look { name, color, opacity, pbr: Option<{metallic, roughness,
+dielectric_ior}> }` ([`appearance.rs`](../crates/doc/src/appearance.rs),
+[`pbr_appearance.rs`](../crates/doc/src/pbr_appearance.rs)). The product look can already
+draw a clear coat and four procedural patterns (`SurfacePattern::{Weave, OrangePeel,
+PeelOverWeave, InkGrain}` in [`pbr.rs`](../crates/gpu/src/pbr.rs)), but only from an
+embedding program's vertex data: no saved design can carry them. Adding `coat`, `pattern`,
+`anisotropy`, `texture` … one field at a time would grow `Look` without end, and every
+field would need its own format change, command flags and UI.
+
+This note replaces that path with **one** generic, data-only material description:
+
+- A material is a small **node graph**: pattern, projection and maths nodes feed one
+  **standard surface** node. The model follows open specifications: the node vocabulary
+  follows MaterialX's standard library, and the surface node's inputs follow OpenPBR
+  Surface (itself derived from Autodesk Standard Surface).
+- Clear coat, anisotropy, patterns and textures are **inputs and nodes**, not format fields.
+- The graph is validated on load (bounded size, typed ports, no cycles, value ranges, cost
+  budget). Solidcraft compiles it to WGSL itself; a file never carries shader code.
+- It renders the same in the native and the WebGL2/wasm builds.
+- Everything is generic CAD material data. No product-specific fields, nodes or panels.
+
+What it is not: a general shading language, a MaterialX runtime, or a node editor in the
+first version (see §7). A sandboxed custom-WGSL node is a possible later extension (§3.9).
+
+### Clean room
+
+The sources are public specifications, read as documentation:
+
+- the MaterialX specification (Academy Software Foundation, Apache-2.0);
+- the OpenPBR Surface specification (ASWF, Apache-2.0);
+- the Autodesk Standard Surface specification (published under Apache-2.0).
+
+We take input **names** and the layering concept from them, so that a later `.mtlx`
+exchange is a mapping, not a translation. No MaterialX, OpenPBR or shader-library code is
+read, copied or linked. The pattern mathematics is the fork's own (`pbr.rs`) or textbook
+material, cited as mathematics only: value noise; gradient noise (Perlin 2002, "Improving
+Noise"); cellular noise (Worley 1996); fBm. GPL/LGPL/AGPL code is not read. If a node-editor
+widget crate is ever considered (§6.1), its licence must be MIT/Apache/BSD, checked by
+`cargo xtask licences --check`.
+
+## 2. Concepts
+
+| Term | Meaning |
+|---|---|
+| **Graph** | A design-owned, named material definition: nodes, typed connections, one output surface node, and an optional *interface*. Stored once in the design, referenced by looks. |
+| **Node** | One operation from the fixed v1 catalogue (§3). It has typed **inputs** (a constant, a connection, or an interface reference) and compile-time **params** (enums and small integers that change the generated code). |
+| **Interface** | Up to 32 named, typed inputs a graph exposes (MaterialX's nodegraph interface). A look can override them, so one "Anodised aluminium" graph serves every colour. |
+| **Look** | Today's record, plus `graph` (an id) and `values` (interface overrides). The look's `color` remains the scalar display colour for Design mode, exports and old consumers. |
+| **Shape** | Everything about a graph that changes generated code: node kinds, params, topology, which inputs are connected and which are constants, texture colour spaces. Values never belong to the shape. |
+| **Flattened surface** | The graph's average opaque response (`OpaqueSurface` + optional `ClearCoat`), computed on the CPU. It feeds consumers that cannot evaluate graphs. |
+
+Lengths are millimetres and angles are radians, as the render-materials catalogue's scale
+policy already requires ([materials.json](render-materials/materials.json)). Colours in
+files are linear Rec.709 RGB; a constant may also be written `{"srgb8":[r,g,b]}`, which is
+decoded exactly as `srgb8_to_linear` does today.
+
+## 3. Node set v1
+
+**Types:** `float`, `color3` (linear), `vector2`, `vector3`, `texcoord` (a projected
+coordinate: uv in mm, the tangent and bitangent it defines, and the pixel footprint in mm),
+`normal` (a unit shading normal in world space), `texture` (a texture asset reference;
+connectable only to an `image` node or an interface input), and `surface` (only the
+surface nodes produce it). The only implicit conversion is the broadcast `float` →
+`color3`/`vector2`/`vector3`. All other conversions use `convert.*` nodes.
+
+**Slopes:** a `float` wire that reaches a normal input carries its value and its slope
+along the texcoord's u and v (per mm). Pattern nodes compute slopes analytically or by a
+fixed finite difference in pattern space, as `pat_bumps` does today. Maths nodes
+propagate them by the chain rule (forward-mode differentiation in the code generator). A
+slope is computed only for wires that need one, so plain colour patterns pay nothing.
+
+**Anti-aliasing is built in:** every pattern node fades to its mean as its period
+approaches the pixel footprint (today's `pat_fade` and `pat_weave_fade`). An author cannot
+turn this off, so a graph cannot alias into moiré.
+
+**Ranges:** a constant outside its input's range **refuses** on load, as `PbrParameters`
+does today. Wires computed at run time can leave a range. The surface node clamps its
+inputs, and maps NaN to the input's default, identically in WGSL and in the CPU evaluator.
+
+### 3.1 Surface nodes
+
+`standard_surface` has OpenPBR input names (a subset); its output is `surface`.
+
+| Input | Type | Range | Default | Notes |
+|---|---|---|---|---|
+| `base_weight` | float | [0, 1] | 1 | |
+| `base_color` | color3 | [0, 1] | 0.8 | Linear reflectance. |
+| `base_metalness` | float | [0, 1] | 0 | |
+| `specular_weight` | float | [0, 1] | 1 | |
+| `specular_color` | color3 | [0, 1] | 1 | Edge tint of metals, scale of dielectric F0. |
+| `specular_roughness` | float | [0.045, 1] | 0.3 | Perceptual; Solidcraft's lower bound. |
+| `specular_ior` | float | [1, 3] | 1.5 | As `dielectric_ior` today; 1 means no interface. |
+| `specular_roughness_anisotropy` | float | [0, 1] | 0 | 0 is isotropic. |
+| `specular_rotation` | float | [−π, π] | 0 | Turns the tangent about the normal. |
+| `geometry_tangent` | vector3 | unit | the texcoord's tangent | Usually wired from a projection. |
+| `coat_weight` | float | [0, 1] | 0 | Replaces the runtime `clear_coats` override. |
+| `coat_color` | color3 | [0, 1] | 1 | Tint of light through the coat (new in the renderer, §5.5). |
+| `coat_roughness` | float | [0.045, 1] | 0.1 | |
+| `coat_ior` | float | [1, 3] | 1.5 | |
+| `geometry_coat_normal` | normal | unit | the geometric normal | For orange peel on the coat only. |
+| `geometry_normal` | normal | unit | the geometric normal | Base relief. |
+| `transmission_weight` | float | [0, 1] | 0 | Requires `base_metalness` = 0 and opacity 1. |
+| `transmission_color` | color3 | [0, 1] | 1 | Transmittance at `transmission_depth_mm`. |
+| `transmission_depth_mm` | float | [0.001, 1000] | 1 | |
+| `emission_luminance` | float | [0, 1000] | 0 | Relative, like the product lights; not calibrated. |
+| `emission_color` | color3 | [0, 1] | 1 | |
+| `geometry_opacity` | float | [0, 1] | 1 | Cut-out coverage, not glass. |
+
+Not in v1, and **refused** rather than dropped: subsurface, sheen/fuzz, thin film,
+thin-walled, displacement and specular IOR spectra. Each is a later node-set version with
+its own pending format change.
+
+`surface.mix` takes `fg` and `bg` (surface) and `mix` (float [0, 1]). In v1 it blends the
+two surfaces' **parameters** (colours and scalars linearly, normals by normalised lerp), so
+one BRDF is evaluated per pixel. This is enough for masks with sharp or moderately soft
+edges: an etched mark, printed ink, a stripe. A true weighted sum of two BRDF evaluations
+(MaterialX's `mix` of BSDFs) is a later option (decision O3).
+
+### 3.2 Geometry and projection nodes
+
+Bodies are B-rep tessellations without UVs, so every texcoord is **projected**. Each
+projection has a `space` param, `object` (default: the pattern stays on the part as it
+moves or is instanced) or `world`.
+
+| Node | Inputs (type, range) | Params | Output |
+|---|---|---|---|
+| `geometry.position` | – | `space` | vector3, mm |
+| `geometry.normal` | – | `space` | vector3, unit |
+| `geometry.facing` | – | – | float, \|n·v\| in [0, 1] |
+| `texcoord.planar` | `origin` vector3 (±1e7 mm), `u`, `v` vector3 (each 0.001–1e6 mm long, orthogonal) | `space` | texcoord. u and v span one repeat, as in the runtime planar maps ([runtime textures](render-runtime-textures.md)). |
+| `texcoord.triplanar` | `origin`, `scale_mm` vector3 (0.001–1e6), `sharpness` float [1, 64] | `space` | texcoord. Its consumers up to the first non-pattern node are evaluated three times and blended. That cost counts three times against the budget. |
+| `texcoord.cylindrical` | `origin`, `axis` (unit), `reference` (unit, ⟂ axis) vector3; `radius_mm` float (0.001–1e6) | `space`, `unwrap`: `arc_length` \| `angle` | texcoord: u around (mm of arc at `radius_mm`, or radians), v along the axis (mm). |
+| `texcoord.transform` | `texcoord`, `offset` vector2 (±1e6 mm), `scale` vector2 (1e-3–1e3), `rotation` float [−π, π] | – | texcoord |
+
+### 3.3 Pattern nodes
+
+Every pattern takes a `texcoord`, or a `vector3` position for 3D noise, and a `seed`
+(integer 0–2³¹−1). Each has outputs `value` (float, in [0, 1], mean 0.5 unless stated) and,
+where meaningful, `slope`.
+
+| Node | Inputs | Params | Notes |
+|---|---|---|---|
+| `pattern.noise` | `scale_mm` (0.001–1e4), `lacunarity` [1, 4] = 2, `gain` [0, 1] = 0.5 | `kind`: `value` \| `gradient` \| `cellular`; `dimensions`: 2 \| 3; `octaves`: 1–8 | fBm with an unrolled octave count. `value` 2D is today's `pat_noise`. |
+| `pattern.brushed` | `density_per_mm` (0.1–1000), `streak_mm` (0.01–1000), `contrast` [0, 1], `jitter` [0, 1] | – | Fine lines along u: noise stretched by `streak_mm / (1/density)`. Its tangent output is the texcoord's u, which feeds `geometry_tangent`. |
+| `pattern.weave` | `pitch_mm` vector2 (0.01–100), `crown` [0, 1] = 1, `fibres` (0–32) = 7, `fibre_contrast` [0, 1] = 0.3 | `kind`: `plain` \| `twill_2x2` | Today's glass-cloth weave, generalised (carbon-fibre twill). |
+| `pattern.checker` | `size_mm` vector2 (0.001–1e6) | – | Values 0 or 1, smoothed by the footprint. |
+| `pattern.grid` | `size_mm` vector2, `line_mm` (0.0001–1e6) | – | 1 on lines. |
+| `pattern.gradient` | `start`, `end` float (±1e6 mm along u) | `kind`: `linear` \| `radial` | Ramp clamped to [0, 1]; `radial` measures the uv distance from the origin. |
+| `image` | `file` texture; `default` color3 | `space`: `srgb` \| `linear`; `wrap`: `repeat` \| `clamp` \| `mirror`; `channel`: `rgb` \| `r` \| `g` \| `b` \| `a` | Outputs `color` color3, `value` float (the luminance or the chosen channel), `alpha`. Filtered with mips (§4.3). |
+| `normal.from_height` | `height` float (with slope), `relief_mm` [0, 1] | – | Perturbs the geometric normal along the texcoord's tangent frame, as `look_detail` does. |
+| `normal.map` | `color` color3 (linear, from `image`), `strength` [0, 1] | `convention`: `opengl` \| `directx` | Tangent-space normal map, in the texcoord's frame. |
+| `normal.blend` | `a`, `b` normal, `mix` [0, 1] | – | Normalised lerp. |
+
+### 3.4 Maths nodes
+
+Inputs default to a value with no effect, so a partly wired node is still valid. Types are
+float or vector (component-wise) unless stated.
+
+`constant`, `add`, `subtract`, `multiply`, `divide` (the denominator is held at least
+1e-6 away from zero), `min`, `max`, `clamp`, `abs`, `floor`, `fract`, `power` (the base
+is clamped to ≥ 0), `sqrt` (of max(x, 0)), `sin`, `cos`, `mix`, `step`, `smoothstep`,
+`remap` (in-range → out-range, clamped), `invert` (1 − x), `dot`, `length`,
+`normalize` (zero → +Z), `combine3`, `separate3`, `luminance`, `hsv_adjust`
+(colour only; hue ±π, saturation and value scales 0–4), `convert.float_to_color3` and the
+other explicit conversions.
+
+There are no loops, no conditionals that branch control flow (`step` and `smoothstep` are
+select-free arithmetic), and no recursion. The generated code is therefore straight-line,
+with bounded cost, and derivatives stay valid everywhere (§5.1).
+
+### 3.5 Limits
+
+| Limit | Value | Why |
+|---|---|---|
+| Graphs per design | 4096 | A design library, not per-face copies. |
+| Nodes per graph | 128 | Larger than every worked example ×4. |
+| Connections per graph | 512 | Each input has at most one connection. |
+| Interface inputs | 32 | |
+| Ids | 1–64 bytes `[a-z0-9_.-]`, unique within a graph | Never used as identifiers in generated code. |
+| Names | 1–256 UTF-8 bytes, no control characters | As body names. |
+| Cost after expansion (§3.6) | 2000 units | Bounds per-pixel ALU (target, §5.4). |
+| Texture samples after expansion | 8 | Triplanar images count three each. |
+| Distinct textures per graph | 4 | WebGL2 has 16 sampled textures per stage (§5.3). |
+| Uniform constants per graph | 256 floats (64 vec4) | Fits a 16 KiB uniform page with ≥ 16 materials. |
+| Shapes compiled per design | not limited; the GPU cache holds 64 (LRU) | §5.2 |
+
+### 3.6 Cost model
+
+Each node kind has a fixed cost in "units", roughly ALU operations, taken from its prelude
+function: `constant` 0, arithmetic 1, `smoothstep` 4, `pattern.noise` 2D value 20 per
+octave (3D 40, gradient ×1.5, cellular ×3), `pattern.weave` 60, `image` 8 plus one sample,
+and `standard_surface` 0 (the lighting is fixed cost). Slope-carrying wires cost ×3 and
+triplanar subgraphs ×3. Validation computes the expanded cost and refuses a graph over the
+budget, so an author learns at once, not at frame time. The table is part of the node
+catalogue that `appearance.graph.nodes` returns (§6).
+
+### 3.7 Today's looks, expressed
+
+- **Old opaque PBR look:** one `standard_surface` with `base_color` = the look's `srgb8`
+  colour, `base_metalness`, `specular_roughness` and `specular_ior` (§4.4).
+- **Clear coat:** `coat_weight`, `coat_roughness` and `coat_ior`, which are exactly
+  `ClearCoat`'s weight, roughness and IOR. A pigmented body under lacquer keeps today's
+  rule: base `specular_ior` = 1 (no second interface).
+- **`Weave`:** `pattern.weave` (plain, pitch 0.577 × 0.819 mm) on a `texcoord.triplanar`
+  in object space, `scale_mm` (1, 1, 0.173). Its `value` goes through
+  `remap`(0.5 ± 0.2·strength) and multiplies `base_color`; its height goes through
+  `normal.from_height` (6 µm·strength). The edge's 0.25 strength is
+  `mix(0.25, 1, smoothstep(0.65, 0.75, |geometry.normal.z|))`. This equals today's look on
+  faces and on axis-aligned edges. A diagonal edge is blended across two planes, where
+  today's look runs along the edge exactly. That is accepted; the alternative is a
+  dedicated edge projection node later.
+- **`OrangePeel`:** two `pattern.noise` nodes (value, 2D) at 2.4 mm and 0.9 mm, combined by
+  `add` with relief weights 6 µm and 1 µm, into `normal.from_height` →
+  `geometry_coat_normal` (or `geometry_normal` with no coat).
+- **`PeelOverWeave`:** both of the above; the weave drives only the albedo.
+- **`InkGrain`:** noise at 0.05 mm and 0.16 mm, an albedo of ±18 %, and 2 µm of relief.
+
+The built-in fork library ships these four as graphs (§9, track G). A program that embeds
+the viewport and calls `pbr_tri_with` keeps working through a shim until the shim is
+removed (decision O5).
+
+### 3.8 Worked examples
+
+Each example is a complete graph in the proposed JSON (§4.1); `"srgb8"` marks an exact
+sRGB constant. Values are visual estimates, not measured optical data.
+
+**Brushed nickel silver** (a stamped shield can, brushed along X):
+
+```json
+{"name": "Brushed nickel silver",
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"},
+   "inputs": {"origin": [0,0,0], "u": [1,0,0], "v": [0,1,0]}},
+  {"id": "lines", "kind": "pattern.brushed",
+   "inputs": {"texcoord": {"from": "uv"}, "density_per_mm": 40, "streak_mm": 4, "contrast": 0.6, "jitter": 0.3, "seed": 7}},
+  {"id": "rough", "kind": "remap", "inputs": {"in": {"from": "lines"}, "out_min": 0.41, "out_max": 0.49}},
+  {"id": "tint", "kind": "remap", "inputs": {"in": {"from": "lines"}, "out_min": 0.97, "out_max": 1.03}},
+  {"id": "base", "kind": "multiply", "inputs": {"a": [0.80, 0.77, 0.70], "b": {"from": "tint"}}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {
+     "base_color": {"from": "base"}, "base_metalness": 1,
+     "specular_roughness": {"from": "rough"}, "specular_roughness_anisotropy": 0.6,
+     "geometry_tangent": {"from": "lines.tangent"}}}],
+ "output": "surface"}
+```
+
+Cost: planar 4 + brushed 30 + 2 × remap 2 + multiply 1 = 39 units.
+
+**Laser-etched metal** (a logo on the same can; the mask is a PNG asset, planar-projected
+onto the lid):
+
+```json
+{"name": "Laser-etched nickel silver",
+ "interface": [{"name": "mark", "type": "texture"}],
+ "nodes": [
+  {"id": "lid", "kind": "texcoord.planar", "params": {"space": "object"},
+   "inputs": {"origin": [-6,-4,0], "u": [12,0,0], "v": [0,8,0]}},
+  {"id": "mask", "kind": "image", "params": {"space": "linear", "wrap": "clamp", "channel": "a"},
+   "inputs": {"texcoord": {"from": "lid"}, "file": {"interface": "mark"}}},
+  {"id": "pits", "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 2, "octaves": 1},
+   "inputs": {"texcoord": {"from": "lid"}, "scale_mm": 0.03, "seed": 3}},
+  {"id": "pit_n", "kind": "normal.from_height", "inputs": {"height": {"from": "pits"}, "relief_mm": 0.003}},
+  {"id": "plain", "kind": "standard_surface", "inputs": {"base_color": [0.80,0.77,0.70], "base_metalness": 1, "specular_roughness": 0.45}},
+  {"id": "etched", "kind": "standard_surface", "inputs": {"base_color": [0.30,0.29,0.27], "base_metalness": 1, "specular_roughness": 0.70, "geometry_normal": {"from": "pit_n"}}},
+  {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "etched"}, "bg": {"from": "plain"}, "mix": {"from": "mask"}}}],
+ "output": "surface"}
+```
+
+The mark is an interface input, so each look (or a runtime override, §6.3) binds its own
+image without recompiling: a texture binding is not part of the shape.
+
+**Glossy solder mask over copper** (a board's trace; the copper shows through a tinted
+coat). This is physically closer than today's precomputed composite colour, and it needs
+`coat_color` (§5.5):
+
+```json
+{"name": "Gloss green solder mask over copper",
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"u": [1,0,0], "v": [0,1,0]}},
+  {"id": "peel_a", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 2.4, "seed": 1}},
+  {"id": "peel_b", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.9, "seed": 2}},
+  {"id": "peel_b6", "kind": "multiply", "inputs": {"a": {"from": "peel_b"}, "b": 0.1667}},
+  {"id": "peel", "kind": "add", "inputs": {"a": {"from": "peel_a"}, "b": {"from": "peel_b6"}}},
+  {"id": "coat_n", "kind": "normal.from_height", "inputs": {"height": {"from": "peel"}, "relief_mm": 0.006}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {
+     "base_color": [0.955,0.638,0.538], "base_metalness": 1, "specular_roughness": 0.35,
+     "coat_weight": 1, "coat_color": [0.10,0.45,0.12], "coat_roughness": 0.12, "coat_ior": 1.52,
+     "geometry_coat_normal": {"from": "coat_n"}}}],
+ "output": "surface"}
+```
+
+Over FR-4 instead of copper, the base becomes a dielectric of the laminate colour with
+`specular_ior` 1, plus the weave (§3.7).
+
+**Black epoxy with a clear coat** (an EDM-textured moulded body, lacquered top):
+
+```json
+{"name": "Black epoxy, clear coated",
+ "nodes": [
+  {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
+  {"id": "edm", "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 2}, "inputs": {"position": {"from": "p"}, "scale_mm": 0.04, "seed": 11}},
+  {"id": "edm_r", "kind": "remap", "inputs": {"in": {"from": "edm"}, "out_min": 0.40, "out_max": 0.52}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {
+     "base_color": [0.022,0.022,0.024], "specular_roughness": {"from": "edm_r"}, "specular_ior": 1,
+     "coat_weight": 1, "coat_roughness": 0.08, "coat_ior": 1.5}}],
+ "output": "surface"}
+```
+
+The base IOR is 1 because the coat is the only interface (today's rule).
+
+**Aluminium electrolytic sleeve** (a PVC sleeve with a polarity stripe; the printed text is
+an image on the same cylindrical projection):
+
+```json
+{"name": "Electrolytic sleeve, blue",
+ "interface": [{"name": "sleeve", "type": "color3", "default": [0.020,0.045,0.16]},
+               {"name": "print", "type": "texture"}],
+ "nodes": [
+  {"id": "cyl", "kind": "texcoord.cylindrical", "params": {"space": "object", "unwrap": "angle"},
+   "inputs": {"origin": [0,0,0], "axis": [0,0,1], "reference": [1,0,0], "radius_mm": 4}},
+  {"id": "ang", "kind": "separate3", "inputs": {"in": {"from": "cyl.uv"}}},
+  {"id": "stripe", "kind": "smoothstep", "inputs": {"edge0": 2.6, "edge1": 2.62, "in": {"from": "ang.x"}}},
+  {"id": "text", "kind": "image", "params": {"space": "linear", "wrap": "repeat", "channel": "a"},
+   "inputs": {"texcoord": {"from": "cyl"}, "file": {"interface": "print"}}},
+  {"id": "ink", "kind": "max", "inputs": {"a": {"from": "stripe"}, "b": {"from": "text"}}},
+  {"id": "pvc", "kind": "standard_surface", "inputs": {"base_color": {"interface": "sleeve"}, "specular_roughness": 0.35, "specular_ior": 1.54}},
+  {"id": "printed", "kind": "standard_surface", "inputs": {"base_color": [0.80,0.80,0.78], "specular_roughness": 0.45, "specular_ior": 1.5}},
+  {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "printed"}, "bg": {"from": "pvc"}, "mix": {"from": "ink"}}}],
+ "output": "surface"}
+```
+
+The aluminium top disc is a separate face look ("Aluminium", metal, roughness 0.30).
+
+### 3.9 Later extensions (not v1)
+
+- Further OpenPBR lobes (sheen, thin film, subsurface), closure-level `surface.mix`, and an
+  edge-following projection.
+- `.mtlx` import and export of the subset, mapping node kinds 1:1 where MaterialX has the
+  same node (`mix`, `noise3d`/`fractal3d`, `cellnoise3d`, `image`, `triplanarprojection`,
+  `checkerboard`, `ramplr`, `normalmap`, `heighttonormal`, `open_pbr_surface`).
+- **Sandboxed custom-WGSL node.** It would carry one pure function over typed ports. Naga
+  would validate it after a rewrite that bans bindings, pointers, loops and derivatives, and
+  it would have an author-declared cost that the validator checks against a measured
+  instruction count. This is mentioned only as a possibility: it moves trust onto shader
+  code, so it needs its own design and review.
+
+## 4. File format
+
+### 4.1 Where it lives
+
+Graphs live in a design-level table under `appearances`, and looks refer to them by id.
+Texture assets live beside them and are stored as container blobs.
+
+```json
+"appearances": {
+  "graphs": {
+    "brushed-nickel-silver": {
+      "name": "Brushed nickel silver",
+      "interface": [],
+      "nodes": [ … ],
+      "output": "surface",
+      "source": {"library": "6f1c…uuid", "entry": "brushed-nickel-silver", "revision": 3}
+    }
+  },
+  "textures": {
+    "9b2e…sha256": {"name": "logo.png", "width": 512, "height": 256, "image_blob": "blobs/9b2e….png"}
+  },
+  "bodies": {
+    "Can": {"name": "Brushed nickel silver", "color": [227,224,218], "opacity": 1,
+            "graph": "brushed-nickel-silver", "values": {}}
+  }
+}
+```
+
+- `Look` gains `graph: Option<GraphId>` and `values: BTreeMap<String, InterfaceValue>`.
+  `pbr` is **no longer written**; the migration step (§4.4) rewrites it. Looks without a
+  graph keep scalar shading exactly as today.
+- A look's `color` stays required. With a graph it is the display colour (the flattened
+  base colour, sRGB8), which the assigning command computes. Design mode, STEP/3MF colour
+  export and older readers' tools use it.
+- `source` is generic provenance (library id, entry id, revision). It is optional and
+  inert, and drives only an explicit "update from library" with an impact preview (§6).
+- A graph with `geometry_opacity` < 1 or `transmission_weight` > 0 requires the look's
+  `opacity` = 1. Opacity stays the scalar legacy blend; it does not combine with graph
+  optics, which keeps today's "PBR requires opacity 1" rule.
+- **Physical-material default looks** (`material.create/edit`) use the same `Look`, so
+  they reference graphs too. A physical material's density and engineering cards remain
+  separate.
+- **Textures:** in a container (`.sc`), `image_blob` is `blobs/<sha256>.png|jpeg`, using
+  the canvas blob mechanism that exists today ([design containers](design-container.md)).
+  In a plain JSON design, `data` holds base64, as canvases do. The key is the SHA-256 of the
+  exact encoded bytes. Textures no graph or look references are dropped on save.
+
+### 4.2 Shared material libraries
+
+The local material library ([local libraries](book/src/dev/local-libraries.md)) becomes
+**portable catalog v3**: catalog v2 plus `graphs` and `textures`. A v3 catalog with
+textures is a ZIP container (`container.json`: `{"format":"solidcraft-library/1"}`,
+`catalog.json`, `blobs/…`) read by the same bounded container reader. One without textures
+may stay plain JSON. `library.apply` copies a graph (and its textures) into the design and
+records `source`, so the design never depends on the library file. A collision of graph ids
+refuses unless the command names a new id: an existing graph is never silently replaced.
+Exporting v2 from a design that uses graphs refuses, as exporting v1 refuses PBR loss
+today.
+
+### 4.3 Texture limits
+
+| Limit | Value |
+|---|---|
+| Encodings | PNG, JPEG (8-bit; ICC and EXIF orientation as `texture_input` admits them today) |
+| Size | 1–2048 px per side (the WebGL2 downlevel `max_texture_dimension_2d`) |
+| Encoded bytes | ≤ 16 MiB each |
+| Per design | ≤ 64 textures, ≤ 256 MiB decoded RGBA8 in total |
+| Mips | Generated on the CPU, off the window thread (no compute on WebGL2; [mips](render-texture-mips.md)) |
+
+Decoding uses `solidcraft_render::texture_input` on a worker. Until a texture has decoded,
+its `image` node reads its `default` colour.
+
+### 4.4 The pending format change
+
+The change is one file, `crates/doc/src/format/pending/appearance-graphs.rs`:
+
+```rust
+//! Looks can name a material graph (`appearances.graphs`, by id) with interface values, and
+//! graphs can use texture assets (`appearances.textures`, container blobs or base64). An
+//! older design gets the same response: each opaque-PBR look (`pbr`) becomes a one-node
+//! `standard_surface` graph with exactly its colour and values, and identical responses
+//! share one graph. The last release refuses a design that has this (the newer format number).
+use serde_json::Value;
+
+pub fn step(v: &mut Value) -> crate::Result<()> {
+    // Walk every saved Look (body, face, component overrides; physical-material defaults;
+    // appearance-pack swatches), replace `pbr` with `graph`, and add the graphs table.
+    Ok(())
+}
+```
+
+**Equivalence:** the migrated graph sets `base_color` to `{"srgb8": color}`, so it decodes
+through the same `srgb8_to_linear` and has the same f32 values as today. A constant-only
+`standard_surface` compiles to the same lighting call as today's `fs_pbr`. The tests are:
+
+- the old and migrated looks give equal `OpaqueSurface`s;
+- with the look off, the GPU frames are bit-identical;
+- with the look on, frames differ by at most 1/255;
+- the CPU product host gives bit-identical images.
+
+Two looks with equal `pbr` and colour share a graph. Graph ids are `pbr-1`, `pbr-2`, … in
+the order of a canonical walk, so migration is deterministic.
+
+```json
+// before
+{"name":"Copper - Clean PBR","color":[204,122,80],"opacity":1,"pbr":{"metallic":1,"roughness":0.25,"dielectric_ior":1.5}}
+// after
+{"name":"Copper - Clean PBR","color":[204,122,80],"opacity":1,"graph":"pbr-1"}
+"graphs": {"pbr-1": {"name":"Copper - Clean PBR","output":"surface","nodes":[
+  {"id":"surface","kind":"standard_surface","inputs":{"base_color":{"srgb8":[204,122,80]},
+   "base_metalness":1,"specular_roughness":0.25,"specular_ior":1.5}}]}}
+```
+
+**The last release and a new file:** it reads the format number, finds it newer than the
+newest it knows, and refuses to open the design with its standard newer-format message. It
+never drops the graphs silently. Its `format_pending` list mechanism is unchanged. The
+command API keeps accepting `pbr` on `appearance.assign` and `material.create/edit` as
+shorthand, which creates or reuses the equivalent one-node graph. Scripts written for the
+current release keep working.
+
+**Node-set versions:** the node catalogue is versioned with the design format. A new node
+kind or input arrives in its own pending file. An unknown kind, param or input refuses
+(`deny_unknown_fields`) rather than being dropped.
+
+## 5. Renderer
+
+### 5.1 Code generation
+
+Validation produces a typed, topologically ordered **IR**: one SSA value per output,
+types resolved, triplanar and slope expansions applied, and constants assigned to uniform
+slots. The IR is a pure Rust type in `solidcraft-render` (no wgpu), shared by the CPU
+evaluator. `solidcraft-gpu` turns the IR into one WGSL function:
+
+```wgsl
+// generated for shape 0x5c1e…; every value comes from the material's uniform slots
+fn material_eval(c: MatCtx) -> Surface {
+    let k = c.base;                                   // vec4 offset of this material
+    let t0 = tc_planar(c.p_obj, m[k+0u].xyz, m[k+1u].xyz, m[k+2u].xyz, c.fp_obj);
+    let v1 = pat_brushed(t0, m[k+3u].x, m[k+3u].y, m[k+3u].z, m[k+3u].w, bitcast<u32>(m[k+4u].x));
+    let v2 = remap(v1.value, m[k+4u].y, m[k+4u].z);
+    var s = surface_default();
+    s.base_color = m[k+5u].xyz * remap(v1.value, m[k+4u].w, m[k+5u].w);
+    s.metalness = m[k+6u].x;
+    s.roughness = v2;
+    s.anisotropy = m[k+6u].y;
+    s.tangent = t0.tangent;
+    return surface_sanitise(s);
+}
+```
+
+- All pattern mathematics lives in a fixed **prelude** (today's `pat_hash`, `pat_noise`,
+  `pat_weave_parts` and `pat_bumps`, generalised). The generator only emits calls,
+  arithmetic and `select`. Prelude functions are tested once against the CPU evaluator;
+  generated code adds only composition.
+- Identifiers are generated (`t0`, `v1`, …). No user string ever reaches WGSL. Constants
+  are uniforms, not literals; only shape params (octaves, enum kinds) appear as code. The
+  generated module is validated by naga before pipeline creation. A failure is an error
+  value that selects the fallback (§5.6); it never panics.
+- The code is straight-line, so `fwidth` and texture derivatives stay in uniform control
+  flow. The existing derivatives guard, which scans `pbr::SOURCE`, extends to generated
+  modules.
+
+### 5.2 Specialisation and caching
+
+- **Pipeline per shape:** the shape key is a 128-bit hash of the canonical IR without
+  values. Graphs that differ only in values share one pipeline; a value edit uploads
+  uniforms and never recompiles.
+- **Uniform values:** one uniform page is `array<vec4<f32>, 1024>` (16 KiB, the WebGL2
+  uniform-block limit). Each material takes a contiguous run of at most 64 vec4s. A vertex
+  carries its material's vec4 offset as a flat `u32`, so **one draw covers every material
+  of one shape** on a page. Pages are rewritten only when a material's values hash changes.
+- **Vertices:** a graph-drawn vertex is position, normal and material offset (28 bytes),
+  plus an object-space position (40 bytes) for shapes that read object space. Instanced
+  meshes are already in object space. Today's 48- and 64-byte material-carrying vertices
+  remain for embedding clients until O5.
+- **Cache:** at most 64 live pipelines (LRU) per renderer. New shapes compile within a
+  per-frame budget (target: at most two new pipelines a frame, and none in a frame already
+  over 8 ms). Until a shape's pipeline exists, its materials draw with the **flattened**
+  standard pipeline, so a new material never stalls a frame. On native, `wgpu` pipeline
+  creation is still synchronous on the device thread; the budget bounds it.
+
+### 5.3 WebGL2 path
+
+The constraints of wgpu 30's `downlevel_webgl2_defaults` (checked in `wgpu-types` 30.0.1):
+
+- **4 bind groups,** and all four are in use (0 frame uniforms, 1 accessibility, 2
+  occlusion, 3 studio). The material page and its textures therefore join **group 3** with
+  the studio cube. Group 3 becomes "studio + material": one bind group per (texture set,
+  page), with the studio bindings repeated in each (cheap: the same views). This changes
+  the layout the photoreal-look PR introduces; coordinate it with that PR (O5).
+- **No storage buffers or storage textures** in any stage, hence uniform pages, not a
+  material SSBO.
+- **16 sampled textures and 16 samplers per stage:** the studio cube, the AO term and at
+  most 4 material textures fit with room to spare.
+- **15 inter-stage variables:** today's `PbrOut` uses 5; graph shapes add at most the
+  object position and the flat material offset, 7 in all.
+- **No compute:** mips, the studio bake (already CPU) and flattening run on the CPU.
+- **GLSL ES 3.00** through naga's GL backend. The existing test (`view/ibl/tests.rs`, "The
+  product look's PBR entry points translate to WebGL2's GLSL ES 3.00") is extended to
+  translate **every shape in the test corpus** (all worked examples, the built-in library
+  and a generated fuzz set). It must also cover dynamic indexing of a uniform-block member
+  array by a flat varying, which ES 3.00 allows; the test checks that naga emits it.
+- **Shader compile time** on WebGL2 (especially ANGLE over D3D) can be tens to hundreds of
+  milliseconds per program. This is not measured, and it is why §5.2 never blocks on a
+  compile.
+
+The look's GPU frames have so far run only on native adapters; no browser has drawn a look
+frame. A browser run of the graph path is part of the completion evidence (track I).
+
+### 5.4 Cost per material and per frame (targets)
+
+| Item | Target |
+|---|---|
+| Validation + IR + flattening of a 128-node graph | ≤ 1 ms CPU (native, optimised) |
+| WGSL generation + naga validation per new shape | ≤ 5 ms |
+| Pipeline creation per new shape | ≤ 30 ms native, ≤ 150 ms WebGL2, off the critical frame by §5.2 |
+| GPU memory per material | ≤ 1 KiB uniform + its textures (+⅓ for mips) |
+| Draws per frame | one per (shape, page, texture set): ≤ 20 for a typical product or board scene |
+| Fragment cost | constant-only graph = today's `fs_pbr`; a graph at the 2000-unit budget ≤ 1.5× today's look fragment time at 1080p |
+| Value edit (slider drag) | uniform upload only, ≤ 0.1 ms, no rebuild of geometry |
+| Selection and camera changes | no rebuild and no recompile |
+
+They will be measured with the existing `gpu` perf harness and recorded in
+`docs/perf.md`. Each stays labelled a target until then.
+
+### 5.5 Fit with today's PBR, IBL and clear coat
+
+- `fs_pbr` is split into `material_eval` (the generated function, or the built-in "vertex
+  constant" evaluator that reproduces today's vertex path) and `pbr_shade(s: Surface, ctx)`,
+  which holds today's lighting unchanged: product lights, studio split-sum and SH
+  irradiance, `pbr_coated`, occlusion, softbox widening, PBR Neutral and dither. Graph and
+  non-graph paths share every lighting line.
+- **New in `pbr_shade`:**
+  - *Anisotropic GGX for direct lights:* the BRDF of the CPU core
+    ([anisotropic GGX](render-anisotropic-ggx.md)) ported to WGSL, with αt, αu from roughness and
+    anisotropy as OpenPBR defines them.
+  - *Anisotropic studio reflection:* an approximation that bends the reflection vector
+    toward the tangent before the cube lookup (public technique, mathematics only, e.g. the
+    Filament documentation). It must pass the white-furnace test within today's 5 %.
+  - *`coat_color`:* the base lobe is multiplied by the coat colour once on entry and once on
+    exit (a thin absorbing layer), with the CPU `clear_coat.rs` oracle extended to match.
+  - *Emission:* added after lighting.
+  - *Transmission:* see §5.6.
+- The graph's `Surface` carries a coat normal separate from the base normal, which today's
+  look cannot express (orange peel now perturbs the base normal too).
+- **Without the product look** (the default preview), every graph draws its **flattened
+  surface** through today's path. This keeps the existing `cpu-product` parity tests valid
+  and leaves the default unchanged; patterns and coats show only with the look, as today.
+
+### 5.6 Fallbacks
+
+| Situation | Behaviour |
+|---|---|
+| Shape not compiled yet / compile failed / over the cache | Flattened surface through the standard pipeline; a failure logs once per shape and reports in the render diagnostics. |
+| Texture not decoded yet or failed | The image node's `default` colour. |
+| Path tracer (progressive GPU, native) | v1: flattened surface + coat + transmission inputs mapped to its existing runtime transmission. v2: the same IR compiled into its material function (it has storage buffers) (O6). |
+| CPU product host and CPU tests | The CPU evaluator (f64 interpreter of the IR) per hit. It is the oracle for the GPU and gives full parity, at CPU cost. |
+| Design mode, STEP/3MF colour, Drawing | The look's `color` (the flattened display colour). |
+| `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. |
+| A graph with features a renderer lacks | Each host advertises what it supports, as `pbr` is advertised today. A required feature that is absent refuses the render job; it never silently drops the feature. |
+
+## 6. Editing and commands
+
+### 6.1 The editor
+
+Solidcraft's Appearance editor gains a **Material** section for the selected look, shown
+when the look has a graph.
+
+| | Node canvas | Layered stack (recommended for v1) |
+|---|---|---|
+| What it shows | Every node and wire on a pannable canvas | The surface inputs as rows, grouped (Base, Specular, Coat, Transmission, Emission, Geometry). A row is a constant, or a driven value: pattern + projection + remap range. Masked layers (`surface.mix`) are a list. |
+| Fit with Solidcraft UI | A new container kind, camera-like navigation, wire picking; conflicts with the one-container and one-camera-path rules unless designed carefully | Ordinary panel rows, theme tokens, the existing disclosure and form widgets |
+| Covers | Every valid graph | "Stack-shaped" graphs: one surface, chains of projection → pattern → maths → input, and mix layers with masks. Every worked example in §3.8 is stack-shaped. |
+| Agents | Not needed (they use commands) | Not needed |
+| Estimate | ~30 agent-hours to a usable canvas | ~16 agent-hours |
+
+**Recommendation: the layered stack first.** It maps directly to how CAD users think
+("brushed, with a coat, and a printed mark"), reuses existing widgets, and covers the
+examples. A graph that is not stack-shaped (made by a command or a library) opens
+read-only, with a summary (nodes, cost, textures) and "Edit as JSON" through
+`appearance.graph.set`. A node canvas can follow once the stack has users. If one is built,
+a permissively licensed egui node-graph widget would be evaluated then, with its licence
+named in the PR.
+
+The editor shows a live swatch (a sphere and a flat coupon, rendered with the product look
+off the window thread) and the graph's cost against the budget. Every edit is a command
+(below); a slider drag is one undo step on release.
+
+### 6.2 Commands
+
+All commands are atomic, have input and output schemas, and never open dialogs. A failed
+command leaves the design unchanged.
+
+| Command | Input | Output |
+|---|---|---|
+| `appearance.graph.nodes` (read-only) | – | The node catalogue: kinds, ports, types, ranges, defaults, params, cost units, catalogue version |
+| `appearance.graph.validate` (read-only) | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node, port, code, message}]}` |
+| `appearance.graph.create` | `{id?, name, graph? \| from: "standard"}` | `{id}` |
+| `appearance.graph.set` | `{id, graph}` (full replace) | `{id, cost}` |
+| `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
+| `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with stats / `[{id, name, uses, source}]` |
+| `appearance.graph.duplicate` | `{id, new_id?, name?}` | `{id}` |
+| `appearance.graph.delete` | `{id, replace_with?}` | `{replaced}`; refuses while referenced unless `replace_with` is given |
+| `appearance.texture.add` | `{path \| data_base64, name?}` | `{texture: sha256, width, height}` |
+| `appearance.texture.list` (read-only) | – | `[{texture, name, width, height, bytes, uses}]` |
+| `appearance.assign` (extended) | existing targets + `graph`, `values` (`pbr` remains shorthand) | unchanged |
+| `appearance.graph.update_from_library` | `{id, library, preview: bool}` | an impact preview (changed inputs, affected looks), or the applied update |
+| `library.export` / `library.apply` (extended) | catalog v3 | unchanged shapes, plus graph and texture counts |
+
+Example (MCP or CLI, `solidcraft-cli run`):
+
+```json
+{"command":"appearance.graph.edit","params":{"id":"brushed-nickel-silver","ops":[
+  {"op":"set_input","node":"surface","port":"coat_weight","value":1},
+  {"op":"set_input","node":"surface","port":"coat_roughness","value":0.1}]}}
+```
+
+### 6.3 Runtime overrides
+
+Render jobs (`render.start`) and the embedding API (`solidcraft-gpu`) can override a
+graph's **interface** values for one job or frame, for example a texture bound to a
+`texture` interface input. The design, undo history and saved file do not change, the same
+contract as today's runtime `clear_coats`. Overrides are values and texture bindings, so
+they never compile anything. This generic mechanism is what lets any program bind
+per-instance images (labels, markings) at render time.
+
+## 7. Pcbcraft side
+
+Pcbcraft's cited table (`pcbcraft-core::materials`, 29 `MaterialId`s) stays in Pcbcraft.
+
+1. A Pcbcraft build step turns each `MaterialDef` into a graph:
+   - `base_linear`, `metallic`, `roughness` and `ior` map to `standard_surface`;
+   - `coat` maps to the coat inputs;
+   - `transmission` maps to the transmission inputs;
+   - `PatternKind::EdmTexture` maps to a cellular noise roughness graph and `MetalGrain` to
+     a brushed one;
+   - the soldermask composites become coat-over-base graphs (§3.8).
+
+   The result is written as a catalog v3 library file that ships with Pcbcraft. The entry
+   ids are Pcbcraft's data inside Pcbcraft's file; Solidcraft code never sees a Pcbcraft
+   name.
+2. Part templates assign looks from that library in Solidcraft. The saved design carries
+   the graphs, with generic `source` provenance (library id, entry, revision). This
+   replaces the `pcbcraft:<material_id>` name convention and the planned `Look` coat and
+   pattern fields (part-templates D8, SC4 and SC6).
+3. Pcbcraft maps a body to its `MaterialId` through `source.entry` and checks the revision
+   against its table. A changed table produces an "update from library" impact preview,
+   never a silent change.
+4. Material slots (render parameters) select between library graphs; markings bind
+   interface textures at render time (§6.3).
+5. `models::look` then projects to a graph instead of `OpaqueSurface` + `Detail`. Pcbcraft's
+   3D view draws through the same graph renderer, so a part looks the same in Solidcraft
+   and in Pcbcraft.
+
+## 8. Upstream plan
+
+The photoreal look PR (PR0, branch `upstream-photoreal-look`) goes first and stays
+renderer-only. Before PR1, a short upstream proposal (this note, trimmed) asks maintainers
+to agree the model. Their render-materials backlog asks for "versioned appearance …
+resource contracts" ([handoff](render-materials/IMPLEMENTATION_HANDOFF.md), task 2), which
+this note provides. Opening the proposal, a claim or a PR needs the founder's go each time.
+The repository's rules apply: claim by draft PR, one topic per PR, and the format change as
+one pending file.
+
+| PR | Contents | Changes a default? |
+|---|---|---|
+| PR1 | Graph types, validation, IR, CPU evaluator, flattening (`solidcraft-render`); no format, UI or GPU | No |
+| PR2 | Format: `appearances.graphs`/`textures`, the pending file and `pbr` migration, container blobs; commands `graph.*`, `texture.*`, `assign`; flattened rendering everywhere | No (migration is lossless) |
+| PR3 | GPU: `fs_pbr` → `material_eval` + `pbr_shade`, codegen, shape cache, uniform pages, group-3 merge, GLSL ES corpus test; constant graphs only | No (bit-identical frames) |
+| PR4 | Pattern, projection and image nodes on the GPU; anisotropy, `coat_color`, emission; textures and mips | No (look still opt-in) |
+| PR5 | Layered stack editor and swatches in the Appearance editor; locale strings | No |
+| PR6 | Catalog v3 libraries; built-in graphs for today's four patterns; retire the `SurfacePattern` vertex path | No |
+
+## 9. Work breakdown
+
+The contract comes first. **C0** fixes the following before any track starts:
+
+- the Rust types of the node catalogue, the IR and `Surface`;
+- the JSON schema;
+- the prelude function signatures;
+- the uniform-page layout;
+- the five worked examples as golden fixtures with CPU-evaluated expected values at fixed
+  points.
+
+All later tracks build against those signatures.
+
+| Track | Scope | Depends on | Agent-hours |
+|---|---|---|---|
+| C0 | Contract (above) | – | 6 |
+| A | Validation, IR, cost model, CPU evaluator with slopes, flattening; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 14 |
+| B | Format: tables, `Look.graph/values`, pending file and migration over every Look site, texture blobs and base64, save GC, catalog v3 container | C0 | 12 |
+| C1 | WGSL prelude (port of today's patterns), code generator, shape key, pipeline cache with budget and fallback, uniform pages, new vertex layouts, group-3 merge | C0, A (IR) | 14 |
+| C2 | `pbr_shade` additions: anisotropic GGX direct + studio, `coat_color` (with the CPU oracle), emission, transmission fallback; furnace tests | C0 | 10 |
+| C3 | Textures on the GPU: decode worker, mips, bind groups, `image` node sampling | C1, B (assets) | 6 |
+| D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start` | A, B | 12 |
+| E | Layered stack editor, swatch renders, texture picker, locale strings, screenshots | D | 16 |
+| F | Consumers: path tracer and CPU host via the evaluator and flattening; Design mode and export colour | A, B | 6 |
+| G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json` | A, D | 6 |
+| H | Pcbcraft: table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
+| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape, perf measurements against §5.4, GPU-vs-CPU oracle frames | C1–C3 | 8 |
+
+- **Total:** about **120 agent-hours**.
+- **Critical path:** C0 (6) → A's IR (8 of its 14) → C1 (14) → integrating C2 and C3 (6)
+  → I (8) = about **42 agent-hours**.
+
+Tracks A, B and C2 run in parallel from the start, and D, F and H fan out once A and B
+land. Reviews and merge rounds come on top of both figures.
+
+### Risks
+
+1. **WebGL2 is unproven.** No browser has drawn a look frame yet. Uniform-array indexing
+   by a varying, compile and link times (ANGLE) and the four-group limit are the likely
+   failure points. *Mitigation:* the GLSL corpus test from PR3 on, a browser frame in track
+   I before PR4, and the non-blocking compile with fallback.
+2. **Upstream disagreement on the model** (naming, table vs inline, scope), which would
+   force a rewrite after the fork has shipped files. *Mitigation:* the proposal before PR1,
+   and keeping the fork's format pending (unreleased) until upstream agrees.
+3. **The group-3 layout changes after PR0.** Merging the material into the studio group
+   alters what PR0 introduces. *Mitigation:* agree it with the PR0 track now (O5).
+4. **Preview and final render diverge** while the path tracer uses flattened surfaces.
+   *Mitigation:* document it in v1; the path-tracer codegen is the first v2 item.
+5. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
+   *Mitigation:* keep masks sharp in the examples; the closure mix is in v2.
+6. **The node set freezes on release.** Every addition is then a format change.
+   *Mitigation:* start small, version the catalogue, refuse anything unknown.
+7. **The anisotropic studio approximation** may fail the furnace bound at high anisotropy.
+   *Mitigation:* clamp anisotropy in the studio term to what passes, documented.
+8. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
+   LRU and flattened fallback; the stack editor produces few distinct shapes.
+
+### Open decisions (with recommendations)
+
+| # | Decision | Recommendation |
+|---|---|---|
+| O1 | Graph identity: a design-level table of named graphs referenced by looks, or an inline graph copied into every look (value semantics, as `pbr` is today) | **Table.** Editing a material updates every use (as CAD users expect), files stay small with 100,000 overrides, and libraries map to it with provenance. `duplicate` gives divergence when wanted. |
+| O2 | First editor: layered stack or node canvas | **Layered stack** (§6.1); a canvas later. |
+| O3 | `surface.mix` semantics in v1 | **Parameter blend**; closure mix in v2. |
+| O4 | Default projection space | **Object**, so patterns stick to moving and instanced parts; today's look uses world millimetres, which `space: world` keeps. |
+| O5 | The photoreal-look PR's `SurfacePattern` / `pbr_tri_with` vertex detail | **Leave the pattern enum out of PR0** (keep the studio, IBL, coat, AO and tone mapping) so that upstream never gets an API that PR6 removes. The fork keeps the enum until the graph path replaces it for Pcbcraft. Agree the group-3 layout with PR0 now. |
+| O6 | Path tracer in v1 | **Flattened** in v1; IR → path-tracer material in v2. |
+| O7 | Transmission inputs in v1 | **Include** them (validated, with a real-time fallback), so that glass and clear silicone need no second format change. |
+| O8 | Constant colour encoding | Store linear floats, and accept `{"srgb8": …}` for exact migration; commands also accept hex sRGB. |
