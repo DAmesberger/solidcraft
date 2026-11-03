@@ -21,29 +21,43 @@ use std::{
 use wgpu::util::DeviceExt;
 
 mod adaptive;
+mod codegen_shim;
 mod denoise;
 mod dispatch;
+mod material;
 mod media_hierarchy;
 mod scene;
 #[cfg(test)]
 mod tests;
 mod textures;
-// The shared shading library (`crate::shading`) first, as in the viewport's PBR shader.
-const SHADER: &str = concat!(
-    crate::shading::library_source!(),
-    "\n",
-    include_str!("path.wgsl"),
-    "\n",
-    include_str!("shadows.wgsl"),
-    "\n",
-    include_str!("textures.wgsl"),
-    "
-",
-    include_str!("volume.wgsl"),
-    "
-",
-    include_str!("aging.wgsl")
-);
+// The shared shading library (`crate::shading`) first, as in the viewport's PBR shader. Every
+// job's shader is this source plus `graph_surface`: the stub for jobs without material graphs
+// (`SHADER`, compiled once per device), or the job's generated evaluators (`material.rs`).
+macro_rules! path_source {
+    () => {
+        concat!(
+            crate::shading::library_source!(),
+            "\n",
+            include_str!("path.wgsl"),
+            "\n",
+            include_str!("shadows.wgsl"),
+            "\n",
+            include_str!("textures.wgsl"),
+            "\n",
+            include_str!("volume.wgsl"),
+            "\n",
+            include_str!("aging.wgsl"),
+            "\n",
+            include_str!("graph_shim.wgsl"),
+            "\n",
+            include_str!("graph.wgsl")
+        )
+    };
+}
+const PATH_SOURCE: &str = path_source!();
+const SHADER: &str = concat!(path_source!(), "\n", include_str!("graph_stub.wgsl"));
+/// Graph pipelines a device keeps, by shape set (most recently used first).
+const GRAPH_PIPELINES: usize = 4;
 const MAX_TRIANGLES: u64 = MAX_GPU_PATH_TRIANGLES;
 const PARAMETER_BYTES: usize = 1184;
 // Eight u32 words: count low, pixel, bounce, sample, code, count high, first-writer flag, spare.
@@ -172,6 +186,26 @@ struct Context {
     // Built and warmed by the first denoised job, then shared by later ones.
     denoise: std::sync::OnceLock<denoise::Pipelines>,
     layout: wgpu::BindGroupLayout,
+    pipeline_layout: wgpu::PipelineLayout,
+    // Pipelines of material-graph jobs, by shape set, most recently used first.
+    graph_pipelines: std::sync::Mutex<Vec<(Vec<solidcraft_render::material_graph::ir::ShapeKey>, Arc<GraphPipelines>)>>,
+}
+
+/// The pipelines of a material-graph shape set: the path tracer's, and its denoise guides', built
+/// on the first denoised job that needs them.
+struct GraphPipelines {
+    source: String,
+    main: wgpu::ComputePipeline,
+    guide: std::sync::OnceLock<wgpu::ComputePipeline>,
+}
+impl GraphPipelines {
+    fn guide(&self, context: &Context) -> Result<&wgpu::ComputePipeline> {
+        if let Some(guide) = self.guide.get() {
+            return Ok(guide);
+        }
+        let built = denoise::guide_pipeline(context, &self.source)?;
+        Ok(self.guide.get_or_init(|| built))
+    }
 }
 impl Context {
     fn ensure_available(&self) -> Result<()> {
@@ -186,6 +220,42 @@ impl Context {
     }
     fn wait(&self, submission: wgpu::SubmissionIndex, timeout: Duration) -> Result<()> {
         wait_device(&self.device, &self.healthy, submission, timeout)
+    }
+    /// The pipeline of a job with material graphs: the path shader with the job's generated
+    /// evaluators, compiled once per distinct shape set and kept for the next jobs that use it.
+    fn graph_pipeline(&self, graphs: &solidcraft_render::job::graphs::GraphMaterials) -> Result<Arc<GraphPipelines>> {
+        let shapes = material::shape_set(graphs);
+        let lock = || self.graph_pipelines.lock().map_err(|_| JobError::new(ErrorCode::Internal, "graph pipeline cache lock poisoned"));
+        {
+            let mut cache = lock()?;
+            if let Some(index) = cache.iter().position(|(key, _)| *key == shapes) {
+                let entry = cache.remove(index);
+                let pipelines = entry.1.clone();
+                cache.insert(0, entry);
+                return Ok(pipelines);
+            }
+        }
+        let source = format!("{PATH_SOURCE}\n{}", material::source(graphs)?);
+        let main = checked_creation(&self.device, || {
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("gpu-path graphs"),
+                source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+            });
+            Ok(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("gpu-path graphs"),
+                layout: Some(&self.pipeline_layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            }))
+        })?;
+        warm_up(&self.device, &self.queue, &main, &placeholder_bind(&self.device, &self.layout, 7)?, &self.healthy)?;
+        let pipelines = Arc::new(GraphPipelines { source, main, guide: std::sync::OnceLock::new() });
+        let mut cache = lock()?;
+        cache.insert(0, (shapes, pipelines.clone()));
+        cache.truncate(GRAPH_PIPELINES);
+        Ok(pipelines)
     }
 }
 
@@ -255,7 +325,18 @@ impl Executor {
         });
         checked(scopes)?;
         warm_up(&device, &queue, &pipeline, &placeholder_bind(&device, &layout, 7)?, &healthy)?;
-        Ok(Self { context: Arc::new(Context { healthy, device, queue, pipeline, layout, denoise: std::sync::OnceLock::new() }) })
+        Ok(Self {
+            context: Arc::new(Context {
+                healthy,
+                device,
+                queue,
+                pipeline,
+                layout,
+                pipeline_layout,
+                denoise: std::sync::OnceLock::new(),
+                graph_pipelines: Default::default(),
+            }),
+        })
     }
 }
 
@@ -404,6 +485,10 @@ fn admission(scene: &ProductScene, request: &ImageRequest, options: JobOptions) 
         textures.validate_scene(scene)?;
         admission.preparation_bytes += textures.working_bytes();
     }
+    if let Some(graphs) = &request.graphs {
+        material::admit(graphs, scene, request.textures.as_deref())?;
+        admission.preparation_bytes += graphs.working_bytes();
+    }
     if options.linear_exr {
         admission.preparation_bytes = admission
             .preparation_bytes
@@ -540,6 +625,8 @@ struct Task {
     failures: wgpu::Buffer,
     readback: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    // The job's material-graph pipeline, or none for the device's own.
+    pipeline: Option<Arc<GraphPipelines>>,
     denoiser: Option<denoise::Resources>,
     sample: u32,
     lane: u32,
@@ -579,9 +666,16 @@ impl Task {
         if let Some(resources) = &request.textures {
             resources.validate_scene(&scene)?;
         }
-        let texture_upload = textures::flatten(request.textures.as_deref(), scene.meshes.len(), request.camera.target, &cancel)?;
+        let graphs = request.graphs.take();
+        if let Some(graphs) = &graphs {
+            graphs.validate_scene(&scene, &cancel)?;
+        }
+        let (texture_upload, graph_records) =
+            textures::flatten_with_graphs(request.textures.as_deref(), graphs.as_deref(), scene.meshes.len(), request.camera.target, &cancel)?;
         request.textures = None; // GPU upload owns decoded pixels; release captured source bytes.
-        let upload = scene::flatten_with_media(&scene, request.camera.target, &cancel, options.nested_media)?;
+        let pipeline = graphs.as_deref().map(|graphs| context.graph_pipeline(graphs)).transpose()?;
+        drop(graphs);
+        let upload = scene::flatten_with_graphs(&scene, request.camera.target, &cancel, options.nested_media, &graph_records)?;
         let bvh_ms = start.elapsed().as_secs_f64() * 1000.0;
         let mut upload_bytes = (upload.geometry.len() + upload.nodes.len() + texture_upload.len()) as u64;
         let environment_bytes = prepare_environment(&request, &cancel)?;
@@ -630,6 +724,7 @@ impl Task {
             let denoiser = if options.denoise {
                 Some(denoise::Resources::new(
                     &context,
+                    pipeline.as_deref(),
                     &uniform,
                     [&triangles, &nodes, &environment, &texture_buffer, &failures],
                     &accumulation,
@@ -656,6 +751,7 @@ impl Task {
             failures,
             readback,
             bind,
+            pipeline,
             denoiser,
             sample: 0,
             lane: 0,
@@ -785,7 +881,7 @@ impl Task {
         let mut encoder = context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("path tile") });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("path tile"), timestamp_writes: None });
-            pass.set_pipeline(&context.pipeline);
+            pass.set_pipeline(self.pipeline.as_deref().map_or(&context.pipeline, |graphs| &graphs.main));
             pass.set_bind_group(0, &self.bind, &[]);
             pass.dispatch_workgroups(count.div_ceil(64), 1, 1);
         }

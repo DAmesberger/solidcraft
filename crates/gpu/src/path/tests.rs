@@ -21,6 +21,7 @@ fn request(size: u32) -> ImageRequest {
     let mut camera = Camera { distance: 4.0, ..Default::default() };
     camera.set_view(StandardView::Top);
     ImageRequest {
+        graphs: None,
         studio_weights: None,
         integrator: Default::default(),
         raytrace: None,
@@ -430,6 +431,7 @@ fn glass_transport_evidence() {
     let bounds = meshes.iter().fold(Aabb3::EMPTY, |a, m| a.union(&m.mesh.bounds()));
     let camera = Camera { target: Vec3::new(0.0, 0.0, 1.0), yaw: -0.45, pitch: 0.5, distance: 13.0, fov: 0.65, ..Default::default() };
     let request = ImageRequest {
+        graphs: None,
         studio_weights: None,
         integrator: Default::default(),
         raytrace: None,

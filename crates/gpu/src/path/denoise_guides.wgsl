@@ -1,5 +1,5 @@
 // Original deterministic first-hit guides. Uses the production intersection and
-// material/normal texture evaluation, without advancing the path random stream.
+// material/normal texture and material-graph evaluation, without advancing the path random stream.
 @compute @workgroup_size(64)
 fn denoise_guides(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel=u.image.w+gid.x;
@@ -16,16 +16,17 @@ fn denoise_guides(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.environment.w>0.0 && emitter_hit_bounded(ray.origin,ray.direction,u.lighting.x).distance<hit.distance { return; }
     var t=triangle(hit.triangle);
     let position=surface_point(t,hit.bary);
-    t=texture_surface(t,position);
-    t=aged_surface(t,position,sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
-    // Single first-hit guides cannot describe refracted or sharp reflected images.
-    if t.base.w>0.0 || (t.parameters.x>0.5 && t.parameters.y<0.25) || (t.coat.x>0.0 && t.coat.y<0.05) { return; }
     var geometric=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     if dot(geometric,-ray.direction)<0.0 { geometric=-geometric; }
     var n=sc_unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
     if dot(n,geometric)<0.0 { n=-n; }
     if dot(n,-ray.direction)<=0.0 { n=geometric; }
-    let mapped=texture_normal(t,position,n,geometric);
+    t=texture_surface(t,position);
+    t=graph_surface(t,position,n,-ray.direction);
+    t=aged_surface(t,position,sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
+    // Single first-hit guides cannot describe refracted or sharp reflected images.
+    if t.base.w>0.0 || (t.parameters.x>0.5 && t.parameters.y<0.25) || (t.coat.x>0.0 && t.coat.y<0.05) { return; }
+    let mapped=graph_normal(t,texture_normal(t,position,n,geometric),geometric);
     if dot(mapped,-ray.direction)>0.0 { n=mapped; }
     let depth=dot(position-u.eye.xyz,-u.back.xyz);
     var footprint=2.0*length(u.up.xyz)/f32(u.image.y);

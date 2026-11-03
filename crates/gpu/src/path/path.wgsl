@@ -7,7 +7,7 @@ struct Triangle {
     // optics.xyz: extinction per mm, optics.w: body/medium identity (1..16384).
     base: vec4<f32>, parameters: vec4<f32>, optics: vec4<f32>,
     coat: vec4<f32>, // weight, perceptual roughness, IOR, shadow transmission flag
-    interior: vec4<f32>, // scattering/mm, HG g, reserved, immediate parent triangle+1
+    interior: vec4<f32>, // scattering/mm, HG g, stage flag 1 or graph record -(r+1) (graph.wgsl), immediate parent triangle+1
 };
 struct Node { lo: vec3<f32>, first: u32, hi: vec3<f32>, count: u32 };
 struct AreaLight { center: vec4<f32>, u: vec4<f32>, v: vec4<f32>, radiance: vec4<f32> };
@@ -914,9 +914,11 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
         }
         let shading_position = position+position_low;
         t = texture_surface(t,shading_position);
+        t = graph_surface(t,shading_position,n,v);
         t = aged_surface(t,shading_position,sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz)));
         let original_normal = n;
         n = texture_normal(t,shading_position,n,geometric);
+        n = graph_normal(t,n,geometric);
         if dot(n,v)<=0.0 { n=original_normal; }
         if medium_count > 0u {
             let segment=precise_point_delta(position,position_low,previous_position,previous_position_low);

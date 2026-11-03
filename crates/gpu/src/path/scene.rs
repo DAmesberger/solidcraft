@@ -17,6 +17,8 @@ pub(super) struct Triangle {
     pub surface: OpaqueSurface,
     pub transmission: Option<Transmission>,
     pub medium: u32,
+    /// `interior.z` of a graph-shaded triangle: −(record + 1) (`material.rs`), else 0.
+    pub graph: f32,
 }
 type MediumEdge = (usize, usize, i32);
 pub(super) fn medium_preparation_bytes(scene: &ProductScene) -> u64 {
@@ -76,7 +78,18 @@ pub(super) fn reserved<T>(count: usize) -> Result<Vec<T>> {
 pub(super) fn flatten(scene: &ProductScene, origin: Vec3, cancel: &CancelToken) -> Result<Upload> {
     flatten_with_media(scene, origin, cancel, false)
 }
+#[cfg(test)]
 pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &CancelToken, nested: bool) -> Result<Upload> {
+    flatten_with_graphs(scene, origin, cancel, nested, &Default::default())
+}
+/// As [`flatten_with_media`], with each triangle naming its graph record (`material.rs`).
+pub(super) fn flatten_with_graphs(
+    scene: &ProductScene,
+    origin: Vec3,
+    cancel: &CancelToken,
+    nested: bool,
+    graphs: &super::material::Records,
+) -> Result<Upload> {
     let count = scene.meshes.iter().map(|m| m.mesh.triangles.len()).sum::<usize>();
     let mut triangles = reserved(count)?;
     let vertex_count = scene.meshes.iter().map(|m| m.mesh.positions.len()).sum::<usize>();
@@ -155,7 +168,8 @@ pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &Ca
             if transmission.is_some() && surface.metallic() != 0.0 {
                 return Err(invalid("transmission requires a nonmetallic surface"));
             }
-            triangles.push(Triangle { p, indices: global_indices, surface, transmission, medium: body_index as u32 + 1 });
+            let graph = graphs.interior(body_index, face);
+            triangles.push(Triangle { p, indices: global_indices, surface, transmission, medium: body_index as u32 + 1, graph });
         }
         validate_medium(&triangles[body_start..], cancel)?;
         let body_triangles = &triangles[body_start..];
@@ -237,7 +251,7 @@ pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &Ca
                 if scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/")) {
                     1.0
                 } else {
-                    0.0
+                    f64::from(t.graph)
                 },
             ),
             parent_triangle as f32,

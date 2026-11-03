@@ -123,6 +123,7 @@ mod tests {
             surface: OpaqueSurface::new(Vec3::ZERO, 0.0, 0.5, 1.5).unwrap(),
             transmission: None,
             medium: body,
+            graph: 0.0,
         }
     }
 
