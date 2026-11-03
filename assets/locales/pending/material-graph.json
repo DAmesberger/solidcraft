@@ -12,7 +12,7 @@
     "cmd.appearance_graph_validate": "Validate Material Graph",
     "cmd.appearance_texture_add": "Add Texture",
     "cmd.appearance_texture_list": "List Textures",
-    "cmd.view_look": "View Look"
+    "cmd.view_look": "Realistic View"
   },
   "de": {
     "cmd.appearance_graph_create": "Neuer Materialgraph",
@@ -27,7 +27,7 @@
     "cmd.appearance_graph_validate": "Materialgraph prüfen",
     "cmd.appearance_texture_add": "Textur hinzufügen",
     "cmd.appearance_texture_list": "Texturen auflisten",
-    "cmd.view_look": "Darstellung der Ansicht"
+    "cmd.view_look": "Realistische Ansicht"
   },
   "ar": {
     "cmd.appearance_graph_create": "رسم بياني جديد للمادة",
@@ -42,7 +42,7 @@
     "cmd.appearance_graph_validate": "التحقق من رسم المادة البياني",
     "cmd.appearance_texture_add": "إضافة نسيج",
     "cmd.appearance_texture_list": "سرد الأنسجة",
-    "cmd.view_look": "مظهر العرض"
+    "cmd.view_look": "عرض واقعي"
   },
   "he": {
     "cmd.appearance_graph_create": "גרף חומר חדש",
@@ -57,7 +57,7 @@
     "cmd.appearance_graph_validate": "אימות גרף חומר",
     "cmd.appearance_texture_add": "הוספת טקסטורה",
     "cmd.appearance_texture_list": "רשימת טקסטורות",
-    "cmd.view_look": "מראה התצוגה"
+    "cmd.view_look": "תצוגה מציאותית"
   },
   "ja": {
     "cmd.appearance_graph_create": "新しいマテリアルグラフ",
@@ -72,7 +72,7 @@
     "cmd.appearance_graph_validate": "マテリアルグラフを検証",
     "cmd.appearance_texture_add": "テクスチャを追加",
     "cmd.appearance_texture_list": "テクスチャの一覧",
-    "cmd.view_look": "ビューの外観"
+    "cmd.view_look": "リアルな表示"
   },
   "vi": {
     "cmd.appearance_graph_create": "Đồ thị vật liệu mới",
@@ -87,7 +87,7 @@
     "cmd.appearance_graph_validate": "Kiểm tra đồ thị vật liệu",
     "cmd.appearance_texture_add": "Thêm kết cấu",
     "cmd.appearance_texture_list": "Liệt kê kết cấu",
-    "cmd.view_look": "Diện mạo khung nhìn"
+    "cmd.view_look": "Khung nhìn chân thực"
   },
   "zh": {
     "cmd.appearance_graph_create": "新建材质图",
@@ -102,6 +102,6 @@
     "cmd.appearance_graph_validate": "验证材质图",
     "cmd.appearance_texture_add": "添加纹理",
     "cmd.appearance_texture_list": "列出纹理",
-    "cmd.view_look": "视图外观"
+    "cmd.view_look": "真实感视图"
   }
 }

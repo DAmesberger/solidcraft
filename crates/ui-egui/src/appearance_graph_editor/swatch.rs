@@ -134,7 +134,6 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
     Frame {
         product_lights: None,
         product_look: Some(ProductLook::default()),
-        // The swatch's sphere is modelled in millimetres.
         units_per_mm: 1.0,
         product: true,
         upload_error: None,
