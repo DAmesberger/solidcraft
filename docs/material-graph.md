@@ -7,7 +7,9 @@ package** once it is proven. The package has four parts:
   [opaque PBR](render-opaque-pbr.md#opt-in-product-look), [clear coat](render-clear-coat.md));
 - the material node graph in the file format;
 - its editor and commands;
-- a realistic **view mode** beside the existing shading.
+- a realistic **view mode** beside the existing shading;
+- a default lighting environment that flatters typical CAD materials, a demo scene, and
+  golden GPU frames with an acceptance bar the founder reviews (§5.8, §5.9).
 
 There is no renderer-only PR (§9). Of the new parts, nothing is implemented yet.
 
@@ -811,6 +813,96 @@ normals to its shading normal.
 what they show today for a look without `pbr`: its display `color`. A `pbr` look keeps its
 `pbr` values. There is no CPU graph evaluator in product code.
 
+### 5.8 Default lighting environment
+
+**Today's evidence fails.** In the renderer branch with the look on, the Sample Plate in a
+metal look shows a clipped white top and pitch-black sides, and the plastic shows a
+washed-out top with no highlight. (Screenshots were taken while preparing the renderer
+branch.)
+
+**The cause is structural, not only a matter of values.** The studio is a cube map at
+infinite distance. A flat face therefore reflects one direction at every point, so a smooth
+metal face shows **one** colour:
+
+- faces turned toward the bright cyclorama clip to white;
+- faces turned toward the dark floor and walls crush to black.
+
+Better softbox values alone cannot fix this. The default environment for the Realistic
+view is redesigned, generically and procedurally, with no bundled image (decision O14):
+
+- **A finite studio with position-dependent reflections.** The studio is a room sized to
+  the scene's bounds (a box about 4× the model's bounding radius, centred on it). Reflections
+  use **box projection**: the reflected ray is intersected with the room box before the cube
+  lookup, a public real-time technique (mathematics only). A flat face then sweeps across
+  the softboxes and shows gradients. This is one ray-box intersection per lookup, and it is
+  WebGL2-safe.
+- **Graded softboxes:**
+  - a large key above front-left, whose radiance falls off smoothly toward its edges
+    (no hard rectangle);
+  - a fill card front-right at about ⅓ of the key;
+  - a strip rim light behind at about ½.
+
+  The key and the rim are also direct lights, through the existing softbox α widening, so
+  coats get soft highlights.
+- **Horizon and floor:** a cyclorama gradient from a mid-grey floor through a brighter
+  horizon band to a soft ceiling. **No direction is darker than about 10 % of the mean
+  radiance**, so no face reflects black. The floor receives the existing ground shadow
+  (`ground_shadow`) and AO contact darkening.
+- **Exposure is calibrated per preset, not automatic,** so frames are stable while
+  orbiting: a white diffuse face under the key maps to about 0.8 display value before the
+  tone curve's shoulder. PBR Neutral stays the tone curve. The environment's peak radiance
+  is bounded, so that only small highlight areas reach the shoulder, never whole faces.
+- **Kept from the renderer branch:**
+  - the CPU bake of the environment texture (data preparation, off the window thread,
+    stepped on the web) in `ui-egui/src/gpu.rs`, reused as is;
+  - split-sum prefiltering, SH irradiance and multiple-scattering compensation;
+  - the white-furnace tests.
+
+  The `Product`, `Soft` and `Contrast` presets are re-tuned under the new model. `Product`
+  becomes the Realistic default.
+
+Track L builds this, and the acceptance frames (§5.9) judge it.
+
+### 5.9 Demo scene and golden frames (acceptance)
+
+**Demo scene.** `examples/realistic-showcase.json` is an original example design, built by
+commands as `examples/material-finishes.json` is. It is shipped with the package and opened
+in the Realistic view. It contains:
+
+| Part | Material | Shows |
+|---|---|---|
+| Rounded enclosure lid | brushed aluminium graph (anisotropic, `pattern.brushed`) | brushed metal, stretched highlights |
+| Cylinder and sphere | polished steel (`pbr`, roughness 0.08) | polished metal through the default studio, and that `pbr` looks still work |
+| Rounded box | black epoxy with a clear coat (worked example) | coated plastic, coat highlights over a dark base |
+| Plate | carbon-fibre twill (`pattern.weave`) with an image label (an original PNG asset, ATTRIBUTION row) | patterned and textured parts, `texcoord.planar`, `image` |
+| Dome | clear silicone graph (`transmission_weight` 1) | the transparent-ish fallback (see-through, tinted) |
+| Sample Plate | one scalar look and one metal `pbr` look | compatibility; the case that fails today |
+
+Two camera poses are part of the example: isometric front-left and a low three-quarter
+back view.
+
+**Golden frames.** The scene is rendered by the actual viewport on a native GPU at
+1600 × 1000 with 2 × 2 supersampling, in both poses and both looks. The frames are stored
+under `crates/gpu/tests/golden/realistic/`, compared within tolerance by a test, and
+regenerated only by an explicit script. The CPU is used only for the comparison, in tests.
+
+**Acceptance bar.** These are measured on the golden frames with per-part masks (target
+values for the founder to confirm, O15):
+
+| Check | Bar |
+|---|---|
+| Clipped pixels | ≤ 1 % of each part's pixels at display luminance ≥ 254/255 (small highlights allowed) |
+| Crushed pixels | ≤ 1 % of each part's pixels at ≤ 5/255, cavities (AO term < 0.5) excluded |
+| Faces read as faces | every planar metal face spans ≥ 12/255 of luminance across itself (a gradient, not a flat fill); every visible face's median lies in [20, 235]/255 |
+| Materials distinguishable | brushed vs polished metal, coated vs uncoated plastic: mean colour difference ≥ 6/255, or a visibly different highlight footprint |
+| Sample Plate regression | top and side medians of the metal plate both in [40, 220]/255 (today: 255 and about 10) |
+| WebGL2 matches native | browser frames of the same scene: mean channel error ≤ 2/255, 99th percentile ≤ 8/255 |
+| Standard look untouched | standard-look frames bit-identical to the build before the package |
+
+**Founder review gate.** The golden PNGs are shown side by side with today's frames. They
+are part of the completion evidence, and **nothing goes upstream before the founder approves
+them**. The numeric bar keeps them from regressing afterwards.
+
 ## 6. Realistic view mode
 
 For modelling, realistic rendering mostly distracts from the shapes. The **standard** view, which
@@ -1034,7 +1126,8 @@ commit. The steps are:
 
 | # | Commit (group) | Contents |
 |---|---|---|
-| 1 | Realistic renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. **Without** the `SurfacePattern` enum, `pbr_tri_with` detail vertices and the `render_studio_look` preference. `fs_pbr` is split into `material_eval` + `pbr_shade`. |
+| 1 | Realistic renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. `fs_pbr` is split into `material_eval` + `pbr_shade`. The fixed-field sites the graph replaces are removed (list below). |
+| 1b | Default studio | The finite, box-projected studio, graded softboxes, horizon, calibrated exposure (§5.8) |
 | 2 | Shared shading library | `crates/gpu/src/shading/` (BSDF, noise, projection), used by both `viewport.wgsl`/`pbr.rs` and `path.wgsl`. No output change: path tests unchanged, viewport frames within parity. |
 | 3 | Realistic view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy realistic resources, GPU requirement, the Render-preview look (§6) |
 | 4 | Graph model | Types, validation, IR, cost model, base response, `SurfaceSample` around `OpaqueSurface` (`solidcraft-render`); the test-only reference |
@@ -1044,6 +1137,21 @@ commit. The steps are:
 | 8 | GPU graphs, path tracer | The path back end: the material table, the `graph_surface` hook, the shape switch, approximation reports in preflight (§5.7) |
 | 9 | Editor | The layered stack and GPU swatches in the Appearance editor; locale strings |
 | 10 | Libraries and content | Catalog v3, built-in graphs (today's four patterns and the examples), user docs, examples, screenshots |
+| 11 | Showcase and goldens | `examples/realistic-showcase.json`, its texture asset, the golden frames and the acceptance test (§5.9) |
+
+**Commit 1 removes these fixed-field sites from the renderer branch** (as identified by the
+renderer agent):
+
+- `SurfacePattern` (`view/ibl.rs:149`);
+- `ProductLook`'s `weave_pitch` and `ply_thickness` (`ibl.rs:82–86`) and the `look_detail`
+  uniform slot (`viewport.wgsl:24`). `units_per_mm` moves to the frame uniform, because
+  every graph's millimetre lengths need it; it stays a scene constant, not a material field;
+- `GpuScene::pbr_tri_with` and its 64-byte detailed vertices, `vs_pbr_detailed`, and the
+  `Source::Pbr { detailed }` occlusion pipelines (`view.rs:827`, `view/ao.rs`);
+- `look_detail()` (`pbr.rs:357`);
+- `render_studio_look` and `preview_look()` (`render_workspace.rs`), replaced by `view.look`.
+
+The studio bake in `ui-egui/src/gpu.rs` is reused as is.
 
 The PR body's `Changes a default:` line reads "No". The standard view stays the default,
 files without graphs save unchanged, and the Render preview stays standard.
@@ -1071,7 +1179,9 @@ All later tracks build against those signatures.
 | Track | Scope | Depends on | Agent-hours |
 |---|---|---|---|
 | C0 | Contract (above) | – | 7 |
-| R | Renderer integration: bring `upstream-photoreal-look` into the package branch, remove `SurfacePattern`/detail vertices and `render_studio_look` from it, split `fs_pbr` into `material_eval` + `pbr_shade` with bit-identical frames | C0 | 6 |
+| R | Renderer integration: bring `upstream-photoreal-look` into the package branch, remove the fixed-field sites listed in §9 (patterns, weave/ply fields, detailed vertices and their AO pipelines, `look_detail`, `render_studio_look`/`preview_look`), move `units_per_mm` to the frame uniform, split `fs_pbr` into `material_eval` + `pbr_shade` with bit-identical frames | C0 | 7 |
+| L | Default studio (§5.8): a finite, box-projected room sized to the scene, graded key/fill/rim softboxes, horizon cyclorama with a radiance floor, ground shadow and AO on the floor, calibrated exposure, re-tuned presets; furnace tests kept; per-part luminance metrics tooling for §5.9 | R | 12 |
+| X | Showcase scene: `examples/realistic-showcase.json` built by commands (brushed, polished, coated, weave + image label, transmissive dome, Sample Plate), an original PNG asset with ATTRIBUTION row, camera poses; authored against C0's command schemas | C0, then D | 4 |
 | S | Shared shading library: extract BSDF, coat, noise and projection into `crates/gpu/src/shading/` from `path.wgsl`'s versions; port `pbr.rs` and `path.wgsl` onto it; path tests unchanged, viewport parity, GLSL ES translation | R | 8 |
 | V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in the realistic view, lazy realistic resources, shared tessellation, the no-GPU refusal; pixel tests in both looks | R | 12 |
 | A | Validation, IR, cost model, `SurfaceSample`, base response; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 10 |
@@ -1085,22 +1195,26 @@ All later tracks build against those signatures.
 | D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start` | A, B | 12 |
 | E | Layered stack editor, GPU swatches, texture picker, locale strings; built against C0's command schemas, then joined to D (4 of its 16) | C0, then D | 16 |
 | G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json` | A, D | 6 |
-| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, path-tracer frames of graph looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3 | C1–C3, PT, V, K | 11 |
+| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, path-tracer frames of graph looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3; golden frames of the showcase, the acceptance test (§5.9) and the founder review set | C1–C3, PT, V, K, L, X | 14 |
 | P | Package assembly: the commit series, the proposal text, PR body, screenshots and a recording | all | 4 |
 | H | Pcbcraft (outside the package): table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
 
-- **Total:** about **155 agent-hours** for the upstream package, plus **10** for Pcbcraft:
-  **165** in all.
+- **Total:** about **175 agent-hours** for the upstream package, plus **10** for Pcbcraft:
+  **185** in all.
 - **Critical path:** C0 (7) → A's IR (6 of its 10) → C1 (14) → integrating C2, C3 and S
-  (6) → I (11) → P (4) = about **48 agent-hours**.
+  (6) → I (14) → P (4) = about **51 agent-hours**. The founder's review of the golden
+  frames is a gate after I, not agent time.
 
 The other chains fit inside it:
+
+- R → L finishes by hour 26, well before I.
+- X joins D at hour 29 and is done by hour 31.
 
 - R → S finishes by hour 21. PT starts there, ends by hour 33, and joins I.
 - R → V finishes by hour 25.
 - D is done by hour 29, and E's joining to it by hour 33.
 
-Changes since the previous estimate (140 + 10); the Save As export (3 hours of K) is removed:
+Changes since the previous estimate (140 + 10); the Save As export (3 hours of K) is removed, and the lighting and acceptance work adds L (12), X (4), golden frames (+3 in I) and the fuller cleanup (+1 in R):
 
 - **Removed:** CPU consumers (old track F, 6) and the CPU evaluator and flattening in
   product code (4 from A).
@@ -1110,7 +1224,7 @@ Changes since the previous estimate (140 + 10); the Save As export (3 hours of K
   - GPU mips (+1 in C3), the larger contract (+1) and path evidence (+1 in I).
 - C2 is one hour smaller, because the coat already lives in the shared module.
 
-Tracks R, A, B and E start in parallel after C0. S, C2 and V start after R; PT starts after
+Tracks R, A, B, E and X start in parallel after C0. S, C2, V and L start after R; PT starts after
 S; D, K, T and H fan out once A and B land. Reviews and merge rounds come on top of both
 figures.
 
@@ -1121,7 +1235,7 @@ figures.
    four-group limit are the likely failure points. *Mitigation:* the GLSL corpus test from
    commit 7 on, a browser frame in track I before the package is offered, and the
    non-blocking compile with the base-response fallback.
-2. **The package is large** for upstream review, ten commit groups. *Mitigation:* the
+2. **The package is large** for upstream review, twelve commit groups. *Mitigation:* the
    proposal first, a stacked series in which each commit passes CI on its own, and the
    offer of stacked PRs.
 3. **Upstream disagreement on the model** (naming, table vs inline, scope), which would
@@ -1147,6 +1261,13 @@ figures.
     *Mitigation:* clamp anisotropy in the studio term to what passes, documented.
 11. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
     LRU and the base-response fallback; the stack editor produces few distinct shapes.
+12. **The default studio may still not flatter every material.** Lighting quality is partly
+    taste. *Mitigation:* box projection fixes the structural cause (uniform flat faces); the
+    numeric bar (§5.9) catches regressions; the founder's review gate decides before
+    anything goes upstream.
+13. **Box projection misleads at the room's scale.** Parts far from the centre, or very
+    flat scenes, can show stretched reflections. *Mitigation:* size the room from the scene
+    bounds; the showcase includes a wide part to check it.
 
 ### Open decisions (with recommendations)
 
@@ -1165,3 +1286,6 @@ figures.
 | O11 | Composing the shared WGSL modules | **Concatenation** of `sc_`-prefixed modules, the mechanism both shaders already use. `naga_oil` (MIT OR Apache-2.0) only if module count grows. |
 | O12 | Test oracle | **Keep a test-only f64 IR interpreter** (track T) beside analytic checks and golden GPU frames. Patterns have no closed form, and an independent reference catches back-end drift. It never ships in product code. |
 | O13 | The view-mode key | **Shift+P**, which is free and rebindable; Shift+R is `edit.repeat`. Founder or maintainers may prefer another; nothing else depends on it. |
+| O14 | Default studio: procedural or a bundled HDR image | **Procedural** (original, small, reproducible, no asset to license). A CC0 HDR studio image could be added later as an optional preset, with its source recorded. |
+| O15 | Acceptance thresholds (§5.9) | **Adopt the proposed numbers as targets**, and let the founder's review of the golden frames confirm or tighten them before upstream. |
+| O16 | Reflections of the default studio | **Box-projected, from a room sized to the scene.** This is the only cheap way flat faces get gradients; it is WebGL2-safe, at one ray-box test per lookup. |
