@@ -770,3 +770,237 @@ fn another_target_shares_the_generated_code() {
     }
     assert!(super::generate(&fixture(FIXTURES[4].1).ir, &Bad).is_err(), "a target name must be an identifier");
 }
+
+// Against the test-only reference (track T): the generated code evaluated on the GPU at fixed
+// points equals the f64 interpreter of the same IR.
+
+use solidcraft_render::material_graph::reference::{self, Point, ReferenceSurface};
+
+/// Floats per point in the readback test's input: world and object position, world and object
+/// normal, footprint, facing, the object-to-world rows, their inverse's rows and the tangent.
+const POINT_FLOATS: usize = 35;
+
+fn point_floats(p: &Point) -> Vec<f32> {
+    let m = p.object_to_world;
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let cof = |r: usize, c: usize| {
+        let (r0, r1) = ((r + 1) % 3, (r + 2) % 3);
+        let (c0, c1) = ((c + 1) % 3, (c + 2) % 3);
+        m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]
+    };
+    let inv: Vec<f64> = (0..3).flat_map(|r| (0..3).map(move |c| (r, c))).map(|(r, c)| cof(c, r) / det).collect();
+    let mut out: Vec<f64> = Vec::new();
+    out.extend(p.world_position);
+    out.extend(p.object_position);
+    out.extend(p.world_normal);
+    out.extend(p.object_normal);
+    out.push(p.footprint_mm);
+    out.push(p.facing);
+    out.extend(m.iter().flatten());
+    out.extend(inv);
+    out.extend(p.tangent);
+    assert_eq!(out.len(), POINT_FLOATS);
+    out.into_iter().map(|x| x as f32).collect()
+}
+
+const READBACK: &str = r#"
+struct MatPage { m: array<vec4<f32>, 1024>, };
+@group(0) @binding(0) var<uniform> mat_page: MatPage;
+@group(0) @binding(1) var<storage, read> pts: array<f32>;
+@group(0) @binding(2) var<storage, read_write> outs: array<f32>;
+fn r3(i: u32) -> vec3<f32> { return vec3<f32>(pts[i], pts[i + 1u], pts[i + 2u]); }
+@compute @workgroup_size(1)
+fn readback(@builtin(global_invocation_id) id: vec3<u32>) {
+    let b = id.x * 35u;
+    let n = r3(b + 6u);
+    let facing = pts[b + 13u];
+    let tangent = r3(b + 32u);
+    let v = n * facing + tangent * sqrt(max(1.0 - facing * facing, 0.0));
+    let to_world = transpose(mat3x3<f32>(r3(b + 14u), r3(b + 17u), r3(b + 20u)));
+    let to_object = transpose(mat3x3<f32>(r3(b + 23u), r3(b + 26u), r3(b + 29u)));
+    let c = sc_GraphCtx(0u, v, n, tangent, facing, r3(b + 9u), r3(b), r3(b + 3u), pts[b + 12u], sc_ObjectFrame(to_object, to_world));
+    let s = material_eval(c);
+    let f = array<f32, 37>(s.base_color.x, s.base_color.y, s.base_color.z, s.metalness, s.roughness, s.ior, s.coat_weight,
+        s.coat_roughness, s.coat_ior, s.normal.x, s.normal.y, s.normal.z, s.coat_normal.x, s.coat_normal.y, s.coat_normal.z,
+        s.specular_weight, s.specular_color.x, s.specular_color.y, s.specular_color.z, s.anisotropy, s.rotation, s.tangent.x,
+        s.tangent.y, s.tangent.z, s.coat_color.x, s.coat_color.y, s.coat_color.z, s.emission_luminance, s.emission_color.x,
+        s.emission_color.y, s.emission_color.z, s.transmission_weight, s.transmission_color.x, s.transmission_color.y,
+        s.transmission_color.z, s.transmission_depth_mm, s.opacity);
+    for (var k = 0u; k < 37u; k += 1u) { outs[id.x * 37u + k] = f[k]; }
+}
+"#;
+
+/// The generated surface of `ir` (record words `words`, the base response in front) at `points`,
+/// evaluated by a compute shader.
+fn gpu_surfaces(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    ir: &Ir,
+    words: &[u32],
+    base: &SurfaceSample,
+    points: &[Point],
+) -> Result<Vec<Vec<f32>>, String> {
+    use wgpu::util::DeviceExt;
+    let source = format!("{}\n{READBACK}\n{}", crate::shading::library(), super::material_eval(ir).map_err(|e| e.0)?);
+    super::validate(&source).map_err(|e| e.0)?;
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: None,
+        module: &module,
+        entry_point: Some("readback"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let mut page: Vec<u32> = super::base_record(base).iter().map(|x| x.to_bits()).collect();
+    page.extend_from_slice(words);
+    page.resize(super::PAGE_VEC4 as usize * 4, 0);
+    let bytes = |w: &[u32]| w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let uniform =
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&page), usage: wgpu::BufferUsages::UNIFORM });
+    let input: Vec<u32> = points.iter().flat_map(point_floats).map(f32::to_bits).collect();
+    let pts =
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &bytes(&input), usage: wgpu::BufferUsages::STORAGE });
+    let size = (points.len() * 37 * 4) as u64;
+    let out = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: pts.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: out.as_entire_binding() },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups(points.len() as u32, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
+    queue.submit([encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+    let data = read.slice(..).get_mapped_range().map_err(|e| e.to_string())?.to_vec();
+    let floats: Vec<f32> = data.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+    Ok(floats.chunks(37).map(<[f32]>::to_vec).collect())
+}
+
+/// T's sample points, a filtered copy of each (fades) and placed copies (object space).
+fn reference_points() -> Vec<Point> {
+    let mut points = reference::sample_points();
+    let filtered: Vec<Point> = points.iter().map(|p| p.with_footprint(0.02)).collect();
+    let (c, s) = (0.6f64, 0.8f64);
+    let turn = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+    let placed: Vec<Point> = points.iter().filter_map(|p| p.placed(turn, [3.0, -1.0, 2.0]).ok()).collect();
+    points.extend(filtered);
+    points.extend(placed);
+    points
+}
+
+/// The worst difference between the GPU's and the reference's surface of a graph at the points.
+fn worst_against_reference(device: &wgpu::Device, queue: &wgpu::Queue, text: &str) -> Result<(String, f64), String> {
+    let graph: MaterialGraph = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let l = lowered(&graph)?;
+    let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).map_err(|e| e.0)?;
+    if ir.shape != l.ir.shape {
+        return Err("the reference lowers another shape".to_owned());
+    }
+    let points = reference_points();
+    let got = gpu_surfaces(device, queue, &ir, &words, &l.base, &points)?;
+    let mut worst = (String::new(), 0.0);
+    for (i, (p, g)) in points.iter().zip(&got).enumerate() {
+        let mut want = reference::evaluate(&ir, &words, &[], p).map_err(|e| e.0)?.surface;
+        let mut have = ReferenceSurface::from_floats(g).map_err(|e| e.0)?;
+        // The tangent is zeroed at exactly zero anisotropy: below 1e-6 in both it shades nothing,
+        // and f32 and f64 can land on either side of the rule.
+        if want.anisotropy.abs() < 1e-6 && have.anisotropy.abs() < 1e-6 {
+            (want.tangent, have.tangent) = ([0.0; 3], [0.0; 3]);
+        }
+        let (field, d) = want.max_difference(&have);
+        if d > worst.1 {
+            worst = (format!("{field} at point {i}"), d);
+        }
+    }
+    Ok(worst)
+}
+
+/// Every fixture evaluates on the GPU as the reference does, at unfiltered, filtered and placed
+/// points.
+#[test]
+fn the_fixtures_match_the_reference() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    for (name, text) in FIXTURES {
+        let (field, d) = worst_against_reference(&device, &queue, text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(d < 1e-3, "{name}: {field} differs by {d}");
+    }
+}
+
+/// The generated corpus evaluates on the GPU as the reference does.
+#[test]
+fn the_generated_corpus_matches_the_reference() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let mut fuzz = Fuzz(0x9e37_79b9_7f4a_7c15);
+    let mut bad = Vec::new();
+    let mut compared = 0;
+    for i in 0..96 {
+        let text = fuzz.graph().to_string();
+        if lowered(&graph_of(serde_json::from_str(&text).unwrap_or_default())).is_err() {
+            continue;
+        }
+        compared += 1;
+        match worst_against_reference(&device, &queue, &text) {
+            Ok((field, d)) if d >= 1e-3 => bad.push(format!("graph {i}: {field} by {d}")),
+            Ok(_) => {}
+            Err(e) => bad.push(format!("graph {i}: {e}")),
+        }
+    }
+    assert!(compared >= 64, "{compared} compared");
+    assert!(bad.is_empty(), "{} of {compared} graphs differ:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// Prints a corpus graph's code and every point where it differs from the reference, with the
+/// reference's instruction values: `GRAPHS=3,17 cargo test … debug_corpus_graph -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn debug_corpus_graph() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let wanted: Vec<usize> = std::env::var("GRAPHS").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
+    let mut fuzz = Fuzz(0x9e37_79b9_7f4a_7c15);
+    for i in 0..96 {
+        let text = fuzz.graph().to_string();
+        if !wanted.contains(&i) {
+            continue;
+        }
+        let (ir, words) = reference::prepare_json(&text, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let l = lowered(&graph_of(serde_json::from_str(&text).unwrap_or_default())).unwrap_or_else(|e| panic!("{e}"));
+        let points = reference_points();
+        let got = gpu_surfaces(&device, &queue, &ir, &words, &l.base, &points).unwrap_or_else(|e| panic!("{e}"));
+        println!("== graph {i}\n{text}\n{}", super::material_eval(&ir).unwrap_or_default());
+        for (k, (p, g)) in points.iter().zip(&got).enumerate() {
+            let e = reference::evaluate(&ir, &words, &[], p).unwrap_or_else(|e| panic!("{e}"));
+            let have = ReferenceSurface::from_floats(g).unwrap_or_else(|e| panic!("{e}"));
+            let (field, d) = e.surface.max_difference(&have);
+            if d > 1e-3 {
+                println!("point {k}: {field} by {d}; want {:?}\n got {:?}", e.surface.to_floats(), have.to_floats());
+                for (j, v) in e.values.iter().enumerate() {
+                    println!("  v{j} = {v:?}");
+                }
+            }
+        }
+    }
+}

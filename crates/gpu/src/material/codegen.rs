@@ -133,6 +133,11 @@ struct Gen<'a> {
     kinds: Vec<Kind>,
     /// Instructions whose value carries a gradient `gN` (per mm, world space).
     grads: Vec<bool>,
+    /// Pattern calls whose `slope` output is read.
+    slope_read: Vec<bool>,
+    /// Vector values (and `separate3` calls, for their input) carrying component gradients `qN`,
+    /// a `mat3x3<f32>` whose columns are the gradients of x, y and z.
+    mgrads: Vec<bool>,
 }
 
 impl Gen<'_> {
@@ -182,8 +187,8 @@ impl Gen<'_> {
                 GeometryInput::WorldPosition => "c.p_world".to_owned(),
                 GeometryInput::ObjectNormal => "c.n_object".to_owned(),
                 GeometryInput::WorldNormal => "c.n".to_owned(),
-                GeometryInput::Facing => "abs(dot(c.n, c.v))".to_owned(),
-                GeometryInput::Tangent => "sc_default_tangent(c.n)".to_owned(),
+                GeometryInput::Facing => "c.facing".to_owned(),
+                GeometryInput::Tangent => "c.tangent".to_owned(),
             },
             Operand::Texture(_) => "0.0".to_owned(),
             Operand::Absent => "0.0".to_owned(),
@@ -223,6 +228,28 @@ impl Gen<'_> {
         match op {
             Operand::Value(v) if usize::try_from(v.0).ok().and_then(|i| self.grads.get(i)).copied().unwrap_or(false) => format!("g{}", v.0),
             _ => ZERO3.to_owned(),
+        }
+    }
+
+    /// The component gradients of a vector operand (`mat3x3<f32>` columns), if it carries any: a
+    /// vector value with them, a float broadcast, or a position (its Jacobian).
+    fn mgrad(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Value(v) => {
+                let i = usize::try_from(v.0).ok()?;
+                if self.mgrads.get(i).copied().unwrap_or(false) && self.kinds.get(i) != Some(&Kind::F) {
+                    Some(format!("q{}", v.0))
+                } else if self.grads.get(i).copied().unwrap_or(false) {
+                    Some(format!("mat3x3<f32>(g{0}, g{0}, g{0})", v.0))
+                } else {
+                    None
+                }
+            }
+            Operand::Geometry(GeometryInput::WorldPosition) => {
+                Some("mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0))".to_owned())
+            }
+            Operand::Geometry(GeometryInput::ObjectPosition) => Some("transpose(c.frame.to_object)".to_owned()),
+            _ => None,
         }
     }
 
@@ -297,11 +324,20 @@ impl Gen<'_> {
             let c = call.0;
             let expr = match (source, output) {
                 (_, "slope") => format!("s{c}.slope"),
-                ("pattern.brushed", "tangent") => format!("s{c}.tangent"),
+                ("pattern.brushed", "tangent") => {
+                    let texcoord = Self::operand(self.instr(call)?, 0);
+                    self.tangent_of(&texcoord)?
+                }
                 ("image", "value") => format!("s{c}.value"),
                 ("image", "alpha") => format!("s{c}.alpha"),
-                ("separate3", "y") => format!("s{c}.y"),
-                ("separate3", "z") => format!("s{c}.z"),
+                ("separate3", "y" | "z") => {
+                    let lane = if output == "y" { 1 } else { 2 };
+                    if instr.slope && usize::try_from(c).ok().and_then(|i| self.mgrads.get(i)).copied().unwrap_or(false) {
+                        self.line(&format!("let g{n} = q{c}[{lane}];"));
+                        grad = true;
+                    }
+                    format!("s{c}.{output}")
+                }
                 (k, "uv") if k.starts_with("texcoord.") => {
                     if call_kind == Kind::Tri {
                         format!("sc_tri_uv(v{c})")
@@ -309,13 +345,7 @@ impl Gen<'_> {
                         format!("v{c}.uv")
                     }
                 }
-                (k, "tangent") if k.starts_with("texcoord.") => {
-                    if call_kind == Kind::Tri {
-                        format!("sc_tri_tangent(v{c})")
-                    } else {
-                        format!("sc_tc_tangent(v{c})")
-                    }
-                }
+                (k, "tangent") if k.starts_with("texcoord.") => self.tangent_of(&Operand::Value(call))?,
                 _ => return Err(CodegenError("an output selection the raster back end does not know".to_owned())),
             };
             self.line(&format!("let v{n}: {} = {expr};", ty.wgsl()));
@@ -339,9 +369,9 @@ impl Gen<'_> {
                 }
                 "texcoord.cylindrical" => {
                     let (p, _, fp) = Self::space(Self::param(&instr, 0));
-                    let angle = if Self::param(&instr, 1) == 1 { "true" } else { "false" };
+                    let arc_length = if Self::param(&instr, 1) == 0 { "true" } else { "false" };
                     let [o, a, r, radius] = self.args(&instr, [Kind::V3, Kind::V3, Kind::V3, Kind::F])?;
-                    let call = format!("sc_tc_cylindrical({p}, {fp}, {o}, {a}, {r}, {radius}, {angle})");
+                    let call = format!("sc_tc_cylindrical({p}, {fp}, {o}, {a}, {r}, {radius}, {arc_length})");
                     let call = if Self::param(&instr, 0) == 0 { format!("sc_tc_to_world({call}, c.frame)") } else { call };
                     self.line(&format!("let v{n} = {call};"));
                     kind = Kind::Tc;
@@ -361,22 +391,26 @@ impl Gen<'_> {
                 }
                 "pattern.noise" => {
                     let noise_kind = Self::param(&instr, 0).clamp(0, 2);
-                    let dims = Self::param(&instr, 1).clamp(2, 3);
                     let octaves = Self::param(&instr, 2).clamp(1, 8);
-                    let slope = if instr.slope { "true" } else { "false" };
+                    let slope = self.slope_flag(index, &instr);
                     let [scale, lacunarity, gain, seed] = self.args_at(&instr, 2, [Kind::F, Kind::F, Kind::F, Kind::Seed])?;
                     let texcoord = Self::operand(&instr, 0);
                     if texcoord != Operand::Absent {
                         self.pattern(n, &texcoord, |t| {
-                            format!("sc_pattern_noise({t}, {noise_kind}u, {dims}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope})")
+                            format!("sc_pattern_noise({t}, {noise_kind}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope})")
                         })?;
                     } else {
                         let position = Self::operand(&instr, 1);
                         let object = position == Operand::Geometry(GeometryInput::ObjectPosition);
                         let p = if position == Operand::Absent { "c.p_world".to_owned() } else { self.arg(&position, Kind::V3)? };
-                        let fp = "c.fp_world";
+                        // The footprint in the position's units: world mm times its largest gradient.
+                        let fp = if object {
+                            "(c.fp_world * max(max(length(transpose(c.frame.to_object)[0]), length(transpose(c.frame.to_object)[1])), length(transpose(c.frame.to_object)[2])))"
+                        } else {
+                            "c.fp_world"
+                        };
                         self.line(&format!(
-                            "let s{n} = sc_pattern_noise3({p}, {fp}, {noise_kind}u, {dims}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope});"
+                            "let s{n} = sc_pattern_noise3({p}, {fp}, {noise_kind}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope});"
                         ));
                         if object && instr.slope {
                             // An object-space gradient is a covector: into world space by the transpose.
@@ -392,7 +426,7 @@ impl Gen<'_> {
                     }
                 }
                 "pattern.brushed" => {
-                    let slope = if instr.slope { "true" } else { "false" };
+                    let slope = self.slope_flag(index, &instr);
                     let [density, streak, contrast, jitter, seed] = self.args_at(&instr, 1, [Kind::F, Kind::F, Kind::F, Kind::F, Kind::Seed])?;
                     let texcoord = Self::operand(&instr, 0);
                     self.pattern(n, &texcoord, |t| format!("sc_pattern_brushed({t}, {density}, {streak}, {contrast}, {jitter}, {seed}, {slope})"))?;
@@ -400,7 +434,7 @@ impl Gen<'_> {
                     kind = Kind::F;
                 }
                 "pattern.weave" => {
-                    let slope = if instr.slope { "true" } else { "false" };
+                    let slope = self.slope_flag(index, &instr);
                     let twill = if Self::param(&instr, 0) == 1 { "true" } else { "false" };
                     let [pitch, crown, fibres, contrast] = self.args_at(&instr, 1, [Kind::V2, Kind::F, Kind::F, Kind::F])?;
                     let texcoord = Self::operand(&instr, 0);
@@ -409,21 +443,24 @@ impl Gen<'_> {
                     kind = Kind::F;
                 }
                 "pattern.checker" => {
+                    let slope = self.slope_flag(index, &instr);
                     let [size] = self.args_at(&instr, 1, [Kind::V2])?;
-                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_checker({t}, {size})"))?;
+                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_checker({t}, {size}, {slope})"))?;
                     self.pattern_value(n, instr.slope, &mut grad);
                     kind = Kind::F;
                 }
                 "pattern.grid" => {
+                    let slope = self.slope_flag(index, &instr);
                     let [size, line] = self.args_at(&instr, 1, [Kind::V2, Kind::F])?;
-                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_grid({t}, {size}, {line})"))?;
+                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_grid({t}, {size}, {line}, {slope})"))?;
                     self.pattern_value(n, instr.slope, &mut grad);
                     kind = Kind::F;
                 }
                 "pattern.gradient" => {
                     let radial = if Self::param(&instr, 0) == 1 { "true" } else { "false" };
+                    let slope = self.slope_flag(index, &instr);
                     let [start, end] = self.args_at(&instr, 1, [Kind::F, Kind::F])?;
-                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_gradient({t}, {start}, {end}, {radial})"))?;
+                    self.pattern(n, &Self::operand(&instr, 0), |t| format!("sc_pattern_gradient({t}, {start}, {end}, {radial}, {slope})"))?;
                     self.pattern_value(n, instr.slope, &mut grad);
                     kind = Kind::F;
                 }
@@ -488,6 +525,12 @@ impl Gen<'_> {
         Ok(())
     }
 
+    fn set_mgrad(&mut self, n: u32) {
+        if let Some(m) = usize::try_from(n).ok().and_then(|i| self.mgrads.get_mut(i)) {
+            *m = true;
+        }
+    }
+
     fn pattern_value(&mut self, n: u32, slope: bool, grad: &mut bool) {
         self.line(&format!("let v{n} = s{n}.value;"));
         if slope {
@@ -496,22 +539,42 @@ impl Gen<'_> {
         }
     }
 
-    /// The tangent of the texcoord an `image` colour was sampled with, for a normal map.
-    fn image_tangent(&self, color: &Operand) -> String {
-        if let Operand::Value(v) = color
-            && let Ok(instr) = self.instr(*v)
-            && instr.kind() == "image"
-        {
-            let texcoord = Self::operand(instr, 0);
-            if let Ok(t) = self.raw(&texcoord, false) {
-                return match self.kind_of(&texcoord) {
-                    Kind::Tri => format!("sc_tri_tangent({t})"),
-                    Kind::Tc => format!("sc_tc_tangent({t})"),
-                    _ => "sc_default_tangent(c.n)".to_owned(),
-                };
+    /// The tangent a texcoord operand defines (`sc_tc_tangent`), the geometric one as fallback.
+    fn tangent_of(&self, texcoord: &Operand) -> Result<String, CodegenError> {
+        let fallback = "c.tangent";
+        Ok(match self.kind_of(texcoord) {
+            Kind::Tri => format!("sc_tri_tangent({}, c.n, {fallback})", self.raw(texcoord, false)?),
+            Kind::Tc if !matches!(texcoord, Operand::Absent | Operand::Texture(_)) => {
+                format!("sc_tc_tangent({}, c.n, {fallback})", self.raw(texcoord, false)?)
             }
+            _ => fallback.to_owned(),
+        })
+    }
+
+    /// A normal map's frame tangent: that of the texcoord of the nearest `image` upstream of its
+    /// colour, following each instruction's first value operand; else the geometric tangent.
+    fn image_tangent(&self, color: &Operand) -> String {
+        let mut at = Some(*color);
+        for _ in 0..=self.ir.instrs.len() {
+            let Some(Operand::Value(v)) = at else { break };
+            let Ok(source) = self.instr(v) else { break };
+            if source.kind() == "image" {
+                let call = if source.selects().is_some() { source.args.first().copied() } else { Some(Operand::Value(source.result)) };
+                if let Some(Operand::Value(c)) = call
+                    && let Ok(image) = self.instr(c)
+                {
+                    return self.tangent_of(&Self::operand(image, 0)).unwrap_or_else(|_| "c.tangent".to_owned());
+                }
+                break;
+            }
+            at = source.args.iter().find(|a| matches!(a, Operand::Value(_))).copied();
         }
-        "sc_default_tangent(c.n)".to_owned()
+        "c.tangent".to_owned()
+    }
+
+    /// Whether a pattern call computes its slope: it carries one, or its `slope` output is read.
+    fn slope_flag(&self, index: usize, instr: &Instr) -> &'static str {
+        if instr.slope || self.slope_read.get(index).copied().unwrap_or(false) { "true" } else { "false" }
     }
 
     /// A maths node: its value `vN` of kind `ty` and, when it carries a slope, its gradient `gN`.
@@ -540,6 +603,13 @@ impl Gen<'_> {
         let value = match op {
             "constant" => {
                 let [a] = self.args(instr, [r])?;
+                if instr.slope
+                    && r == Kind::V3
+                    && let Some(m) = self.mgrad(&a0)
+                {
+                    self.line(&format!("let q{n} = {m};"));
+                    self.set_mgrad(n);
+                }
                 a
             }
             "add" | "subtract" | "multiply" | "min" | "max" | "power" => {
@@ -571,7 +641,9 @@ impl Gen<'_> {
                     }
                     _ => {
                         let base = format!("max({a}, {zero})");
-                        g = Some(format!("{b} * pow({base}, {b} - 1.0) * {ga} + log(max({base}, 1e-20)) * pow({base}, {b}) * {gb}"));
+                        g = Some(format!(
+                            "select({ZERO3}, {b} * pow({base}, {b} - 1.0) * {ga} + log(max({base}, 1e-20)) * pow({base}, {b}) * {gb}, {a} > 0.0)"
+                        ));
                         format!("pow({base}, {b})")
                     }
                 }
@@ -579,16 +651,22 @@ impl Gen<'_> {
             "divide" => {
                 let [a, b] = self.args(instr, [r, r])?;
                 self.line(&format!("let a{n} = {a};"));
-                self.line(&format!("let b{n} = {};", den(&b)));
+                self.line(&format!("let r{n} = {b};"));
+                self.line(&format!("let b{n} = {};", den(&format!("r{n}"))));
                 let (ga, gb) = (self.grad(&a0), self.grad(&a1));
-                g = Some(format!("({ga} - (a{n} / b{n}) * {gb}) / b{n}"));
+                // A held denominator is a constant.
+                g = Some(format!("({ga} - (a{n} / b{n}) * select({gb}, {ZERO3}, r{n} > -1e-6 && r{n} < 1e-6)) / b{n}"));
                 format!("a{n} / b{n}")
             }
             "clamp" => {
                 let [x, lo, hi] = self.args(instr, [r, r, r])?;
                 self.line(&format!("let a{n} = {x};"));
-                g = Some(format!("select({ZERO3}, {}, a{n} > {lo} && a{n} < {hi})", self.grad(&a0)));
-                format!("min(max(a{n}, {lo}), {hi})")
+                self.line(&format!("let l{n} = {lo};"));
+                self.line(&format!("let h{n} = {hi};"));
+                self.line(&format!("let m{n} = max(a{n}, l{n});"));
+                // max then min, a tie keeping the first operand (the reference's order).
+                g = Some(format!("select(select({}, {}, l{n} > a{n}), {}, h{n} < m{n})", self.grad(&a0), self.grad(&a1), self.grad(&a2)));
+                format!("min(m{n}, h{n})")
             }
             "abs" | "floor" | "fract" | "sin" | "cos" | "sqrt" | "invert" => {
                 let [x] = self.args(instr, [r])?;
@@ -597,7 +675,7 @@ impl Gen<'_> {
                 let x = format!("a{n}");
                 match op {
                     "abs" => {
-                        g = Some(format!("sign({x}) * {gx}"));
+                        g = Some(format!("select(1.0, -1.0, {x} < 0.0) * {gx}"));
                         format!("abs({x})")
                     }
                     "floor" => {
@@ -617,7 +695,7 @@ impl Gen<'_> {
                         format!("cos({x})")
                     }
                     "sqrt" => {
-                        g = Some(format!("{gx} * (0.5 / max(sqrt(max({x}, 0.0)), 1e-6))"));
+                        g = Some(format!("select({ZERO3}, {gx} * (0.5 / sqrt(max({x}, 1e-30))), {x} > 0.0)"));
                         format!("sqrt(max({x}, {zero}))")
                     }
                     _ => {
@@ -630,7 +708,7 @@ impl Gen<'_> {
                 let [a, b, t] = self.args(instr, [r, r, Kind::F])?;
                 self.line(&format!("let a{n} = {a};"));
                 self.line(&format!("let b{n} = {b};"));
-                self.line(&format!("let t{n} = clamp({t}, 0.0, 1.0);"));
+                self.line(&format!("let t{n} = {t};"));
                 g = Some(format!("{} * (1.0 - t{n}) + {} * t{n} + (b{n} - a{n}) * {}", self.grad(&a0), self.grad(&a1), self.grad(&a2)));
                 format!("mix(a{n}, b{n}, {})", r.splat(&format!("t{n}")))
             }
@@ -642,42 +720,67 @@ impl Gen<'_> {
             "smoothstep" => {
                 let [e0, e1, x] = self.args(instr, [r, r, r])?;
                 self.line(&format!("let a{n} = {e0};"));
-                self.line(&format!("let b{n} = {};", den(&format!("({e1}) - a{n}"))));
-                self.line(&format!("let t{n} = clamp(({x} - a{n}) / b{n}, {zero}, {one});"));
-                g = Some(format!("(6.0 * t{n} * (1.0 - t{n}) / b{n}) * {}", self.grad(&a2)));
+                self.line(&format!("let r{n} = ({e1}) - a{n};"));
+                self.line(&format!("let b{n} = {};", den(&format!("r{n}"))));
+                self.line(&format!("let u{n} = ({x} - a{n}) / b{n};"));
+                self.line(&format!("let t{n} = clamp(u{n}, {zero}, {one});"));
+                let (g0, g1, gx) = (self.grad(&a0), self.grad(&a1), self.grad(&a2));
+                g = Some(format!(
+                    "select({ZERO3}, (6.0 * t{n} * (1.0 - t{n}) / b{n}) * ({gx} - {g0} - u{n} * select({g1} - {g0}, {ZERO3}, r{n} > -1e-6 && r{n} < 1e-6)), u{n} >= 0.0 && u{n} <= 1.0)"
+                ));
                 format!("t{n} * t{n} * ({} - 2.0 * t{n})", r.splat("3.0"))
             }
             "remap" => {
                 let [x, in_lo, in_hi, out_lo, out_hi] = self.args(instr, [r, r, r, r, r])?;
                 self.line(&format!("let a{n} = {in_lo};"));
-                self.line(&format!("let b{n} = {};", den(&format!("({in_hi}) - a{n}"))));
-                self.line(&format!("let t{n} = clamp(({x} - a{n}) / b{n}, {zero}, {one});"));
+                self.line(&format!("let r{n} = ({in_hi}) - a{n};"));
+                self.line(&format!("let b{n} = {};", den(&format!("r{n}"))));
+                self.line(&format!("let u{n} = ({x} - a{n}) / b{n};"));
+                self.line(&format!("let t{n} = clamp(u{n}, {zero}, {one});"));
                 self.line(&format!("let o{n} = {out_lo};"));
                 self.line(&format!("let d{n} = ({out_hi}) - o{n};"));
-                g = Some(format!("select({ZERO3}, (d{n} / b{n}) * {}, t{n} > 0.0 && t{n} < 1.0)", self.grad(&a0)));
+                let a =
+                    [a0, Self::operand(instr, 1), Self::operand(instr, 2), Self::operand(instr, 3), Self::operand(instr, 4)].map(|o| self.grad(&o));
+                let dt = format!(
+                    "select({ZERO3}, ({} - {} - u{n} * select({} - {}, {ZERO3}, r{n} > -1e-6 && r{n} < 1e-6)) / b{n}, u{n} >= 0.0 && u{n} <= 1.0)",
+                    a[0], a[1], a[2], a[1]
+                );
+                g = Some(format!("{} + {dt} * d{n} + t{n} * ({} - {})", a[3], a[4], a[3]));
                 format!("o{n} + d{n} * t{n}")
             }
             "dot" => {
                 let w = wide(self, &[a0, a1]);
                 let [a, b] = self.args(instr, [w, w])?;
+                self.line(&format!("let a{n} = {a};"));
+                self.line(&format!("let b{n} = {b};"));
                 if w == Kind::F {
-                    self.line(&format!("let a{n} = {a};"));
-                    self.line(&format!("let b{n} = {b};"));
                     g = Some(format!("a{n} * {} + b{n} * {}", self.grad(&a1), self.grad(&a0)));
                     format!("a{n} * b{n}")
                 } else {
-                    format!("dot({a}, {b})")
+                    if w == Kind::V3 {
+                        let zero = "mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0))".to_owned();
+                        let (ga, gb) = (self.mgrad(&a0), self.mgrad(&a1));
+                        if ga.is_some() || gb.is_some() {
+                            g = Some(format!("{} * b{n} + {} * a{n}", ga.unwrap_or_else(|| zero.clone()), gb.unwrap_or(zero)));
+                        }
+                    }
+                    format!("dot(a{n}, b{n})")
                 }
             }
             "length" => {
                 let w = wide(self, &[a0]);
                 let [x] = self.args(instr, [w])?;
+                self.line(&format!("let a{n} = {x};"));
                 if w == Kind::F {
-                    self.line(&format!("let a{n} = {x};"));
-                    g = Some(format!("sign(a{n}) * {}", self.grad(&a0)));
+                    g = Some(format!("select(1.0, -1.0, a{n} < 0.0) * {} * select(0.0, 1.0, a{n} != 0.0)", self.grad(&a0)));
                     format!("abs(a{n})")
                 } else {
-                    format!("length({x})")
+                    if w == Kind::V3
+                        && let Some(m) = self.mgrad(&a0)
+                    {
+                        g = Some(format!("({m} * a{n}) / max(length(a{n}), 1e-30)"));
+                    }
+                    format!("length(a{n})")
                 }
             }
             "normalize" => {
@@ -686,20 +789,34 @@ impl Gen<'_> {
                 match r {
                     Kind::V3 => format!("sc_normalize3({x})"),
                     Kind::V2 => format!("sc_normalize2({x})"),
-                    _ => format!("select(1.0, sign({x}), {x} != 0.0)"),
+                    _ => format!("sign({x})"),
                 }
             }
             "combine3" => {
                 let [x, y, z] = self.args(instr, [Kind::F, Kind::F, Kind::F])?;
+                if instr.slope {
+                    self.line(&format!("let q{n} = mat3x3<f32>({}, {}, {});", self.grad(&a0), self.grad(&a1), self.grad(&a2)));
+                    self.set_mgrad(n);
+                }
                 format!("vec3<f32>({x}, {y}, {z})")
             }
             "separate3" => {
                 let [x] = self.args(instr, [Kind::V3])?;
                 self.line(&format!("let s{n} = {x};"));
+                if instr.slope
+                    && let Some(m) = self.mgrad(&a0)
+                {
+                    self.line(&format!("let q{n} = {m};"));
+                    self.set_mgrad(n);
+                    g = Some(format!("q{n}[0]"));
+                }
                 format!("s{n}.x")
             }
             "luminance" => {
                 let [x] = self.args(instr, [Kind::V3])?;
+                if let Some(m) = self.mgrad(&a0) {
+                    g = Some(format!("{m} * vec3<f32>(0.2126, 0.7152, 0.0722)"));
+                }
                 format!("sc_luminance({x})")
             }
             "hsv_adjust" => {
@@ -708,6 +825,12 @@ impl Gen<'_> {
             }
             "convert.float_to_color3" | "convert.float_to_vector3" | "convert.color3_to_vector3" | "convert.vector3_to_color3" => {
                 let [x] = self.args(instr, [Kind::V3])?;
+                if instr.slope
+                    && let Some(m) = self.mgrad(&a0)
+                {
+                    self.line(&format!("let q{n} = {m};"));
+                    self.set_mgrad(n);
+                }
                 x
             }
             _ => return Err(CodegenError(format!("node kind {:?} has no raster code", spec.kind))),
@@ -740,12 +863,12 @@ impl Gen<'_> {
                     if op == Operand::Absent {
                         "c.n".to_owned()
                     } else {
-                        format!("sc_clean_unit({}, c.n)", self.arg(&op, Kind::V3)?)
+                        format!("sc_clean_normal({}, c.n)", self.arg(&op, Kind::V3)?)
                     }
                 }
                 PortType::Vector3 => {
                     if op == Operand::Absent {
-                        "sc_default_tangent(c.n)".to_owned()
+                        "c.tangent".to_owned()
                     } else {
                         self.arg(&op, Kind::V3)?
                     }
@@ -783,7 +906,7 @@ impl Gen<'_> {
         let opacity = field("geometry_opacity")?;
         self.line(&format!("let {name}_n = {normal};"));
         self.line(&format!("let {name}_t = {tangent};"));
-        self.line(&format!("let {name}_tangent = sc_clean_unit({name}_t - {name}_n * dot({name}_t, {name}_n), sc_default_tangent({name}_n));"));
+        self.line(&format!("let {name}_tangent = sc_clean_tangent({name}_t, {name}_n, c.tangent);"));
         let mut text = String::new();
         let _ = write!(
             text,
@@ -809,7 +932,24 @@ pub fn generate(ir: &Ir, target: &dyn Target) -> Result<String, CodegenError> {
     if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') || name.starts_with(|ch: char| ch.is_ascii_digit()) {
         return Err(CodegenError("a target function name that is not an identifier".to_owned()));
     }
-    let mut g = Gen { ir, target, out: String::new(), kinds: vec![Kind::F; ir.instrs.len()], grads: vec![false; ir.instrs.len()] };
+    let mut slope_read = vec![false; ir.instrs.len()];
+    for instr in &ir.instrs {
+        if instr.selects() == Some("slope")
+            && let Some(Operand::Value(v)) = instr.args.first()
+            && let Some(r) = usize::try_from(v.0).ok().and_then(|i| slope_read.get_mut(i))
+        {
+            *r = true;
+        }
+    }
+    let mut g = Gen {
+        ir,
+        target,
+        out: String::new(),
+        kinds: vec![Kind::F; ir.instrs.len()],
+        grads: vec![false; ir.instrs.len()],
+        slope_read,
+        mgrads: vec![false; ir.instrs.len()],
+    };
     g.out.push_str(&format!("fn {name}(c: sc_GraphCtx) -> sc_Surface {{\n"));
     g.line(&format!("let k = c.record + {BASE_VEC4}u;"));
     for i in 0..ir.instrs.len() {

@@ -35,7 +35,7 @@ fn fs_mat(i: MatOut) -> @location(0) vec4<f32> {
     let fw = f.footprint * mm;
     let frame = sc_object_frame(wx, wy, ox, oy);
     let n = sc_unit(i.n);
-    let n_object = sc_proj_unit(transpose(frame.to_world) * n, n);
-    let c = sc_GraphCtx(i.record, f.v, n, n_object, i.wp * mm, i.op * mm, max(max(fw.x, fw.y), fw.z), frame);
+    let n_object = sc_unit(transpose(frame.to_world) * n);
+    let c = sc_GraphCtx(i.record, f.v, n, sc_default_tangent(n), abs(dot(n, f.v)), n_object, i.wp * mm, i.op * mm, max(max(fw.x, fw.y), fw.z), frame);
     return pbr_shade(material_eval(c), f);
 }
