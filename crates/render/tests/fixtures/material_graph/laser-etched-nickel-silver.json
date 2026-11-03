@@ -1,0 +1,123 @@
+{
+ "name": "Laser-etched nickel silver",
+ "interface": [
+  {
+   "name": "mark",
+   "type": "texture"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "lid",
+   "kind": "texcoord.planar",
+   "params": {
+    "space": "object"
+   },
+   "inputs": {
+    "origin": [
+     -6,
+     -4,
+     0
+    ],
+    "u": [
+     12,
+     0,
+     0
+    ],
+    "v": [
+     0,
+     8,
+     0
+    ]
+   }
+  },
+  {
+   "id": "mask",
+   "kind": "image",
+   "params": {
+    "space": "linear",
+    "wrap": "clamp",
+    "channel": "a"
+   },
+   "inputs": {
+    "texcoord": {
+     "from": "lid"
+    },
+    "file": {
+     "interface": "mark"
+    }
+   }
+  },
+  {
+   "id": "pits",
+   "kind": "pattern.noise",
+   "params": {
+    "kind": "cellular",
+    "dimensions": 2,
+    "octaves": 1
+   },
+   "inputs": {
+    "texcoord": {
+     "from": "lid"
+    },
+    "scale_mm": 0.03,
+    "seed": 3
+   }
+  },
+  {
+   "id": "pit_n",
+   "kind": "normal.from_height",
+   "inputs": {
+    "height": {
+     "from": "pits"
+    },
+    "relief_mm": 0.003
+   }
+  },
+  {
+   "id": "plain",
+   "kind": "standard_surface",
+   "inputs": {
+    "base_color": [
+     0.8,
+     0.77,
+     0.7
+    ],
+    "base_metalness": 1,
+    "specular_roughness": 0.45
+   }
+  },
+  {
+   "id": "etched",
+   "kind": "standard_surface",
+   "inputs": {
+    "base_color": [
+     0.3,
+     0.29,
+     0.27
+    ],
+    "base_metalness": 1,
+    "specular_roughness": 0.7,
+    "geometry_normal": {
+     "from": "pit_n"
+    }
+   }
+  },
+  {
+   "id": "surface",
+   "kind": "surface.mix",
+   "inputs": {
+    "fg": {
+     "from": "etched"
+    },
+    "bg": {
+     "from": "plain"
+    },
+    "mix": {
+     "from": "mask"
+    }
+   }
+  }
+ ],
+ "output": "surface"
+}

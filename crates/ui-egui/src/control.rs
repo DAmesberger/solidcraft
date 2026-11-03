@@ -297,6 +297,7 @@ fn execute(app: &mut SolveApp, id: &str, params: Value) -> Result<Value, String>
                 | "view.tool"
                 | "view.spin"
                 | "view.visual_style"
+                | "view.look"
                 | "view.grid"
                 | "view.ground_shadow"
                 | "view.navigation_bar"

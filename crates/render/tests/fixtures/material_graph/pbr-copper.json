@@ -1,0 +1,22 @@
+{
+ "name": "Copper - Clean PBR",
+ "nodes": [
+  {
+   "id": "surface",
+   "kind": "standard_surface",
+   "inputs": {
+    "base_color": {
+     "srgb8": [
+      204,
+      122,
+      80
+     ]
+    },
+    "base_metalness": 1,
+    "specular_roughness": 0.25,
+    "specular_ior": 1.5
+   }
+  }
+ ],
+ "output": "surface"
+}

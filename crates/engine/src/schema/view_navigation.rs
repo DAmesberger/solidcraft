@@ -229,3 +229,45 @@ pub struct RenderFrame {
 #[cfg(test)]
 #[path = "view_navigation_tests.rs"]
 mod tests;
+
+/// Which drawing a view uses (docs/material-graph.md §6): Standard, today's shading and the
+/// default, or Realistic, the studio-lit drawing of material graphs. A view setting, never
+/// saved in the design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewLook {
+    Standard,
+    Realistic,
+}
+
+/// The view a look applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LookView {
+    /// The modelling viewport.
+    #[default]
+    Model,
+    /// The Render workspace's live preview.
+    RenderPreview,
+}
+
+/// Set a view's look. Until the Realistic view is built (track V), only `standard` is accepted.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewLookParams {
+    /// Omit to toggle.
+    #[serde(default)]
+    pub look: Option<ViewLook>,
+    /// Default: the modelling viewport.
+    #[serde(default)]
+    pub view: Option<LookView>,
+}
+
+/// What `view.look` returns: the validated request, which the UI applies.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ViewLookResult {
+    pub look: ViewLook,
+    pub view: LookView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}

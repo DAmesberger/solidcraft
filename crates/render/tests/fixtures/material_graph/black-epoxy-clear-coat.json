@@ -1,0 +1,58 @@
+{
+ "name": "Black epoxy, clear coated",
+ "nodes": [
+  {
+   "id": "p",
+   "kind": "geometry.position",
+   "params": {
+    "space": "object"
+   }
+  },
+  {
+   "id": "edm",
+   "kind": "pattern.noise",
+   "params": {
+    "kind": "cellular",
+    "dimensions": 3,
+    "octaves": 2
+   },
+   "inputs": {
+    "position": {
+     "from": "p"
+    },
+    "scale_mm": 0.04,
+    "seed": 11
+   }
+  },
+  {
+   "id": "edm_r",
+   "kind": "remap",
+   "inputs": {
+    "in": {
+     "from": "edm"
+    },
+    "out_min": 0.4,
+    "out_max": 0.52
+   }
+  },
+  {
+   "id": "surface",
+   "kind": "standard_surface",
+   "inputs": {
+    "base_color": [
+     0.022,
+     0.022,
+     0.024
+    ],
+    "specular_roughness": {
+     "from": "edm_r"
+    },
+    "specular_ior": 1,
+    "coat_weight": 1,
+    "coat_roughness": 0.08,
+    "coat_ior": 1.5
+   }
+  }
+ ],
+ "output": "surface"
+}

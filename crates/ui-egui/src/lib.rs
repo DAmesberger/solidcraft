@@ -373,6 +373,9 @@ pub struct UiState {
     pub lasso_select: bool,
     /// 0: shaded with edges, 1: shaded, 2: wireframe, 3: shaded with hidden edges.
     pub visual_style: u8,
+    /// The modelling view's look (`view.look`): 0 Standard (the default), 1 Realistic. A view
+    /// setting kept with the preferences, never in the design. Track V draws Realistic.
+    pub view_look: u8,
     /// A soft shadow on the ground under the model (seen from above).
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, axis view, home view and ground follow it.
@@ -421,6 +424,7 @@ impl Default for UiState {
             pick_components: false,
             lasso_select: false,
             visual_style: 0,
+            view_look: 0,
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
@@ -1023,6 +1027,7 @@ impl SolveApp {
             "pick_bodies": self.ui.pick_bodies,
             "auto_project": self.session.auto_project,
             "visual_style": self.ui.visual_style,
+            "view_look": self.ui.view_look,
             "browser_collapsed": self.tree.collapsed,
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
@@ -1090,6 +1095,10 @@ impl SolveApp {
         }
         if let Some(s) = v.get("visual_style").and_then(Value::as_u64) {
             self.ui.visual_style = u8::try_from(s.min(3)).unwrap_or(0);
+        }
+        if v.get("view_look").and_then(Value::as_u64).is_some() {
+            // Only Standard exists until track V; a saved Realistic falls back to it.
+            self.ui.view_look = 0;
         }
         // Browser folders the user opened or closed.
         let keys = |k: &str| -> std::collections::BTreeSet<String> {
@@ -1246,6 +1255,12 @@ impl SolveApp {
                 "view.visual_style" => {
                     if let Some(index) = v.get("index").and_then(Value::as_u64).and_then(|n| u8::try_from(n).ok()) {
                         self.ui.visual_style = index;
+                    }
+                }
+                "view.look" => {
+                    // The engine accepts only Standard until track V builds the Realistic view.
+                    if v.get("look").and_then(Value::as_str) == Some("standard") && v.get("view").and_then(Value::as_str) == Some("model") {
+                        self.ui.view_look = 0;
                     }
                 }
                 "view.grid" => self.ui.show_grid = v.get("on").and_then(Value::as_bool).unwrap_or(!self.ui.show_grid),

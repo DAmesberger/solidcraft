@@ -36,6 +36,7 @@ struct RenderBrowserControls {
 }
 
 const RENDER_SELECT: TypedContract<RenderSelect> = TypedContract::new();
+const VIEW_LOOK_CONTRACT: TypedContract<crate::schema::view_navigation::ViewLookParams> = TypedContract::new();
 const STATUS_ITEMS_CONTRACT: TypedContract<crate::schema::view_navigation::StatusItemsParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
@@ -57,6 +58,10 @@ CommandSpec::new("view.spin", "Continuous orbit", spin)
     .icon("spin").noundo().doc_only().params("on?: bool (omitted: toggle) → on?; continuous orbit until the next click or key"),
 CommandSpec::new("view.visual_style", "Visual style", visual_style)
     .icon("style").noundo().doc_only().params("style: shaded_with_edges|shaded|wireframe|shaded_with_hidden_edges → style, index (0..3 in that order)"),
+CommandSpec::new("view.look", "View Look", crate::checked!("view.look", view_look))
+    .icon("style").noundo().doc_only()
+    .contract(&VIEW_LOOK_CONTRACT).output(output_schema_for::<crate::schema::view_navigation::ViewLookResult>)
+    .params("look?: standard|realistic (omitted: toggle), view?: model|render_preview → look, view; a view setting, not saved in the design"),
 CommandSpec::new("view.grid", "Grid", grid)
     .icon("style").noundo().doc_only().params("on?: bool (omitted: toggle) → on?; show the viewport grid"),
 CommandSpec::new("view.ground_shadow", "Ground shadow", ground_shadow)
@@ -287,6 +292,21 @@ fn visual_style(_s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "style must be shaded_with_edges, shaded, wireframe or shaded_with_hidden_edges")),
     };
     Ok(json!({"style": style, "index": index}))
+}
+
+fn view_look(_s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::schema::view_navigation::{ViewLook, ViewLookParams, ViewLookResult};
+    let cmd = "view.look";
+    let request: ViewLookParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
+    match request.look {
+        Some(ViewLook::Standard) => {}
+        // A toggle from Standard asks for Realistic too.
+        Some(ViewLook::Realistic) | None => {
+            return Err(crate::EngineError::Other(format!("`{cmd}`: the Realistic view is not built yet (track V); the view stays Standard")));
+        }
+    }
+    let reply = ViewLookResult { look: ViewLook::Standard, view: request.view.unwrap_or_default(), param_warnings: Vec::new() };
+    serde_json::to_value(reply).map_err(|e| bad(cmd, e.to_string()))
 }
 
 fn view_toggle(p: &Value, cmd: &str, key: &str) -> Result<Value> {
