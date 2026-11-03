@@ -28,7 +28,10 @@ mod scene;
 #[cfg(test)]
 mod tests;
 mod textures;
+// The shared shading library (`crate::shading`) first, as in the viewport's PBR shader.
 const SHADER: &str = concat!(
+    crate::shading::library_source!(),
+    "\n",
     include_str!("path.wgsl"),
     "\n",
     include_str!("shadows.wgsl"),
