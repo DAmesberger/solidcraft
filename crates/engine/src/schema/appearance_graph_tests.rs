@@ -541,3 +541,30 @@ fn library_recipes_apply_as_graphs() {
     let text = s.doc.without_unreferenced_textures().to_json();
     solidcraft_doc::Document::from_json(&text).unwrap();
 }
+
+/// `library.export` without `format` writes the oldest format that keeps everything: v2 for a
+/// design without material graphs (it stays readable by the last release), v3 only when a look
+/// names a graph (`library_copies_carry_their_graph_and_update_from_their_library`).
+#[test]
+fn a_material_free_design_exports_as_v2_by_default() {
+    use solidcraft_io::catalog::{Catalog, FORMAT, V3_FORMAT};
+    let mut s = with_body();
+    s.execute(
+        "appearance.assign",
+        &json!({"bodies": ["Can"], "color": [10, 20, 30], "pbr": {"metallic": 1, "roughness": 0.3, "dielectric_ior": 1.5}}),
+    )
+    .unwrap();
+    // A graph no look uses is not exported, so it does not raise the format.
+    s.execute("appearance.graph.create", &json!({"id": "unused", "name": "Unused"})).unwrap();
+    let out = solidcraft_io::vfs::temp_dir().join(format!("solidcraft-plain-export-{}.json", std::process::id()));
+    let path = out.to_string_lossy().to_string();
+    let exported = s.execute("library.export", &json!({"path": path})).unwrap();
+    assert_eq!(exported["catalog"]["format"], FORMAT);
+    let read = Catalog::read(&path).unwrap();
+    assert_eq!(read.format, FORMAT);
+    assert!(read.graphs.is_empty() && read.textures.is_empty());
+    // v3 may be asked for explicitly.
+    let v3 = s.execute("library.export", &json!({"path": path, "format": V3_FORMAT, "overwrite": true})).unwrap();
+    assert_eq!(v3["catalog"]["format"], V3_FORMAT);
+    let _ = std::fs::remove_file(&out);
+}
