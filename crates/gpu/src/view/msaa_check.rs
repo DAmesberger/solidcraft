@@ -97,6 +97,7 @@ impl Renderer {
         let frame = Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,

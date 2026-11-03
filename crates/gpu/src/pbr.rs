@@ -5,11 +5,6 @@
 /// floats each. See `GpuScene::pbr_tri`.
 pub const VERTEX_SIZE: usize = 48;
 
-/// A PBR vertex with the product look's detail ([`VERTEX_SIZE`] bytes, then four floats: pattern
-/// id + 0.25 + (coat IOR − 1) / 4, pattern strength, coat weight, coat roughness). Only scenes
-/// that name a pattern or a coat carry them. See `GpuScene::pbr_tri_with`.
-pub const DETAILED_VERTEX_SIZE: usize = 64;
-
 /// The PBR pipeline's bind group for the product look's studio (`view::ibl`).
 pub const STUDIO_GROUP: u32 = 3;
 
@@ -28,9 +23,6 @@ struct PbrOut {
     @location(1) base: vec3<f32>,
     @location(2) wp: vec3<f32>,
     @location(3) parameters: vec3<f32>,
-    // Flat: the coat's IOR rides in the fraction of the pattern float and is compared exactly,
-    // so it must not be interpolated (a triangle's three vertices carry the same detail).
-    @location(4) @interpolate(flat, either) detail: vec4<f32>,
 };
 
 fn pbr_unit(v: vec3<f32>) -> vec3<f32> {
@@ -44,33 +36,16 @@ fn pbr_encode(c: vec3<f32>) -> vec3<f32> {
     return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
 }
 
-fn pbr_out(p: vec3<f32>, n: vec3<f32>, base: vec3<f32>, parameters: vec3<f32>, detail: vec4<f32>) -> PbrOut {
+// A PBR vertex (`pbr::VERTEX_SIZE`).
+@vertex
+fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) base: vec3<f32>, @location(3) parameters: vec3<f32>) -> PbrOut {
     var o: PbrOut;
     o.pos = u.vp * vec4<f32>(p, 1.0);
     o.n = n;
     o.base = base;
     o.wp = p;
     o.parameters = parameters;
-    o.detail = detail;
     return o;
-}
-
-// A plain PBR vertex (`pbr::VERTEX_SIZE`): no pattern (id 0) and no coat (weight 0, IOR 1).
-@vertex
-fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) base: vec3<f32>, @location(3) parameters: vec3<f32>) -> PbrOut {
-    return pbr_out(p, n, base, parameters, vec4<f32>(0.25, 0.0, 0.0, 1.0));
-}
-
-// A PBR vertex with the product look's detail (`pbr::DETAILED_VERTEX_SIZE`).
-@vertex
-fn vs_pbr_detailed(
-    @location(0) p: vec3<f32>,
-    @location(1) n: vec3<f32>,
-    @location(2) base: vec3<f32>,
-    @location(3) parameters: vec3<f32>,
-    @location(4) detail: vec4<f32>,
-) -> PbrOut {
-    return pbr_out(p, n, base, parameters, detail);
 }
 
 /// The AO prepass's depth of a PBR surface (drawn there only with the product look).
@@ -179,14 +154,6 @@ fn pbr_coated(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec3<f
     return under * attenuation + vec3<f32>(coat.x * fresnel * distribution * 0.25 * gv * gl);
 }
 
-// A vertex's coat (weight, roughness, IOR) from its detail (`GpuScene::pbr_tri_with`).
-fn pbr_coat_of(detail: vec4<f32>) -> vec3<f32> {
-    let raw = clamp(1.0 + (fract(max(detail.x, 0.0)) - 0.25) * 4.0, 1.0, 3.0);
-    // An index-matched coat is exactly 1 (no interface), as `clear_coat.rs` treats it.
-    let ior = select(raw, 1.0, abs(raw - 1.0) < 1e-4);
-    return vec3<f32>(clamp(detail.z, 0.0, 1.0), clamp(detail.w, 0.045, 1.0), ior);
-}
-
 // The studio's light reflected toward `v`, in parts: the base's specular, the coat's specular
 // and the diffuse layer. Split-sum specular with multiple-scattering compensation; diffuse from
 // the irradiance polynomial weighted by what the specular lobe leaves; a coat reflects its own
@@ -240,166 +207,11 @@ fn pbr_specular_occlusion(nv: f32, ao: f32, r: f32) -> f32 {
     return clamp(pow(max(nv, 0.0) + ao, exp2(-16.0 * r * r - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
-// The product look's procedural surface detail (`view::SurfacePattern`), in millimetres from the
-// world position: a glass-fibre weave, a gloss paint's orange peel and printed ink's grain. Each
-// fades to its mean as its period shrinks below the pixel's footprint (taken before any branch
-// in `fs_pbr`).
-const PATTERN_WEAVE: i32 = 1;
-const PATTERN_PEEL: i32 = 2;
-const PATTERN_PEEL_OVER_WEAVE: i32 = 3;
-const PATTERN_INK: i32 = 4;
-// The weave's means over a cell (numerical, 2400² samples): the visible yarn's height and its
-// fibre striation.
-const WEAVE_MEAN: f32 = 0.779014;
-const WEAVE_FIBRE_MEAN: f32 = -0.003887;
-// Relative albedo swing of the weave at strength 1, and its relief (mm) on bare laminate.
-const WEAVE_CONTRAST: f32 = 0.55;
-const WEAVE_RELIEF: f32 = 0.006;
-// A cut edge shows the plies as a subtle layering: its swing relative to a face's.
-const WEAVE_EDGE: f32 = 0.25;
-// Filament striations along each yarn: how many per yarn width, and their swing relative to
-// the yarn's crown.
-const WEAVE_FIBRES: f32 = 7.0;
-const WEAVE_FIBRE_CONTRAST: f32 = 0.3;
-// Orange peel: two long, gentle wavelengths (mm) and their relief (mm), so a gloss coat's
-// softbox reflection keeps its shape with only a slight waviness.
-const PEEL_WAVE: vec2<f32> = vec2<f32>(2.4, 0.9);
-const PEEL_RELIEF: vec2<f32> = vec2<f32>(0.006, 0.001);
 // The look's direct lights' angular half-size (rad) over two: the GGX α they add to a coat.
 const LOOK_LIGHT_SPREAD: f32 = 0.1;
-// Ink grain: two cell sizes (mm), their relative albedo swing and relief (mm).
-const GRAIN_CELL: vec2<f32> = vec2<f32>(0.05, 0.16);
-const GRAIN_CONTRAST: f32 = 0.18;
-const GRAIN_RELIEF: f32 = 0.002;
-
-struct PbrDetail { albedo: f32, n: vec3<f32>, };
-
-/// The look's detail parameters: weave pitch along world X and Y, ply thickness (mm) and world
-/// units per millimetre.
-fn look_detail_params() -> vec4<f32> {
-    return u.look_detail;
-}
-
-// An integer hash of a lattice point, in [0, 1].
-fn pat_hash(c: vec2<i32>) -> f32 {
-    var h = (bitcast<u32>(c.x) * 1597334677u) ^ (bitcast<u32>(c.y) * 3812015801u);
-    h = h * 747796405u + 2891336453u;
-    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
-    h = (h >> 22u) ^ h;
-    return f32(h) / 4294967295.0;
-}
-
-// Value noise in [0, 1] (mean 0.5) with a lattice step of one.
-fn pat_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = p - i;
-    let w = f * f * (vec2<f32>(3.0) - 2.0 * f);
-    let c = vec2<i32>(i);
-    let a = pat_hash(c);
-    let b = pat_hash(c + vec2<i32>(1, 0));
-    let d = pat_hash(c + vec2<i32>(0, 1));
-    let e = pat_hash(c + vec2<i32>(1, 1));
-    return mix(mix(a, b, w.x), mix(d, e, w.x), w.y);
-}
-
-// A yarn bundle's elliptic crown at `t` across it (−0.5..0.5 is its width): 1 on its axis, 0 at
-// its edges.
-fn pat_crown(t: f32) -> f32 {
-    return sqrt(max(1.0 - 4.0 * t * t, 0.0));
-}
-
-// A plain weave at `p` (in yarn pitches): warp yarns along x centred on each row, weft yarns
-// along y centred on each column, each rising over one crossing and dipping under the next, with
-// over-under parity alternating cell by cell. The visible yarn is the higher one, so each yarn
-// runs on continuously, the crossing yarn shows where it dips, and the gaps are only the
-// windows between four crossings. Returns the visible yarn's height and its filament
-// striations (running along it), both zero mean over a cell.
-fn pat_weave_parts(p: vec2<f32>) -> vec2<f32> {
-    let cell = floor(p);
-    let f = p - cell - vec2<f32>(0.5);
-    let pi = 3.141592653589793;
-    let up_x = 0.5 + 0.5 * cos(pi * (p.x - 0.5 + cell.y));
-    let up_y = 0.5 - 0.5 * cos(pi * (p.y - 0.5 + cell.x));
-    let hx = pat_crown(f.y) * (0.6 + 0.4 * up_x);
-    let hy = pat_crown(f.x) * (0.6 + 0.4 * up_y);
-    let across = select(f.x, f.y, hx >= hy);
-    let fibre = cos(2.0 * pi * WEAVE_FIBRES * across) * pat_crown(across);
-    return vec2<f32>(max(hx, hy) - WEAVE_MEAN, fibre - WEAVE_FIBRE_MEAN);
-}
-
-fn pat_weave(p: vec2<f32>) -> f32 {
-    return pat_weave_parts(p).x;
-}
-
-// How much of a pattern of period `period` (mm) shows at a pixel footprint `fp` (mm).
-fn pat_fade(fp: f32, period: f32) -> f32 {
-    return 1.0 - smoothstep(0.2, 0.6, fp / max(period, 1e-6));
-}
-
-// The weave's fade: its cells have sharp edges and its fibres are fine, so it is gone well
-// before its period reaches two pixels (no moiré at a distance).
-fn pat_weave_fade(fp: f32, period: f32) -> f32 {
-    return 1.0 - smoothstep(0.1, 0.3, fp / max(period, 1e-6));
-}
-
-// Value noise of lattice step `size` (mm) at `uv` (mm), faded by the footprint `fp`: its
-// deviation from the mean and its gradient (per mm).
-fn pat_bumps(uv: vec2<f32>, size: f32, fp: f32) -> vec3<f32> {
-    let p = uv / size;
-    let m = pat_noise(p);
-    let g = vec2<f32>(pat_noise(p + vec2<f32>(0.05, 0.0)) - m, pat_noise(p + vec2<f32>(0.0, 0.05)) - m) / (0.05 * size);
-    return pat_fade(fp, size) * vec3<f32>(m - 0.5, g);
-}
-
-// The surface detail at `wp` with unit normal `n`: the albedo factor and the perturbed normal.
-// `detail` is the vertex's (pattern, strength, …); `footprint` is `fwidth` of the world position;
-// `k` is `look_detail_params()`.
-fn look_detail(wp: vec3<f32>, n: vec3<f32>, footprint: vec3<f32>, detail: vec4<f32>, k: vec4<f32>) -> PbrDetail {
-    let id = i32(floor(max(detail.x, 0.0)));
-    let strength = clamp(detail.y, 0.0, 1.0);
-    if (id < PATTERN_WEAVE || id > PATTERN_INK) { return PbrDetail(1.0, n); }
-    let mm = 1.0 / max(k.w, 1e-6);
-    let q = wp * mm;
-    let fp = max(max(footprint.x, footprint.y), footprint.z) * mm;
-    // A face's axes are world X and Y; an edge's run along it and up through the plies.
-    let top = abs(n.z) >= 0.7;
-    let run = pbr_unit(vec3<f32>(-n.y, n.x, 0.0));
-    let axis_u = select(run, vec3<f32>(1.0, 0.0, 0.0), top);
-    let axis_v = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), top);
-    let uv = vec2<f32>(dot(q, axis_u), dot(q, axis_v));
-    var albedo = 0.0;
-    var slope = vec2<f32>(0.0);
-    if (id == PATTERN_WEAVE || id == PATTERN_PEEL_OVER_WEAVE) {
-        let along = abs(run.x) * k.x + abs(run.y) * k.y;
-        let period = max(select(vec2<f32>(along, k.z), k.xy, top), vec2<f32>(1e-3));
-        let fade = pat_weave_fade(fp, min(period.x, period.y)) * select(WEAVE_EDGE, 1.0, top);
-        let fibres = pat_weave_fade(fp, min(period.x, period.y) / WEAVE_FIBRES) * WEAVE_FIBRE_CONTRAST;
-        let p = uv / period;
-        let parts = pat_weave_parts(p);
-        let m = parts.x;
-        let g = vec2<f32>(pat_weave(p + vec2<f32>(0.05, 0.0)) - m, pat_weave(p + vec2<f32>(0.0, 0.05)) - m) / (0.05 * period);
-        albedo += fade * strength * WEAVE_CONTRAST * (m + fibres * parts.y);
-        if (id == PATTERN_WEAVE) { slope += fade * strength * WEAVE_RELIEF * g; }
-    }
-    if (id == PATTERN_PEEL || id == PATTERN_PEEL_OVER_WEAVE) {
-        // Over a weave the strength is the weave's show-through; the peel stays at full.
-        let peel = select(strength, 1.0, id == PATTERN_PEEL_OVER_WEAVE);
-        slope += peel * (pat_bumps(uv, PEEL_WAVE.x, fp).yz * PEEL_RELIEF.x + pat_bumps(uv + vec2<f32>(17.0, 0.0), PEEL_WAVE.y, fp).yz * PEEL_RELIEF.y);
-    }
-    if (id == PATTERN_INK) {
-        let fine = pat_bumps(uv, GRAIN_CELL.x, fp);
-        let coarse = pat_bumps(uv + vec2<f32>(0.0, 31.0), GRAIN_CELL.y, fp);
-        albedo += strength * GRAIN_CONTRAST * 2.0 * (fine.x + coarse.x);
-        slope += strength * GRAIN_RELIEF * (fine.yz + coarse.yz);
-    }
-    return PbrDetail(max(1.0 + albedo, 0.0), pbr_unit(n - slope.x * axis_u - slope.y * axis_v));
-}
 
 @fragment
 fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
-    // Derivatives first, in uniform control flow: the pixel's footprint, over which the product
-    // look's patterns fade to their mean.
-    let footprint = fwidth(i.wp);
     var n = pbr_unit(i.n);
     var view = u.back.xyz;
     if (u.eye.w > 0.5) { view = u.eye.xyz - i.wp; }
@@ -410,11 +222,7 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
     var ao = 1.0;
     let look = look_on();
     if (look) {
-        let detail = look_detail(i.wp, n, footprint, i.detail, look_detail_params());
-        base = clamp(base * detail.albedo, vec3<f32>(0.0), vec3<f32>(1.0));
-        // Relief fades out toward grazing views, where it would only streak the reflections.
-        n = pbr_unit(mix(n, detail.n, smoothstep(0.05, 0.35, abs(dot(n, v)))));
-        coat = pbr_coat_of(i.detail);
+        base = clamp(base, vec3<f32>(0.0), vec3<f32>(1.0));
         // Occlusion darkens only the indirect light: the studio and the ambient kind.
         ao = occlusion(TOut(i.pos, i.n, vec4<f32>(base, 1.0), i.wp));
     }

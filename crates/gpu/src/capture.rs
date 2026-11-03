@@ -385,6 +385,7 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
     Frame {
         product_lights: None,
         product_look: None,
+        units_per_mm: 1.0,
         product: false,
         upload_error: None,
         key,

@@ -65,9 +65,8 @@ impl StudioPreset {
 /// `Renderer::set_studio_environment`); the fixed three-light studio of the default preview does
 /// not. Without a look a frame keeps the default preview, unchanged.
 ///
-/// With the look, PBR surfaces also show their clear coat, ambient occlusion (from a frame's
-/// `ao_radius`) on the studio's and the ambient lights, and the procedural [`SurfacePattern`]
-/// their vertices name ([`crate::view::GpuScene::pbr_tri_with`]), sized by the fields below.
+/// With the look, PBR surfaces also show ambient occlusion (from a frame's `ao_radius`) on the
+/// studio's and the ambient lights.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProductLook {
     /// Scale of the scene-referred radiance (product lights and studio) before tone mapping.
@@ -78,109 +77,31 @@ pub struct ProductLook {
     pub rotation: f32,
     /// Scale of the studio's radiance (0: only the product lights).
     pub intensity: f32,
-    /// [`SurfacePattern::Weave`]'s yarn pitch along world X and Y, millimetres.
-    pub weave_pitch: [f32; 2],
-    /// The weave's ply thickness (its period up through a laminate's edge), millimetres.
-    pub ply_thickness: f32,
-    /// World units per millimetre, so the patterns keep their physical size.
-    pub units_per_mm: f32,
 }
 
 impl Default for ProductLook {
     fn default() -> Self {
-        ProductLook {
-            exposure: 1.0,
-            studio: StudioPreset::Product,
-            rotation: 0.0,
-            intensity: 1.0,
-            weave_pitch: Self::DEFAULT_WEAVE_PITCH,
-            ply_thickness: Self::DEFAULT_PLY_THICKNESS,
-            units_per_mm: 1.0,
-        }
+        ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0 }
     }
 }
 
 impl ProductLook {
     /// Largest exposure and intensity a record keeps.
     pub const MAX_SCALE: f32 = 1024.0;
-    /// The default yarn pitch, mm: a coarse plain-weave glass cloth of 44 × 31 yarns per inch
-    /// (IPC-4412 glass style 7628).
-    pub const DEFAULT_WEAVE_PITCH: [f32; 2] = [25.4 / 44.0, 25.4 / 31.0];
-    /// The default ply thickness, mm: that cloth's nominal thickness (IPC-4412).
-    pub const DEFAULT_PLY_THICKNESS: f32 = 0.173;
-    /// Smallest and largest pattern length (pitch, ply) a record keeps, mm.
-    pub const PATTERN_RANGE: [f32; 2] = [0.01, 100.0];
-    /// Smallest and largest `units_per_mm` a record keeps.
-    pub const UNITS_RANGE: [f32; 2] = [1e-6, 1e6];
 
-    /// The uniform the shaders read: (exposure, studio intensity, studio rotation, 1) and (weave
-    /// pitch x, weave pitch y, ply thickness, units per mm), of [`ProductLook::sanitized`].
-    pub(crate) fn uniform(&self) -> [f32; 8] {
+    /// The uniform the shaders read: (exposure, studio intensity, studio rotation, 1), of
+    /// [`ProductLook::sanitized`].
+    pub(crate) fn uniform(&self) -> [f32; 4] {
         let look = self.sanitized();
-        [look.exposure, look.intensity, look.rotation, 1.0, look.weave_pitch[0], look.weave_pitch[1], look.ply_thickness, look.units_per_mm]
+        [look.exposure, look.intensity, look.rotation, 1.0]
     }
 
-    /// The look the renderer draws: out-of-range values clamped, non-finite ones (and pattern
-    /// lengths of zero or less) replaced by the defaults, the rotation within [0, 2π).
+    /// The look the renderer draws: out-of-range values clamped, non-finite ones replaced by the
+    /// defaults, the rotation within [0, 2π).
     pub fn sanitized(self) -> Self {
         let scale = |x: f32| if x.is_finite() { x.clamp(0.0, Self::MAX_SCALE) } else { 1.0 };
-        // A length: positive and finite within `range`, else `default`.
-        let length = |x: f32, range: [f32; 2], default: f32| if x.is_finite() && x > 0.0 { x.clamp(range[0], range[1]) } else { default };
         let rotation = if self.rotation.is_finite() { self.rotation.rem_euclid(std::f32::consts::TAU) } else { 0.0 };
-        ProductLook {
-            exposure: scale(self.exposure),
-            studio: self.studio,
-            rotation,
-            intensity: scale(self.intensity),
-            weave_pitch: [
-                length(self.weave_pitch[0], Self::PATTERN_RANGE, Self::DEFAULT_WEAVE_PITCH[0]),
-                length(self.weave_pitch[1], Self::PATTERN_RANGE, Self::DEFAULT_WEAVE_PITCH[1]),
-            ],
-            ply_thickness: length(self.ply_thickness, Self::PATTERN_RANGE, Self::DEFAULT_PLY_THICKNESS),
-            units_per_mm: length(self.units_per_mm, Self::UNITS_RANGE, 1.0),
-        }
-    }
-}
-
-/// A procedural surface detail the product look evaluates in the PBR shader from a vertex's world
-/// position (no textures or UVs), faded to its mean where its period is below a pixel. Without the
-/// look it is ignored. The shader's ids are [`SurfacePattern::id`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SurfacePattern {
-    #[default]
-    None,
-    /// Glass-fibre plain weave (two yarn families, over-under parity) over world X and Y at
-    /// [`ProductLook::weave_pitch`]: it varies the albedo and adds a small relief, for bare
-    /// laminate. On an edge (a normal within about 45° of horizontal) it runs along the edge
-    /// and up through plies of [`ProductLook::ply_thickness`].
-    Weave,
-    /// A sprayed or cured gloss coating's orange peel: a gentle waviness of the normal (strength
-    /// scales it).
-    OrangePeel,
-    /// A gloss coating over a woven laminate: full orange peel, and the weave beneath showing through the
-    /// albedo only (strength scales the show-through).
-    PeelOverWeave,
-    /// Printed ink's grain: fine albedo and normal noise (strength scales both).
-    InkGrain,
-}
-
-impl SurfacePattern {
-    pub const ALL: [SurfacePattern; 5] =
-        [SurfacePattern::None, SurfacePattern::Weave, SurfacePattern::OrangePeel, SurfacePattern::PeelOverWeave, SurfacePattern::InkGrain];
-
-    /// The number a PBR vertex carries (`PATTERN_*` in the shader).
-    pub fn id(self) -> u32 {
-        match self {
-            SurfacePattern::None => 0,
-            SurfacePattern::Weave => 1,
-            SurfacePattern::OrangePeel => 2,
-            SurfacePattern::PeelOverWeave => 3,
-            SurfacePattern::InkGrain => 4,
-        }
-    }
-
-    pub fn from_id(id: u32) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
+        ProductLook { exposure: scale(self.exposure), studio: self.studio, rotation, intensity: scale(self.intensity) }
     }
 }
 

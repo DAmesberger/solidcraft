@@ -1109,10 +1109,6 @@ preference_settings! {
     cut_preview_tint: bool = true, PAGE_GRAPHICS => check_id("prefs.cut_preview_tint");
     /// Restore the previous platform-specific fixed Render preview geometry budget.
     render_previous_geometry_budget: bool = false, PAGE_GRAPHICS => check_id("prefs.render_previous_geometry_budget");
-    /// Light the Render workspace's real-time preview with the product look: a procedural studio
-    /// reflected in PBR appearances, PBR Neutral tone mapping and dithering (`ProductLook`). Off:
-    /// the preview's fixed lights and Reinhard tone curve, as before. Never changes a final render.
-    render_studio_look: bool = false, PAGE_GRAPHICS => check_id("prefs.render_studio_look");
     /// How finely the viewport tessellates curved faces and edges: `coarse`, `normal`, `fine` or
     /// `ultra` (#1287). Only the display plan the viewport draws; never the design or exports.
     display_quality: String = "normal".into(), PAGE_GRAPHICS;
@@ -7434,25 +7430,6 @@ mod tests {
         assert!(restored.preferences.render_previous_geometry_budget);
         super::defaults(&mut restored, super::PAGE_GRAPHICS);
         assert!(!restored.preferences.render_previous_geometry_budget);
-    }
-
-    /// The Render preview's studio lighting is off by default (the preview's fixed lights, as
-    /// before), turns the product look on once set, is saved, and Restore Defaults turns it off.
-    #[test]
-    fn render_studio_look_is_off_by_default_and_drives_the_preview_look() {
-        use serde_json::json;
-        let mut app = crate::SolveApp::new(Default::default(), Default::default());
-        assert!(!app.preferences.render_studio_look);
-        assert_eq!(crate::render_workspace::preview_look(&app), None);
-        let out = super::set(&mut app, &json!({"render_studio_look":true})).unwrap();
-        assert_eq!(out["render_studio_look"], true);
-        assert_eq!(crate::render_workspace::preview_look(&app), Some(crate::gpu::ProductLook::default()));
-        let mut restored = crate::SolveApp::new(Default::default(), Default::default());
-        restored.load_prefs(&app.prefs());
-        assert!(restored.preferences.render_studio_look);
-        super::defaults(&mut restored, super::PAGE_GRAPHICS);
-        assert!(!restored.preferences.render_studio_look);
-        assert_eq!(crate::render_workspace::preview_look(&restored), None);
     }
 
     /// Display quality (#1287) is a preference like any other: set by name, checked, saved with

@@ -21,7 +21,7 @@ struct U {
     product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
     look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
-    look_detail: vec4<f32>, // its pattern sizes: weave pitch x, y, ply thickness (mm), world units per mm
+    units: vec4<f32>,  // x: world units per millimetre (`Frame::units_per_mm`), the scale of material lengths
     sky: vec4<f32>,    // xyz = world up; w = 1: shade in linear light with a sky fill (#7974)
 };
 

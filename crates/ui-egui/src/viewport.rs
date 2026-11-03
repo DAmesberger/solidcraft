@@ -4442,6 +4442,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let cb = ViewportCallback(Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             ssaa,
             ao_samples,
             product: false,
@@ -8290,6 +8291,7 @@ mod tests {
                 let frame = Frame {
                     product_lights: None,
                     product_look: None,
+                    units_per_mm: 1.0,
                     product: false,
                     upload_error: None,
                     key: 1,

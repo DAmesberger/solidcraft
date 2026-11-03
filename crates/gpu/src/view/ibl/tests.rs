@@ -243,23 +243,14 @@ fn half_floats() {
 /// What the renderer draws of a look: hostile values clamped or replaced, never passed through.
 #[test]
 fn looks_are_sanitized() {
-    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6, ..ProductLook::default() };
+    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6 };
     assert_eq!(look.sanitized(), look);
-    assert_eq!(
-        look.uniform(),
-        [1.5, 0.6, 0.75, 1.0, ProductLook::DEFAULT_WEAVE_PITCH[0], ProductLook::DEFAULT_WEAVE_PITCH[1], ProductLook::DEFAULT_PLY_THICKNESS, 1.0]
-    );
-    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12, ..ProductLook::default() };
+    assert_eq!(look.uniform(), [1.5, 0.6, 0.75, 1.0]);
+    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12 };
     assert_eq!(
         wild.sanitized(),
-        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE, ..ProductLook::default() }
+        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE }
     );
-    // Pattern sizes: zero or less is the default; others are clamped.
-    let sized = ProductLook { weave_pitch: [0.0, f32::NAN], ply_thickness: 1e9, units_per_mm: -2.0, ..look }.sanitized();
-    assert_eq!(sized.weave_pitch, ProductLook::DEFAULT_WEAVE_PITCH);
-    assert_eq!((sized.ply_thickness, sized.units_per_mm), (ProductLook::PATTERN_RANGE[1], 1.0));
-    let custom = ProductLook { weave_pitch: [0.42, 0.44], ply_thickness: 0.1, units_per_mm: 1000.0, ..look };
-    assert_eq!(custom.sanitized(), custom);
     let odd = ProductLook { exposure: -3.0, rotation: -1.0, ..look }.sanitized();
     assert_eq!(odd.exposure, 0.0);
     assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
@@ -557,68 +548,23 @@ fn run_probe(
         .collect()
 }
 
-/// The last four floats of a PBR vertex written by `pbr_tri_with` (the detail the shader reads).
-fn vertex_detail(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> [f32; 4] {
-    let mut scene = crate::view::GpuScene::default();
-    scene.pbr_tri_with([0.0; 3], [0.0, 0.0, 1.0], surface, pattern, strength);
-    assert!(scene.pbr.is_empty());
-    assert_eq!(scene.pbr_detailed.len(), crate::view::PBR_DETAILED_SIZE);
-    std::array::from_fn(|k| {
-        let at = 48 + 4 * k;
-        f32::from_le_bytes([scene.pbr_detailed[at], scene.pbr_detailed[at + 1], scene.pbr_detailed[at + 2], scene.pbr_detailed[at + 3]])
-    })
-}
-
 /// The plain PBR vertex keeps its 48 bytes (the default preview's memory and upload bound are
-/// unchanged), and carries no coat; `pbr_tri_with` writes 64-byte vertices into a stream of their
-/// own, their first 48 bytes as `pbr_tri`'s, then the pattern and the coat, its IOR in the
-/// pattern float's fraction.
+/// unchanged): position, normal, base colour and optical parameters, and no coat.
 #[test]
-fn pbr_vertices_carry_pattern_and_coat() {
+fn pbr_vertices_are_48_bytes_without_a_coat() {
     use solidcraft_geom::Vec3;
     use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
-    assert_eq!((crate::view::PBR_SIZE, crate::view::PBR_DETAILED_SIZE), (48, 64));
+    assert_eq!(crate::view::PBR_SIZE, 48);
     let Ok(plain) = OpaqueSurface::new(Vec3::new(0.2, 0.4, 0.6), 0.25, 0.5, 1.45) else { panic!("valid surface") };
     let Ok(coat) = ClearCoat::new(0.8, 0.12, 1.52) else { panic!("valid coat") };
     let mut scene = crate::view::GpuScene::default();
     scene.pbr_tri([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain.with_clear_coat(coat));
-    assert!(scene.pbr_detailed.is_empty());
     let floats: Vec<f32> = scene.pbr.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
     assert_eq!(floats, [1.0, 2.0, 3.0, 0.0, 0.0, 1.0, 0.2, 0.4, 0.6, 0.25, 0.5, 1.45]);
-    scene.pbr_tri_with([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], plain, SurfacePattern::None, 0.0);
-    let detailed: Vec<f32> = scene.pbr_detailed.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-    assert_eq!(&detailed[..12], &floats[..]);
-    assert_eq!(&detailed[12..], &[0.25, 0.0, 0.0, 1.0], "no pattern, no coat: what `vs_pbr` gives a plain vertex");
-    assert!(crate::pbr::SOURCE.contains("vec4<f32>(0.25, 0.0, 0.0, 1.0)"), "vs_pbr's detail is the plain one");
-    let detail = vertex_detail(plain.with_clear_coat(coat), SurfacePattern::PeelOverWeave, 0.4);
-    assert_eq!(detail[0].floor(), 3.0);
-    assert!((1.0 + (detail[0].fract() - 0.25) * 4.0 - 1.52).abs() < 1e-5, "{detail:?}");
-    assert_eq!(&detail[1..], &[0.4, 0.8, 0.12]);
-    for (strength, kept) in [(f32::NAN, 0.0), (-1.0, 0.0), (7.0, 1.0)] {
-        assert_eq!(vertex_detail(plain, SurfacePattern::InkGrain, strength)[1], kept);
-    }
-    for pattern in SurfacePattern::ALL {
-        assert_eq!(SurfacePattern::from_id(pattern.id()), Some(pattern));
-    }
-    assert_eq!(SurfacePattern::from_id(5), None);
 }
 
-/// The shader's pattern ids are [`SurfacePattern::id`].
-#[test]
-fn shader_pattern_ids_are_the_enum() {
-    for (pattern, name) in [
-        (SurfacePattern::Weave, "PATTERN_WEAVE"),
-        (SurfacePattern::OrangePeel, "PATTERN_PEEL"),
-        (SurfacePattern::PeelOverWeave, "PATTERN_PEEL_OVER_WEAVE"),
-        (SurfacePattern::InkGrain, "PATTERN_INK"),
-    ] {
-        let text = format!("const {name}: i32 = {};", pattern.id());
-        assert!(crate::pbr::SOURCE.contains(&text), "{text} is not in pbr::SOURCE");
-    }
-}
-
-/// The viewport's clear coat (the actual `pbr_coated`, fed the vertex detail `pbr_tri_with`
-/// writes) against the f64 surface oracle (`OpaqueSurface::with_clear_coat`), as the path
+/// The viewport's clear coat (the actual `pbr_coated`, fed the coat's weight, roughness and
+/// IOR) against the f64 surface oracle (`OpaqueSurface::with_clear_coat`), as the path
 /// tracer's `gpu_clear_coat_brdf_matches_f64_surface_oracle` does, on any native GPU.
 #[test]
 fn gpu_viewport_clear_coat_matches_f64_surface_oracle() {
@@ -631,7 +577,7 @@ fn gpu_viewport_clear_coat_matches_f64_surface_oracle() {
 @compute @workgroup_size(1)
 fn probe_coat(@builtin(global_invocation_id) id: vec3<u32>) {
     let b = id.x * 5u;
-    result[id.x] = vec4<f32>(pbr_coated(probes[b].xyz, probes[b + 1u].xyz, pbr_coat_of(probes[b + 2u]), vec3<f32>(0.0, 0.0, 1.0), probes[b + 3u].xyz, probes[b + 4u].xyz), 1.0);
+    result[id.x] = vec4<f32>(pbr_coated(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, vec3<f32>(0.0, 0.0, 1.0), probes[b + 3u].xyz, probes[b + 4u].xyz), 1.0);
 }
 "#;
     let base = Vec3::new(0.8, 0.5, 0.2);
@@ -663,7 +609,8 @@ fn probe_coat(@builtin(global_invocation_id) id: vec3<u32>) {
     let mut input = Vec::new();
     for (under, coated, view, light) in &cases {
         input.extend([0.8, 0.5, 0.2, 0.0, under.metallic() as f32, under.roughness() as f32, under.dielectric_ior() as f32, 0.0]);
-        input.extend(vertex_detail(*coated, SurfacePattern::None, 0.0));
+        let (weight, roughness, ior) = coated.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
+        input.extend([weight, roughness, ior, 0.0]);
         input.extend([view.x as f32, view.y as f32, view.z as f32, 0.0, light.x as f32, light.y as f32, light.z as f32, 0.0]);
     }
     let got = run_probe(&device, &queue, probe, "probe_coat", &input, cases.len(), None);
@@ -748,97 +695,9 @@ fn probe_coated_ibl(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-/// The product look's patterns, through the actual `look_detail`: a weave with two yarn
-/// families and over-under parity at the given pitch (zero mean, so it fades to the plain
-/// colour), an edge's weave along the edge and up through the plies, a gloss coating's orange peel
-/// (normal only), ink grain, and every pattern gone where its period is below the pixel.
-#[test]
-fn gpu_patterns_have_their_period_parity_and_mean() {
-    let Ok((_, device, queue)) = crate::open_headless() else { return };
-    let probe = r#"
-@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
-@compute @workgroup_size(1)
-fn probe_detail(@builtin(global_invocation_id) id: vec3<u32>) {
-    let b = id.x * 5u;
-    let d = look_detail(probes[b].xyz, probes[b + 1u].xyz, probes[b + 2u].xyz, probes[b + 3u], probes[b + 4u]);
-    result[id.x] = vec4<f32>(d.n, d.albedo);
-}
-"#;
-    let pitch = ProductLook::DEFAULT_WEAVE_PITCH;
-    let ply = ProductLook::DEFAULT_PLY_THICKNESS;
-    let params = |units: f32| [pitch[0], pitch[1], ply, units];
-    // (position, normal, footprint, pattern, strength, units per mm)
-    let mut cases: Vec<([f32; 3], [f32; 3], f32, SurfacePattern, f32, f32)> = Vec::new();
-    let up = [0.0, 0.0, 1.0];
-    // 0..4: parity and period of the weave on a face.
-    let p0 = [0.8 * pitch[0], 0.5 * pitch[1], 0.0];
-    for shift in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 0.0]] {
-        cases.push(([p0[0] + shift[0] * pitch[0], p0[1] + shift[1] * pitch[1], 0.0], up, 0.0, SurfacePattern::Weave, 1.0, 1.0));
-    }
-    // 4: the same point in world units of 0.1 mm (the pattern keeps its size in millimetres).
-    cases.push(([p0[0] * 10.0, p0[1] * 10.0, 0.0], up, 0.0, SurfacePattern::Weave, 1.0, 10.0));
-    // 5, 6: a footprint of one pitch fades the weave to its mean, and no pattern is no change.
-    cases.push((p0, up, pitch[0], SurfacePattern::Weave, 1.0, 1.0));
-    cases.push((p0, up, 0.0, SurfacePattern::None, 1.0, 1.0));
-    // 7..10: an edge facing +X: unchanged along X, changed along Y and up through a ply.
-    let e0 = [3.0, 0.3 * pitch[1], 0.6 * ply];
-    for shift in [[0.0, 0.0, 0.0], [0.37, 0.0, 0.0], [0.0, pitch[1], 0.0], [0.0, 0.0, ply]] {
-        cases.push(([e0[0] + shift[0], e0[1] + shift[1], e0[2] + shift[2]], [1.0, 0.0, 0.0], 0.0, SurfacePattern::Weave, 1.0, 1.0));
-    }
-    let grid = 24;
-    let start = cases.len();
-    // A grid over one full repeat (2 × 2 cells) of each pattern, then of the grain and peel.
-    for pattern in [SurfacePattern::Weave, SurfacePattern::OrangePeel, SurfacePattern::PeelOverWeave, SurfacePattern::InkGrain] {
-        for j in 0..grid {
-            for i in 0..grid {
-                let x = 2.0 * pitch[0] * (i as f32 + 0.5) / grid as f32 + 10.0 * pitch[0];
-                let y = 2.0 * pitch[1] * (j as f32 + 0.5) / grid as f32 + 4.0 * pitch[1];
-                cases.push(([x, y, 0.0], up, 0.0, pattern, 0.5, 1.0));
-            }
-        }
-    }
-    let mut input = Vec::new();
-    for (p, n, footprint, pattern, strength, units) in &cases {
-        input.extend([p[0], p[1], p[2], 0.0, n[0], n[1], n[2], 0.0, *footprint, *footprint, *footprint, 0.0]);
-        input.extend([pattern.id() as f32 + 0.25, *strength, 0.0, 1.0]);
-        input.extend(params(*units));
-    }
-    let got = run_probe(&device, &queue, probe, "probe_detail", &input, cases.len(), None);
-    assert_eq!(got.len(), cases.len());
-    let albedo = |i: usize| got[i][3];
-    let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
-    assert!(!close(albedo(0), albedo(1)), "the next cell along X has the other yarn on top: {} {}", albedo(0), albedo(1));
-    assert!(close(albedo(0), albedo(2)), "a diagonal neighbour has the same yarn on top");
-    assert!(close(albedo(0), albedo(3)), "the repeat is two cells");
-    assert!((albedo(0) - albedo(4)).abs() < 1e-3, "units per millimetre keep the size");
-    assert!(close(albedo(5), 1.0) && got[5][..3] == [0.0, 0.0, 1.0], "a pitch-wide footprint shows the mean: {:?}", got[5]);
-    assert!(albedo(6) == 1.0 && got[6][..3] == [0.0, 0.0, 1.0], "no pattern");
-    assert!(close(albedo(7), albedo(8)), "along an edge's normal nothing changes");
-    assert!(!close(albedo(7), albedo(9)) || !close(albedo(7), albedo(10)), "an edge's weave runs along it and through the plies");
-    assert!(got[7][0] > 0.99, "an edge's normal stays near its own: {:?}", got[7]);
-    let block = |k: usize| &got[start + k * grid * grid..start + (k + 1) * grid * grid];
-    let mean = |b: &[[f32; 4]]| b.iter().map(|g| f64::from(g[3])).sum::<f64>() / b.len() as f64;
-    let spread = |b: &[[f32; 4]]| b.iter().map(|g| g[3]).fold(f32::MIN, f32::max) - b.iter().map(|g| g[3]).fold(f32::MAX, f32::min);
-    let tilt = |b: &[[f32; 4]]| b.iter().map(|g| g[2]).fold(1.0, f32::min);
-    let (weave, peel, over, grain) = (block(0), block(1), block(2), block(3));
-    assert!((mean(weave) - 1.0).abs() < 0.01, "the weave's mean is the plain colour: {}", mean(weave));
-    assert!(spread(weave) > 0.2, "the weave shows: {}", spread(weave));
-    assert!(tilt(weave) < 0.99999 && tilt(weave) > 0.99, "a small relief on bare laminate: {}", tilt(weave));
-    assert!(peel.iter().all(|g| g[3] == 1.0), "orange peel keeps the colour");
-    // Gentle: a gloss coat's softbox reflection keeps its shape (slopes of a few milliradians).
-    assert!(tilt(peel) < 0.9999995 && tilt(peel) > 0.99995, "orange peel tilts the normal a little: {}", tilt(peel));
-    // Under a coating the weave shows in the colour only; the normal is the coating's own peel.
-    assert!((mean(over) - 1.0).abs() < 0.01 && (spread(over) - spread(weave)).abs() < 1e-4, "weave shows through a coating");
-    // The same peel at full strength (over the weave) and at half (on its own): twice the slope.
-    assert!(over.iter().zip(peel).all(|(o, p)| o[2] <= p[2] + 1e-6) && tilt(over) < tilt(peel), "the coating's peel at full strength");
-    assert!(spread(grain) > 0.05 && (mean(grain) - 1.0).abs() < 0.05, "ink grain: {} {}", spread(grain), mean(grain));
-    assert!(got.iter().all(|g| g.iter().all(|c| c.is_finite()) && (g[0] * g[0] + g[1] * g[1] + g[2] * g[2] - 1.0).abs() < 1e-4));
-}
-
 /// The product look's PBR entry points translate to WebGL2's GLSL ES 3.00 (naga's GL backend,
-/// as wgpu's on the web): the flat detail varying and the studio's cube map included, so the
-/// look's shaders exist on WebGL2 (its four bind groups: the studio is group 3, the last).
+/// as wgpu's on the web): the studio's cube map included, so the look's shaders exist on WebGL2
+/// (its four bind groups: the studio is group 3, the last).
 #[test]
 fn the_product_look_shaders_translate_for_webgl2() {
     use naga::back::glsl;
@@ -854,7 +713,6 @@ fn the_product_look_shaders_translate_for_webgl2() {
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
     for (stage, entry) in [
         (naga::ShaderStage::Vertex, "vs_pbr"),
-        (naga::ShaderStage::Vertex, "vs_pbr_detailed"),
         (naga::ShaderStage::Fragment, "fs_pbr"),
         (naga::ShaderStage::Fragment, "fs_ao_depth_pbr"),
     ] {
@@ -864,7 +722,6 @@ fn the_product_look_shaders_translate_for_webgl2() {
             .and_then(|mut w| w.write().map(|_| ()));
         assert!(written.is_ok(), "{entry}: {written:?}");
         assert!(out.starts_with("#version 300 es"), "{entry}");
-        assert!(out.lines().any(|l| l.contains("flat") && l.contains("vec4")), "{entry}: the detail varying is flat");
         if entry == "fs_pbr" {
             assert!(out.contains("samplerCube"), "fs_pbr samples the studio's cube");
         }

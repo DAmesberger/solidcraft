@@ -24,7 +24,7 @@ mod ibl;
 mod msaa_check;
 mod oit;
 
-pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset, SurfacePattern};
+pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
 
@@ -32,9 +32,6 @@ pub use msaa_check::MsaaCheck;
 pub const TRI_SIZE: usize = 28;
 /// Opaque PBR vertex: position, normal, linear base colour, (metallic, roughness, IOR).
 pub const PBR_SIZE: usize = pbr::VERTEX_SIZE;
-/// Opaque PBR vertex with the product look's detail (pattern and clear coat): [`PBR_SIZE`] bytes
-/// and four floats more. Only [`GpuScene::pbr_tri_with`] writes them.
-pub const PBR_DETAILED_SIZE: usize = pbr::DETAILED_VERTEX_SIZE;
 /// Line instance: a, b (3 × f32 each), palette index (u32), width in pixels (f32).
 pub const LINE_SIZE: usize = 32;
 /// Placement of an [`InstancedMesh`]: the rows of its rigid move (3 × 4 f32; a point's x, y and z
@@ -160,7 +157,7 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 }
 /// The shader's `U`: the view-projection matrix, 10 `vec4`s (the tenth carries the ambient
 /// occlusion radius), the 8 analysis colours, their flags, the depth direction and the two
-/// whole-body highlight colours, the product lights, the product look's two `vec4`s and the sky
+/// whole-body highlight colours, the product lights, the product look, the scene's units and the sky
 /// (`uniform_bytes`).
 const UNIFORM_SIZE: u64 = 416 + 16 + 21 * 64 + 32 + 16;
 
@@ -469,8 +466,6 @@ pub struct GpuScene {
     /// Opaque product PBR vertices ([`PBR_SIZE`] each); linear base color and explicit optical
     /// parameters.
     pub pbr: Vec<u8>,
-    /// Opaque product PBR vertices with the product look's detail ([`PBR_DETAILED_SIZE`] each).
-    pub pbr_detailed: Vec<u8>,
     /// Translucent triangles (alpha from the colour), drawn after the opaque ones without
     /// writing depth.
     pub trans: Vec<u8>,
@@ -804,8 +799,8 @@ impl BlockBuilder {
 
 impl GpuScene {
     /// A vertex of an opaque PBR surface ([`PBR_SIZE`] bytes into [`GpuScene::pbr`]): its base
-    /// colour and optical parameters, with no pattern and no clear coat (the default preview has
-    /// no coating, docs/render-opaque-pbr.md; [`GpuScene::pbr_tri_with`] carries both).
+    /// colour and optical parameters. A clear coat is not carried: the vertex path draws the
+    /// uncoated surface (docs/render-opaque-pbr.md).
     pub fn pbr_tri(&mut self, p: [f32; 3], n: [f32; 3], surface: solidcraft_render::surface::OpaqueSurface) {
         for value in p.into_iter().chain(n).chain(surface.base_color().to_f32()).chain(Self::pbr_parameters(surface)) {
             self.pbr.extend_from_slice(&value.to_le_bytes());
@@ -816,31 +811,6 @@ impl GpuScene {
         [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32]
     }
 
-    /// A vertex of an opaque PBR surface with the product look's detail ([`PBR_DETAILED_SIZE`]
-    /// bytes into [`GpuScene::pbr_detailed`]): a procedural `pattern` at `strength` (clamped to
-    /// [0, 1]) and the surface's clear coat. Both are drawn only with the product look; without
-    /// it the vertex draws as [`GpuScene::pbr_tri`]'s. The vertex's last four floats are (pattern
-    /// id + 0.25 + (coat IOR − 1) / 4, strength, coat weight, coat roughness): the fraction
-    /// carries the coat's IOR. Under a coat, a base that has no interface of its own (a pigmented
-    /// layer beneath the lacquer) takes IOR 1, so the air-to-coat reflection is counted once, by
-    /// the coat. A triangle's three vertices must carry the same detail (it is not interpolated).
-    pub fn pbr_tri_with(
-        &mut self,
-        p: [f32; 3],
-        n: [f32; 3],
-        surface: solidcraft_render::surface::OpaqueSurface,
-        pattern: SurfacePattern,
-        strength: f32,
-    ) {
-        let base = surface.base_color().to_f32();
-        let parameters = Self::pbr_parameters(surface);
-        let (weight, roughness, ior) = surface.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight() as f32, c.roughness() as f32, c.ior() as f32));
-        let strength = if strength.is_finite() { strength.clamp(0.0, 1.0) } else { 0.0 };
-        let detail = [pattern.id() as f32 + 0.25 + (ior - 1.0) / 4.0, strength, weight, roughness];
-        for value in p.into_iter().chain(n).chain(base).chain(parameters).chain(detail) {
-            self.pbr_detailed.extend_from_slice(&value.to_le_bytes());
-        }
-    }
     pub fn tri(&mut self, p: [f32; 3], n: [f32; 3], c: PaletteIndex) {
         for v in p.iter().chain(&n) {
             self.tris.extend_from_slice(&v.to_le_bytes());
@@ -979,6 +949,10 @@ pub struct Frame {
     pub product_lights: Option<Vec<[f32; 16]>>,
     /// The opt-in product look of PBR surfaces ([`ProductLook`]; None: the default preview).
     pub product_look: Option<ProductLook>,
+    /// World units per millimetre: the scale at which material lengths, given in millimetres,
+    /// are drawn. A constant of the scene (1 for a model in millimetres), not of a material;
+    /// sanitised by [`units_per_mm`].
+    pub units_per_mm: f32,
     /// Product preview uses its own batches, retaining the Design viewport's uploads.
     pub product: bool,
     /// Product preview only: receives a GPU error raised by its geometry upload.
@@ -1652,7 +1626,6 @@ struct Batches {
     key: Option<u64>,
     tris: Option<Batch>,
     pbr: Option<Batch>,
-    pbr_detailed: Option<Batch>,
     trans: Option<Batch>,
     shadow: Option<Batch>,
     glass: Option<Batch>,
@@ -1746,7 +1719,6 @@ impl Batches {
             };
             self.tris = own("sc_tris", &sc.tris, TRI_SIZE);
             self.pbr = own("sc_pbr", &sc.pbr, PBR_SIZE);
-            self.pbr_detailed = own("sc_pbr_detailed", &sc.pbr_detailed, PBR_DETAILED_SIZE);
             self.trans = own("sc_trans", &sc.trans, TRI_SIZE);
             self.shadow = own("sc_shadow", &sc.shadow, TRI_SIZE);
             let own_lines = own("sc_lines", &sc.lines, LINE_SIZE);
@@ -2065,7 +2037,6 @@ pub struct Renderer {
     tri_hl_instanced: wgpu::RenderPipeline,
     tri_hl_instanced_flat: wgpu::RenderPipeline,
     pbr: wgpu::RenderPipeline,
-    pbr_detailed: wgpu::RenderPipeline,
     trans: wgpu::RenderPipeline,
     /// Glass: far sides (front faces culled), then near sides (back faces culled).
     glass_far: wgpu::RenderPipeline,
@@ -2369,12 +2340,6 @@ fn tri_layout() -> wgpu::VertexBufferLayout<'static> {
 fn pbr_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3];
     wgpu::VertexBufferLayout { array_stride: PBR_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
-}
-
-/// A PBR vertex with the product look's detail ([`PBR_DETAILED_SIZE`]).
-fn pbr_detailed_layout() -> wgpu::VertexBufferLayout<'static> {
-    const A: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3, 4 => Float32x4];
-    wgpu::VertexBufferLayout { array_stride: PBR_DETAILED_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
 /// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
@@ -3008,8 +2973,7 @@ impl Renderer {
                 cache: None,
             })
         };
-        // Plain PBR vertices, and those with the product look's detail.
-        let pbr = || (pbr_pipeline("vs_pbr", pbr_layout()), pbr_pipeline("vs_pbr_detailed", pbr_detailed_layout()));
+        let pbr = || pbr_pipeline("vs_pbr", pbr_layout());
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -3056,7 +3020,7 @@ impl Renderer {
             let (line, line_hidden) = lines.join();
             let (overlay, guide_line) = lines_all.join();
             let (ss_blit, copy_blit, ss_filter, ss_blit_look, ss_filter_look) = blits.join();
-            let (pbr, pbr_detailed) = pbr.join();
+            let pbr = pbr.join();
             let (depth_reset, section_reset, section_clear) = resets.join();
             let oit = oit.join();
             Renderer {
@@ -3120,7 +3084,6 @@ impl Renderer {
                 tri_hl_instanced,
                 tri_hl_instanced_flat,
                 pbr,
-                pbr_detailed,
                 trans,
                 glass_far,
                 glass_near,
@@ -3421,6 +3384,16 @@ fn product_look(cb: &Frame) -> Option<ProductLook> {
     cb.product_look.map(ProductLook::sanitized)
 }
 
+/// Smallest and largest [`Frame::units_per_mm`] the renderer draws with.
+pub const UNITS_PER_MM_RANGE: [f32; 2] = [1e-6, 1e6];
+
+/// The frame's world units per millimetre as drawn: clamped to [`UNITS_PER_MM_RANGE`], and 1 for
+/// a value that is not positive and finite.
+pub fn units_per_mm(cb: &Frame) -> f32 {
+    let units = cb.units_per_mm;
+    if units.is_finite() && units > 0.0 { units.clamp(UNITS_PER_MM_RANGE[0], UNITS_PER_MM_RANGE[1]) } else { 1.0 }
+}
+
 /// Everything the drawn picture depends on: the scene keys and camera, the viewport's size, the
 /// section, images, analysis, accessibility map, ambient occlusion, the product look and the
 /// theme's hover and selection tints. The same key draws the same picture (pipelines and shaders
@@ -3431,6 +3404,7 @@ pub fn frame_key(cb: &Frame) -> u64 {
     cb.product.hash(&mut h);
     cb.product_lights.as_ref().map(|lights| lights.iter().take(21).map(|light| light.map(f32::to_bits)).collect::<Vec<_>>()).hash(&mut h);
     product_look(cb).map(|look| (look.studio, look.uniform().map(f32::to_bits))).hash(&mut h);
+    units_per_mm(cb).to_bits().hash(&mut h);
     cb.key.hash(&mut h);
     cb.sketch_key.hash(&mut h);
     cb.hl_key.hash(&mut h);
@@ -3870,7 +3844,6 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(product_look(cb).map(|look| look.studio)), &[]);
         tris(pass, &res.pbr, &m.pbr);
-        tris(pass, &res.pbr_detailed, &m.pbr_detailed);
         if !cb.product {
             res.clouds.paint(pass, &res.cloud_pipes, tally);
         }
@@ -4333,8 +4306,9 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
         let light = cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]);
         v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
     }
-    // The product look ([`ProductLook::uniform`]; all zero without it).
-    v.extend(cb.product_look.map_or([0.0; 8], |look| look.uniform()));
+    // The product look ([`ProductLook::uniform`]; all zero without it), then the scene's units.
+    v.extend(cb.product_look.map_or([0.0; 4], |look| look.uniform()));
+    v.extend([units_per_mm(cb), 0.0, 0.0, 0.0]);
     v.extend(cb.sky.map(|value| if value.is_finite() { value } else { 0.0 }));
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
@@ -4573,9 +4547,9 @@ mod tests {
         assert_ne!(super::frame_key(&frame), previous);
     }
 
-    /// The product look rides in the two `vec4`s between the light records and the sky, sanitised
-    /// (all zero without it), and takes none of the 21 light slots: the lights are written as
-    /// without it.
+    /// The product look rides in the `vec4` between the light records and the scene's units,
+    /// sanitised (all zero without it), and takes none of the 21 light slots: the lights are
+    /// written as without it. The units follow, sanitised, with or without the look.
     #[test]
     fn product_look_in_the_uniform() {
         let floats = |f: &super::Frame| -> Vec<f32> {
@@ -4590,25 +4564,22 @@ mod tests {
         let plain = floats(&f);
         assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
         assert_eq!(&plain[meta + 4..meta + 20], &light);
-        assert_eq!(&plain[look_at..look_at + 8], &[0.0; 8], "no look");
-        let wild = ProductLook {
-            exposure: f32::INFINITY,
-            studio: StudioPreset::Contrast,
-            rotation: f32::NAN,
-            intensity: -2.0,
-            weave_pitch: [0.0, f32::NAN],
-            ply_thickness: 1e9,
-            units_per_mm: -1.0,
-        };
+        assert_eq!(&plain[look_at..look_at + 8], &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], "no look; the units");
+        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0 };
         f.product_look = Some(wild);
         let v = floats(&f);
         assert_eq!(&v[..look_at], &plain[..look_at], "the lights and everything else as without the look");
-        let tame = [1.0, 0.0, 0.0, 1.0, ProductLook::DEFAULT_WEAVE_PITCH[0], ProductLook::DEFAULT_WEAVE_PITCH[1], ProductLook::PATTERN_RANGE[1], 1.0];
+        let tame = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0];
         assert_eq!(&v[look_at..look_at + 8], &tame);
         assert_eq!(wild.sanitized().studio, StudioPreset::Contrast);
         // Without product lights the look is on all the same.
         f.product_lights = None;
         assert_eq!(&floats(&f)[look_at..look_at + 8], &tame);
+        // The scene's units: kept in range, 1 for nonsense.
+        for (units, drawn) in [(25.4, 25.4), (-1.0, 1.0), (f32::NAN, 1.0), (0.0, 1.0), (1e9, super::UNITS_PER_MM_RANGE[1]), (1e-9, super::UNITS_PER_MM_RANGE[0])] {
+            f.units_per_mm = units;
+            assert_eq!(&floats(&f)[look_at + 4..look_at + 8], &[drawn, 0.0, 0.0, 0.0], "{units}");
+        }
     }
 
     /// A frame with a fixed picture, and a key that names everything it shows.
@@ -4618,6 +4589,7 @@ mod tests {
         super::Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,
@@ -4689,6 +4661,7 @@ mod tests {
             ("selection tint", key(|f| f.selection_tint = [0.4, 0.5, 0.6])),
             ("outline", key(|f| f.outline = true)),
             ("ambient occlusion", key(|f| f.ao_radius = 1.0)),
+            ("units per millimetre", key(|f| f.units_per_mm = 25.4)),
             // The settled view's full count replaces the moving view's picture (#7165).
             ("ambient occlusion samples", key(|f| f.ao_samples = super::AO_SAMPLES_MOVING)),
             ("supersampling", key(|f| f.ssaa = 2.0)),
@@ -4723,9 +4696,6 @@ mod tests {
             ("studio", lights(Some(ProductLook { studio: StudioPreset::Soft, ..on }))),
             ("studio rotation", lights(Some(ProductLook { rotation: 0.5, ..on }))),
             ("studio intensity", lights(Some(ProductLook { intensity: 0.5, ..on }))),
-            ("weave pitch", lights(Some(ProductLook { weave_pitch: [0.42, 0.44], ..on }))),
-            ("ply thickness", lights(Some(ProductLook { ply_thickness: 0.1, ..on }))),
-            ("units per millimetre", lights(Some(ProductLook { units_per_mm: 0.001, ..on }))),
         ] {
             assert_ne!(off, changed, "{what} must draw again");
             assert!(what == "product look" || changed != lights(Some(on)), "{what} must draw again");
@@ -4816,10 +4786,8 @@ mod tests {
                 assert!(c < first, "fragment {n}: a derivative after a branch or return: {}", &body[c..(c + 40).min(body.len())]);
             }
         }
-        // The PBR source is scanned too: its fragment takes the pixel footprint the product look's
-        // patterns fade by, before its first branch.
-        let pbr = fns.iter().find(|(n, _, frag)| n == "fs_pbr" && *frag).map(|(_, body, _)| body.as_str()).unwrap_or("");
-        assert!(pbr.find("fwidth(").is_some_and(|c| c < first_branch(pbr)), "fs_pbr takes its footprint first");
+        // The PBR source is scanned too.
+        assert!(fns.iter().any(|(n, _, frag)| n == "fs_pbr" && *frag), "fs_pbr is scanned");
     }
 
     /// Where a WGSL body first branches, loops or returns (`if` with or without parentheses,
@@ -5048,6 +5016,7 @@ mod glass_tests {
         let frame = Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,
@@ -5225,6 +5194,7 @@ mod glass_tests {
         Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,
@@ -5407,15 +5377,6 @@ mod glass_tests {
         assert!(look.iter().zip(&again).all(|(a, b)| close(*a, *b, 1)), "the cached picture is the filtered one");
     }
 
-    /// A PBR square like [`pbr_scene`], with the product look's detail on every vertex.
-    fn detailed_scene(surface: solidcraft_render::surface::OpaqueSurface, pattern: SurfacePattern, strength: f32) -> GpuScene {
-        let mut scene = GpuScene::default();
-        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
-            scene.pbr_tri_with(p, [0.0, 0.0, 1.0], surface, pattern, strength);
-        }
-        scene
-    }
-
     /// A PBR floor with a 4 × 4 block standing 3 high in the middle (its top face is what the
     /// fixed view looks down on).
     fn block_on_floor() -> Option<GpuScene> {
@@ -5437,10 +5398,11 @@ mod glass_tests {
         bytes.get(i..i + 3).map_or([0; 3], |p| [p[0], p[1], p[2]])
     }
 
-    /// Without the product look a coat, a pattern or a frame's occlusion radius changes nothing
-    /// on a PBR surface: the documented preview, as without them (docs/render-opaque-pbr.md).
+    /// Without the product look a frame's occlusion radius changes nothing on a PBR surface, and
+    /// a surface's clear coat is not drawn by the vertex path: the documented preview, as without
+    /// them (docs/render-opaque-pbr.md).
     #[test]
-    fn coats_patterns_and_occlusion_wait_for_the_product_look() {
+    fn occlusion_waits_for_the_product_look() {
         let Some((_, device, queue)) = crate::open_headless().ok() else { return };
         let depth = crate::depth_format(&device, true);
         let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -5457,70 +5419,19 @@ mod glass_tests {
             panic!("valid surface")
         };
         let Some(expected) = reinhard_pixel(base, 0.0, 0.4, 1.5, &fixed) else { panic!("valid BRDF") };
-        for (key, pattern) in (30..).zip(SurfacePattern::ALL) {
-            let scene = detailed_scene(plain.with_clear_coat(coat), pattern, 1.0);
-            let frame = Frame { key, ao_radius: 3.0, ..test_frame(scene, 1.0) };
-            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
-            let first = pixels.first().copied().unwrap_or_default();
-            assert!(pixels.iter().all(|p| *p == first), "{pattern:?}: no pattern and no dither");
-            assert!(close(first, expected, 2), "{pattern:?}: {first:?} against the uncoated {expected:?}");
+        let mut scene = GpuScene::default();
+        for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
+            scene.pbr_tri(p, [0.0, 0.0, 1.0], plain.with_clear_coat(coat));
         }
+        let frame = Frame { key: 30, ao_radius: 3.0, ..test_frame(scene, 1.0) };
+        let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
+        let first = pixels.first().copied().unwrap_or_default();
+        assert!(pixels.iter().all(|p| *p == first), "no dither");
+        assert!(close(first, expected, 2), "{first:?} against the uncoated {expected:?}");
         let Some(scene) = block_on_floor() else { panic!("valid surface") };
         let plain = render_frame(&mut r, &device, &queue, &Frame { key: 40, ..test_frame(scene.clone(), 1.0) }, true);
         let occluded = render_frame(&mut r, &device, &queue, &Frame { key: 41, ao_radius: 4.0, ..test_frame(scene, 1.0) }, true);
         assert_eq!(plain, occluded, "no occlusion on PBR surfaces without the look");
-    }
-
-    /// With the product look, a PBR surface shows its clear coat: the frame's pixel is the f64
-    /// coated surface oracle under the frame's light through exposure, PBR Neutral and the
-    /// dithered encode (no studio, so nothing else lights it).
-    #[test]
-    fn the_product_look_draws_the_clear_coat() {
-        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
-        let depth = crate::depth_format(&device, true);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
-        let light = Vec3::new(0.2, -0.1, 0.97);
-        let key = [0.2, -0.1, 0.97, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let look = ProductLook { intensity: 0.0, exposure: 1.5, ..ProductLook::default() };
-        let mut previous: Option<[u8; 3]> = None;
-        for (key_number, (base_ior, coat)) in (50..).zip([(1.5, None), (1.0, Some((1.0, 0.3, 1.52))), (1.5, Some((0.5, 0.2, 2.0)))]) {
-            let Ok(mut surface) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.06, 0.24, 0.07), 0.0, 0.5, base_ior) else {
-                panic!("valid surface")
-            };
-            if let Some((w, roughness, ior)) = coat {
-                let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, roughness, ior) else { panic!("valid coat") };
-                surface = surface.with_clear_coat(c);
-            }
-            let mut frame = Frame { key: key_number, ..test_frame(detailed_scene(surface, SurfacePattern::None, 0.0), 1.0) };
-            frame.product_lights = Some(vec![key]);
-            frame.product_look = Some(look);
-            let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
-            // A direct light in the look is a softbox: the coat's lobe for it is widened by
-            // `LOOK_LIGHT_SPREAD` (0.1 in α), so the oracle draws that wider coat.
-            let lit = match coat {
-                Some((w, roughness, ior)) => {
-                    let Ok(c) = solidcraft_render::clear_coat::ClearCoat::new(w, (roughness * roughness + 0.1).sqrt(), ior) else {
-                        panic!("valid coat")
-                    };
-                    surface.with_clear_coat(c)
-                }
-                None => surface,
-            };
-            let (Some(l), Ok(f)) = (light.normalized(), lit.brdf(Vec3::Z, Vec3::Z, light.normalized().unwrap_or(Vec3::Z))) else {
-                panic!("valid BRDF")
-            };
-            let radiance = [f.x, f.y, f.z].map(|c| (c * 2.0 * l.z * 1.5) as f32);
-            let expected = super::ibl::pbr_neutral(radiance).map(|m| {
-                let m = f64::from(m);
-                let e = if m > 0.0031308 { 1.055 * m.powf(1.0 / 2.4) - 0.055 } else { m * 12.92 };
-                (e * 255.0).round().clamp(0.0, 255.0) as u8
-            });
-            assert!(pixels.iter().all(|p| close(*p, expected, 2)), "coat {coat:?}: {expected:?}, got e.g. {:?}", pixels.first());
-            let first = pixels.first().copied().unwrap_or_default();
-            assert!(previous.is_none_or(|p| p != first), "each coat changes the picture");
-            previous = Some(first);
-        }
     }
 
     /// With the product look and an occlusion radius, a PBR floor darkens where a PBR block stands
@@ -5556,39 +5467,6 @@ mod glass_tests {
         let lit = draw(&mut r, 62, 0.0, vec![key], direct);
         let lit_occluded = draw(&mut r, 63, 4.0, vec![key], direct);
         assert_eq!(lit, lit_occluded, "direct light is not occluded");
-    }
-
-    /// With the product look a pattern shows where its period spans pixels, and fades to the plain
-    /// surface where it is far below one.
-    #[test]
-    fn the_product_look_patterns_fade_to_the_plain_surface() {
-        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
-        let depth = crate::depth_format(&device, true);
-        let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
-        let Ok(laminate) = solidcraft_render::surface::OpaqueSurface::new(Vec3::new(0.36, 0.32, 0.17), 0.0, 0.6, 1.5) else {
-            panic!("valid surface")
-        };
-        let key = [0.3, -0.2, 0.93, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let draw = |r: &mut Renderer, number: u64, pattern: SurfacePattern, units: f32| {
-            let mut frame = Frame { key: number, ..test_frame(detailed_scene(laminate, pattern, 1.0), 1.0) };
-            let look = ProductLook { intensity: 0.0, units_per_mm: units, ..ProductLook::default() };
-            frame.product_lights = Some(vec![key]);
-            frame.product_look = Some(look);
-            inner_pixels(&render_frame(r, &device, &queue, &frame, true))
-        };
-        let plain = draw(&mut r, 70, SurfacePattern::None, 10.0);
-        let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
-        for (number, pattern) in (71..).step_by(2).zip([SurfacePattern::Weave, SurfacePattern::InkGrain]) {
-            // 10 world units a millimetre: a 0.58 mm pitch is about 18 pixels.
-            let near = draw(&mut r, number, pattern, if pattern == SurfacePattern::InkGrain { 200.0 } else { 10.0 });
-            let red = |p: &[[u8; 3]]| p.iter().map(|c| c[0]).max().unwrap_or(0) - p.iter().map(|c| c[0]).min().unwrap_or(0);
-            assert!(red(&near) > 12, "{pattern:?} shows: spread {}", red(&near));
-            assert!((mean(&near) - mean(&plain)).abs() < 0.05 * mean(&plain), "{pattern:?} keeps the mean: {} against {}", mean(&near), mean(&plain));
-            // 0.01 world units a millimetre: many periods to a pixel.
-            let far = draw(&mut r, number + 1, pattern, 0.01);
-            assert!(far.iter().zip(&plain).all(|(a, b)| close(*a, *b, 1)), "{pattern:?} fades to the plain surface");
-        }
     }
 
     /// A frame of opaque triangles at the fixed view.

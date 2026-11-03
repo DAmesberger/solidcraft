@@ -8,8 +8,7 @@
 //! colour attachments are not available on every GL adapter.
 
 use super::{
-    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_detailed_layout, pbr_layout, planned_layout, shared_layout,
-    tri_layout,
+    Batches, TriSource, color_layout, depth_compare, far_depth, instance_layout, pbr_layout, planned_layout, shared_layout, tri_layout,
 };
 
 const TERM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
@@ -21,17 +20,14 @@ struct OpaquePipelines {
     instanced: wgpu::RenderPipeline,
     instanced_flat: wgpu::RenderPipeline,
     pbr: wgpu::RenderPipeline,
-    pbr_detailed: wgpu::RenderPipeline,
 }
 
 /// Where a pass's vertices come from.
 #[derive(Clone, Copy)]
 enum Source {
     Tris(TriSource),
-    /// PBR vertices, plain or with the product look's detail.
-    Pbr {
-        detailed: bool,
-    },
+    /// PBR vertices.
+    Pbr,
 }
 
 /// The maps at their current size. Group 2 of the shader is the depth map and a term: `bind` has
@@ -126,13 +122,11 @@ fn draw_opaque(pass: &mut wgpu::RenderPass<'_>, pipelines: &OpaquePipelines, bin
         for draw in batch.instanced.iter().filter(|d| d.look == super::InstanceLook::Opaque) {
             draw.draw(pass, &pipelines.instanced, &pipelines.instanced_flat, &uncounted);
         }
-        for (surfaces, pipeline) in [(&batch.pbr, &pipelines.pbr), (&batch.pbr_detailed, &pipelines.pbr_detailed)] {
-            if let Some(surfaces) = surfaces.as_ref().filter(|_| pbr) {
-                pass.set_pipeline(pipeline);
-                for (buffer, count) in &surfaces.parts {
-                    pass.set_vertex_buffer(0, buffer.slice(..));
-                    pass.draw(0..*count, 0..1);
-                }
+        if let Some(surfaces) = batch.pbr.as_ref().filter(|_| pbr) {
+            pass.set_pipeline(&pipelines.pbr);
+            for (buffer, count) in &surfaces.parts {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
             }
         }
     }
@@ -176,14 +170,12 @@ impl Resources {
         let evaluated = [Some(planned_layout()), Some(color_layout())];
         let placed = [Some(shared_layout()), Some(instance_layout())];
         let pbr = [Some(pbr_layout())];
-        let pbr_detailed = [Some(pbr_detailed_layout())];
         let target = |format| [Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::RED })];
         let opaque = |label, layout: &wgpu::PipelineLayout, fragment: &str, format, depth_write_enabled, compare| {
             let pipeline = |source: Source| {
                 let (vertex, fragment) = match source {
                     Source::Tris(s) => (s.entry(), s.fragment(fragment)),
-                    Source::Pbr { detailed: false } => ("vs_pbr", format!("{fragment}_pbr")),
-                    Source::Pbr { detailed: true } => ("vs_pbr_detailed", format!("{fragment}_pbr")),
+                    Source::Pbr => ("vs_pbr", format!("{fragment}_pbr")),
                 };
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some(label),
@@ -195,8 +187,7 @@ impl Resources {
                             Source::Tris(TriSource::Built) => &built[..],
                             Source::Tris(TriSource::Planned) => &evaluated[..],
                             Source::Tris(TriSource::Instanced | TriSource::InstancedFlat) => &placed[..],
-                            Source::Pbr { detailed: false } => &pbr[..],
-                            Source::Pbr { detailed: true } => &pbr_detailed[..],
+                            Source::Pbr => &pbr[..],
                         },
                         compilation_options: Default::default(),
                     },
@@ -224,8 +215,7 @@ impl Resources {
                 planned: pipeline(Source::Tris(TriSource::Planned)),
                 instanced: pipeline(Source::Tris(TriSource::Instanced)),
                 instanced_flat: pipeline(Source::Tris(TriSource::InstancedFlat)),
-                pbr: pipeline(Source::Pbr { detailed: false }),
-                pbr_detailed: pipeline(Source::Pbr { detailed: true }),
+                pbr: pipeline(Source::Pbr),
             }
         };
         let prepass = opaque("sc_ao_prepass", &prepass_layout, "fs_ao_depth", wgpu::TextureFormat::R32Uint, true, wgpu::CompareFunction::Less);

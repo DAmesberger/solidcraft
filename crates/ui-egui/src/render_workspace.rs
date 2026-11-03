@@ -2206,13 +2206,11 @@ fn paint_product(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, camera
             }
             app.viewport.hl_key = highlight_key;
         }
-        if app.preferences.render_studio_look && !crate::gpu::studio_ready() {
-            ui.ctx().request_repaint();
-        }
         let slot = app.render_workspace.slot.clone();
         let callback = ViewportCallback(Frame {
             product_lights: Some(light::preview(app)?),
-            product_look: preview_look(app),
+            product_look: None,
+            units_per_mm: 1.0,
             product: true,
             upload_error: Some(app.render_workspace.upload_error.clone()),
             key,
@@ -2253,12 +2251,6 @@ fn paint_product(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, camera
     if let Err(error) = result {
         preview_error(app, ui, rect, &error);
     }
-}
-
-/// The real-time preview's product look: the default studio with the Graphics preference
-/// `render_studio_look`, none without it. The window repaints until the studio is baked.
-pub(crate) fn preview_look(app: &SolveApp) -> Option<crate::gpu::ProductLook> {
-    app.preferences.render_studio_look.then(crate::gpu::ProductLook::default)
 }
 
 /// Apply validated UI requests after the same registry call used by automation.

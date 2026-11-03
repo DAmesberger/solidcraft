@@ -269,6 +269,7 @@ pub(crate) fn view_frame(
         product_lights: None,
         upload_error: None,
         product_look: None,
+        units_per_mm: 1.0,
         key: model.0,
         slot: model.1.clone(),
         sketch_key: 0,
