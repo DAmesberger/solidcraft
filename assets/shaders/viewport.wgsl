@@ -656,8 +656,8 @@ fn face_lit(i: TOut, visibility: f32) -> vec4<f32> {
     if (look_on() && length(i.n) > 0.5) {
         var view = u.back.xyz;
         if (u.eye.w > 0.5) { view = u.eye.xyz - i.wp; }
-        let v = pbr_unit(view);
-        var n = pbr_unit(i.n);
+        let v = sc_unit(view);
+        var n = sc_unit(i.n);
         if (dot(n, v) < 0.0) { n = -n; }
         let surface = surface_from_opaque(srgb_decode(i.c.rgb), vec3<f32>(0.0, 0.5, 1.5), vec3<f32>(0.0, 1.0, 1.0), n);
         let shaded = pbr_shade(surface, PbrFragment(i.pos, i.wp, n, v, vec3<f32>(0.0)));
