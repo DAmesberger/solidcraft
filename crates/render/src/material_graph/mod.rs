@@ -21,6 +21,10 @@ pub mod catalogue;
 pub mod graph;
 pub mod ir;
 mod lower;
+/// The test-only f64 reference interpreter (decision O12): `cfg(test)` or the `test-reference`
+/// feature, which only dev-dependencies may enable (`cargo xtask layers` checks).
+#[cfg(any(test, feature = "test-reference"))]
+pub mod reference;
 pub mod sample;
 mod validate;
 
