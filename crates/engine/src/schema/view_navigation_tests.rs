@@ -271,3 +271,36 @@ fn next_and_previous_tab_echo_their_step_without_editing_the_design() {
     }
     assert_eq!((s.doc.to_json(), s.undo.len()), (before, undo), "nothing in the design changes");
 }
+
+/// `view.look` (docs/material-graph.md §6.1): its schemas name `look` and `view`; a named look
+/// echoes with its view (the modelling viewport by default) and matches the output schema; the
+/// design and its undo are untouched; a toggle needs the window's current look, so a session
+/// without one refuses it with the reason; bad values and unknown keys are refused.
+#[test]
+fn view_look_takes_a_look_and_a_view_and_never_edits_the_design() {
+    use super::{ViewLookParams, ViewLookResult};
+    assert_keys(input_schema_for::<ViewLookParams>(), &["look", "view"]);
+    let schema = output_schema_for::<ViewLookResult>();
+    let schema = schema.as_value();
+    let spec = crate::find_command("view.look").unwrap_or_else(|| panic!("view.look is registered"));
+    assert_eq!((spec.label, spec.shortcut), ("Realistic View", Some("Shift+P")));
+    let mut s = Session { param_check: ParamCheck::Strict, ..Session::default() };
+    s.execute("solid.box", &json!({"length": 10, "width": 10, "height": 10})).unwrap_or_else(|e| panic!("{e}"));
+    let (before, undo) = (s.doc.to_json(), s.undo.len());
+    for (params, expected) in [
+        (json!({"look": "realistic"}), json!({"look": "realistic", "view": "model"})),
+        (json!({"look": "standard"}), json!({"look": "standard", "view": "model"})),
+        (json!({"look": "realistic", "view": "render_preview"}), json!({"look": "realistic", "view": "render_preview"})),
+        (json!({"look": "standard", "view": "model"}), json!({"look": "standard", "view": "model"})),
+    ] {
+        let r = s.execute("view.look", &params).unwrap_or_else(|e| panic!("{params}: {e}"));
+        assert_eq!(r, expected, "{params}");
+        assert!(conforms(schema, schema, &r), "{r} doesn't match {schema}");
+    }
+    let toggle = s.execute("view.look", &json!({})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(toggle.contains("name the look"), "{toggle}");
+    for params in [json!({"look": "photoreal"}), json!({"look": "realistic", "view": "sketch"}), json!({"look": "standard", "save": true}), json!({"look": 1})] {
+        assert!(s.execute("view.look", &params).is_err(), "{params} is refused");
+    }
+    assert_eq!((s.doc.to_json(), s.undo.len()), (before, undo), "nothing in the design changes");
+}
