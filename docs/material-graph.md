@@ -1269,9 +1269,12 @@ figures.
     flat scenes, can show stretched reflections. *Mitigation:* size the room from the scene
     bounds; the showcase includes a wide part to check it.
 
-### Open decisions (with recommendations)
+### Decisions
 
-| # | Decision | Recommendation |
+The founder accepted O1–O13 as recommended on 3 November 2026. They are now binding for
+the tracks.
+
+| # | Decision | Decided |
 |---|---|---|
 | O1 | Graph identity: a design-level table of named graphs referenced by looks, or an inline graph copied into every look (value semantics, as `pbr` is today) | **Table.** Editing a material updates every use (as CAD users expect), files stay small with 100,000 overrides, and libraries map to it with provenance. `duplicate` gives divergence when wanted. |
 | O2 | First editor: layered stack or node canvas | **Layered stack** (§7.1); a canvas later. |
@@ -1286,6 +1289,11 @@ figures.
 | O11 | Composing the shared WGSL modules | **Concatenation** of `sc_`-prefixed modules, the mechanism both shaders already use. `naga_oil` (MIT OR Apache-2.0) only if module count grows. |
 | O12 | Test oracle | **Keep a test-only f64 IR interpreter** (track T) beside analytic checks and golden GPU frames. Patterns have no closed form, and an independent reference catches back-end drift. It never ships in product code. |
 | O13 | The view-mode key | **Shift+P**, which is free and rebindable; Shift+R is `edit.repeat`. Founder or maintainers may prefer another; nothing else depends on it. |
+
+### Open decisions (with recommendations)
+
+| # | Decision | Recommendation |
+|---|---|---|
 | O14 | Default studio: procedural or a bundled HDR image | **Procedural** (original, small, reproducible, no asset to license). A CC0 HDR studio image could be added later as an optional preset, with its source recorded. |
 | O15 | Acceptance thresholds (§5.9) | **Adopt the proposed numbers as targets**, and let the founder's review of the golden frames confirm or tighten them before upstream. |
 | O16 | Reflections of the default studio | **Box-projected, from a room sized to the scene.** This is the only cheap way flat faces get gradients; it is WebGL2-safe, at one ray-box test per lookup. |
