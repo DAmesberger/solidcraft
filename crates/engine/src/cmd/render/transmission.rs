@@ -15,6 +15,10 @@ pub(super) struct Raytrace {
     pub dielectrics: Vec<Override>,
     pub clear_coats: Vec<super::clear_coat::Override>,
     pub textures: Vec<super::textures::Override>,
+    /// Runtime material graph interface values (docs/material-graph.md §7.3); never saved.
+    pub graph_values: Vec<super::graphs::Override>,
+    /// Base64 PNG or JPEG images that `graph_values` name by SHA-256; never saved.
+    pub graph_textures: Vec<String>,
 }
 fn bounded_dielectrics<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<Override>, D::Error> {
     struct Inputs;

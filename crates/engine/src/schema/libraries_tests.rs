@@ -25,7 +25,7 @@ impl Drop for File {
 fn schemas_and_the_key_check_agree() {
     assert_keys(input_schema_for::<LibraryInspectParams>(), &["path"]);
     assert_keys(input_schema_for::<LibraryExportParams>(), &["format", "id", "name", "overwrite", "path", "provenance"]);
-    assert_keys(input_schema_for::<LibraryApplyParams>(), &["entry", "name", "path", "revision", "targets"]);
+    assert_keys(input_schema_for::<LibraryApplyParams>(), &["entry", "graph_id", "name", "path", "revision", "targets"]);
 }
 
 #[test]

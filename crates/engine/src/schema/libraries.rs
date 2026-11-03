@@ -75,6 +75,11 @@ pub struct LibraryApplyParams {
     /// the entry's name. A material of that name already in the design is reused if it is the
     /// same, and refused if it differs. An appearance entry refuses it.
     pub name: Option<String>,
+    /// For a look that names a material graph: the id its copy gets in this design. Default: the
+    /// library's id. The same graph already held under that id is reused; a different one is
+    /// refused, never replaced.
+    #[serde(default)]
+    pub graph_id: Option<String>,
 }
 
 /// What a library entry is copied onto: at most 1024 targets in all.

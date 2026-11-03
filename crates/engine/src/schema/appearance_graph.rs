@@ -1,7 +1,5 @@
 //! Contracts and result types for the commands in `cmd/appearance_graph.rs`: material graphs
-//! and their texture assets (docs/material-graph.md §7.2). Contract status: every command's
-//! parameters and reply are fixed; only `appearance.graph.nodes` runs today, the others refuse
-//! with "not built yet" until tracks D (commands) and B (format) land.
+//! and their texture assets (docs/material-graph.md §7.2).
 
 use std::borrow::Cow;
 
@@ -96,9 +94,68 @@ pub struct GraphCreateParams {
     pub id: Option<String>,
     /// The graph's name, 1–256 bytes.
     pub name: String,
-    /// The graph. Default: one `standard_surface` with its defaults.
+    /// The graph. Default: one `standard_surface` with its defaults. Its `name` is replaced by
+    /// `name`.
     #[serde(default)]
     pub graph: Option<GraphValue>,
+    /// Instead of `graph`: `"standard"` (the default graph) or a saved look
+    /// `{name, color, opacity?, pbr?}` (as `appearance.list` gives it), giving the one-node graph
+    /// that draws that look.
+    #[serde(default)]
+    pub from: Option<GraphFrom>,
+}
+
+/// What `appearance.graph.create` starts from.
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct GraphFrom(pub Value);
+
+impl JsonSchema for GraphFrom {
+    fn schema_name() -> Cow<'static, str> {
+        "MaterialGraphFrom".into()
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "\"standard\" (one standard_surface with its defaults) or a saved look {name, color, opacity?, pbr?} to express as a one-node graph",
+            "oneOf": [
+                {"type": "string", "enum": ["standard"]},
+                {"type": "object", "required": ["color"], "properties": {
+                    "name": {"type": "string"}, "color": {}, "opacity": {"type": "number"}, "pbr": {}
+                }}
+            ]
+        })
+    }
+}
+
+/// Convert a scalar or `pbr` look to a material graph ("Convert to material graph"): a new graph
+/// that draws the look as it is, and every override that is exactly that look (within `scope`)
+/// then names the graph. One undo step.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GraphConvertParams {
+    /// The look, as `appearance.list` gives it: `{name, color, opacity, pbr?}`.
+    pub look: Value,
+    /// The new graph's id. Default: made from `name`.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The graph's name. Default: the look's name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `{bodies?: [names], components?: [names or ids]}`, as `appearance.replace` takes it.
+    /// Default: every override with that look. Physical materials' looks are not rewritten.
+    #[serde(default)]
+    pub scope: Option<Value>,
+}
+
+/// What `appearance.graph.convert` returns.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GraphConverted {
+    pub id: String,
+    pub cost: u32,
+    /// Overrides that now name the graph.
+    pub count: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
 }
 
 /// Replace a graph in the design's table as a whole.
@@ -117,11 +174,20 @@ pub enum GraphEditOp {
     AddNode { node: String, kind: String },
     /// Remove a node and every connection to or from it.
     RemoveNode { node: String },
-    /// Connect `from` (`node` or `node.output`) to `node`'s `port`.
-    Connect { from: String, node: String, port: String },
+    /// Connect `from` (`node` or `node.output`) to `node`'s `port`. `fallback` is the constant
+    /// the base response (the standard view's colour) reads in its place; omitted, the port's
+    /// default.
+    Connect {
+        from: String,
+        node: String,
+        port: String,
+        #[serde(default)]
+        fallback: Option<Value>,
+    },
     /// Drop the connection into `node`'s `port`, which returns to its default.
     Disconnect { node: String, port: String },
-    /// Set `node`'s `port` to a constant (a number, a 2- or 3-vector, `{"srgb8": [r,g,b]}` or `{"texture": sha256}`).
+    /// Set `node`'s `port` to a constant (a number, a 2- or 3-vector, `{"srgb8": [r,g,b]}` or
+    /// `{"texture": sha256}`), or bind it to an interface input (`{"interface": name}`).
     SetInput { node: String, port: String, value: Value },
     /// Set a compile-time param (an option name or an integer).
     SetParam { node: String, param: String, value: Value },

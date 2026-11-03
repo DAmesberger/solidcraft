@@ -1,6 +1,6 @@
-//! The stack editor against schema-shaped replies. Every command it sends is also given to the
-//! real engine, whose C0 contract checks the parameters before refusing with "not built yet":
-//! a parameter error there fails the test, so the editor's commands match the schemas.
+//! The stack editor against the real engine: every command it sends runs on a design that
+//! holds the graph under test as `g` (track D's commands), so the editor's commands match the
+//! schemas and the engine accepts what the editor builds.
 
 use serde_json::{Value, json};
 use solidcraft_engine::Session;
@@ -18,6 +18,12 @@ const FIXTURES: &[(&str, &str, usize)] = &[
     ("solder-mask-over-copper", include_str!("../../../render/tests/fixtures/material_graph/solder-mask-over-copper.json"), 1),
 ];
 
+/// A real 2×1 RGBA PNG (original test data).
+const PNG_2X1: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68, 65,
+    84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
 fn fixture(name: &str) -> MaterialGraph {
     let text = FIXTURES.iter().find(|(n, _, _)| *n == name).map(|(_, t, _)| *t).unwrap();
     serde_json::from_str(text).unwrap()
@@ -28,92 +34,60 @@ fn catalogue() -> model::Catalogue {
     model::Catalogue::from_reply(&reply).unwrap()
 }
 
-/// Track D's commands, faked: schema-shaped replies over one graph, with `set` and the value
-/// edits applied, and the real engine checking each change's parameters.
+/// The real engine with one graph, `g`, recording the changing commands the editor sends.
+/// `refuse` stands in for an engine refusal the editor cannot provoke by itself.
 struct Fake {
     engine: Session,
+    /// The engine's graph `g`, read back after every change.
     graph: MaterialGraph,
-    textures: Vec<Value>,
-    revision: u64,
     changes: Vec<(String, Value)>,
     refuse: bool,
+    /// The revision to report instead of the engine's (to hand the editor to an app).
+    revision: Option<u64>,
 }
 
 impl Fake {
     fn new(graph: MaterialGraph) -> Fake {
-        Fake { engine: Session::default(), graph, textures: Vec::new(), revision: 1, changes: Vec::new(), refuse: false }
+        let mut engine = Session::default();
+        engine.param_check = solidcraft_engine::schema::ParamCheck::Strict;
+        engine.execute("appearance.graph.create", &json!({"id": "g", "name": graph.name, "graph": graph})).unwrap();
+        let graph = Self::read(&mut engine);
+        Fake { engine, graph, changes: Vec::new(), refuse: false, revision: None }
     }
 
-    fn apply_edit(&mut self, ops: &[Value]) {
-        for op in ops {
-            let s = |k: &str| op.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-            match s("op").as_str() {
-                "set_input" => {
-                    let value: Constant = serde_json::from_value(op["value"].clone()).unwrap();
-                    let node = self.graph.nodes.iter_mut().find(|n| n.id == s("node")).unwrap();
-                    node.inputs.insert(s("port"), InputValue::Constant(value));
-                }
-                "set_param" => {
-                    let node = self.graph.nodes.iter_mut().find(|n| n.id == s("node")).unwrap();
-                    node.params.insert(s("param"), serde_json::from_value(op["value"].clone()).unwrap());
-                }
-                "set_interface" => {
-                    let input: solidcraft_engine::render::material_graph::InterfaceInput = serde_json::from_value(op["input"].clone()).unwrap();
-                    self.graph.interface.retain(|i| i.name != input.name);
-                    self.graph.interface.push(input);
-                }
-                other => panic!("unexpected op {other}"),
-            }
-        }
+    fn read(engine: &mut Session) -> MaterialGraph {
+        let reply = engine.execute("appearance.graph.get", &json!({"id": "g"})).unwrap();
+        serde_json::from_value(reply["graph"].clone()).unwrap()
+    }
+
+    /// Add `bytes` as a texture in the engine; its key.
+    fn texture(&mut self, bytes: &[u8]) -> String {
+        let reply =
+            self.engine.execute("appearance.texture.add", &json!({"data_base64": solidcraft_engine::doc::canvas::base64_encode(bytes)})).unwrap();
+        reply["texture"].as_str().unwrap().to_string()
     }
 }
 
 impl Commands for Fake {
     fn query(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        match id {
-            "appearance.graph.nodes" => self.engine.execute(id, &params).map_err(|e| e.to_string()),
-            "appearance.graph.list" => Ok(json!({"graphs": [{"id": "g", "name": self.graph.name, "uses": 2}]})),
-            "appearance.graph.get" => {
-                assert_eq!(params, json!({"id": "g"}));
-                Ok(json!({"id": "g", "graph": self.graph, "cost": 39, "uses": 2}))
-            }
-            "appearance.graph.validate" => {
-                let _: MaterialGraph = serde_json::from_value(params["graph"].clone()).unwrap();
-                Ok(json!({"ok": true, "cost": 39, "samples": 1, "textures": 1, "shape": "00ff", "errors": []}))
-            }
-            "appearance.texture.list" => Ok(json!({"textures": self.textures})),
-            other => panic!("unexpected query {other}"),
-        }
+        assert!(id.starts_with("appearance.graph.") || id == "appearance.texture.list", "unexpected query {id}");
+        self.engine.execute(id, &params).map_err(|e| e.to_string())
     }
 
     fn change(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        let contract = self.engine.execute(id, &params).map(|_| ()).map_err(|e| e.to_string());
-        assert!(contract.as_ref().is_err_and(|e| e.contains("not built yet")), "{id} {params}: {contract:?}");
         self.changes.push((id.to_string(), params.clone()));
         if self.refuse {
             return Err("refused: the graph is over budget".into());
         }
-        match id {
-            "appearance.graph.set" => self.graph = serde_json::from_value(params["graph"].clone()).map_err(|e| e.to_string())?,
-            "appearance.graph.edit" => self.apply_edit(params["ops"].as_array().unwrap()),
-            "appearance.texture.add" => {
-                let sha = "ab".repeat(32);
-                self.textures.push(json!({"texture": sha, "name": "mark.png", "width": 64, "height": 32, "bytes": 900, "uses": 0}));
-                self.revision += 1;
-                return Ok(json!({"texture": sha, "width": 64, "height": 32}));
-            }
-            "appearance.graph.create" | "appearance.graph.duplicate" => {
-                self.revision += 1;
-                return Ok(json!({"id": "g", "cost": 0}));
-            }
-            _ => {}
+        let reply = self.engine.execute(id, &params).map_err(|e| e.to_string());
+        if self.engine.doc.appearances.tables.graphs.keys().any(|k| k.as_str() == "g") {
+            self.graph = Self::read(&mut self.engine);
         }
-        self.revision += 1;
-        Ok(json!({"id": "g", "cost": 39}))
+        reply
     }
 
     fn revision(&self) -> u64 {
-        self.revision
+        self.revision.unwrap_or(self.engine.revision)
     }
 }
 
@@ -184,17 +158,20 @@ fn model_connection(from: &str) -> solidcraft_engine::render::material_graph::Co
 }
 
 #[test]
-fn before_track_d_the_real_engine_refuses_and_the_editor_says_so() {
+fn the_editor_lists_creates_and_undoes_through_the_real_engine() {
     let mut app = crate::SolveApp::new(Session::default(), crate::Services::default());
     let before = app.session.undo.len();
     let mut ed = Editor::default();
     ed.sync(&mut app);
-    assert!(matches!(&ed.catalogue, Some(Ok(_))), "nodes runs today");
-    assert!(matches!(&ed.graphs, Some(Err(e)) if e.contains("not built yet")));
+    assert!(matches!(&ed.catalogue, Some(Ok(_))));
+    assert!(matches!(&ed.graphs, Some(Ok(list)) if list.is_empty()));
     assert!(ed.loaded.is_none());
     ed.apply(&mut app, Action::Create("Brushed".into()));
-    assert!(ed.note.as_ref().is_some_and(|(n, error)| *error && n.contains("not built yet")));
-    assert_eq!(app.session.undo.len(), before);
+    assert!(ed.note.is_none(), "{:?}", ed.note);
+    assert_eq!(app.session.undo.len(), before + 1);
+    ed.sync(&mut app);
+    assert_eq!(ed.graph().unwrap().id, "brushed");
+    assert!(matches!(&ed.validation, Some(Ok(v)) if v.ok));
 }
 
 #[test]
@@ -202,7 +179,7 @@ fn a_value_edit_is_one_command_sent_when_it_settles() {
     let mut fake = Fake::new(fixture("brushed-nickel-silver"));
     let mut ed = editor(&mut fake);
     assert_eq!(ed.graph().unwrap().id, "g");
-    assert!(matches!(&ed.validation, Some(Ok(v)) if v.ok && v.cost == 39));
+    assert!(matches!(&ed.validation, Some(Ok(v)) if v.ok && v.cost > 0));
     // A drag shows its value without sending anything.
     for x in [0.5, 0.6, 0.7] {
         ed.apply(&mut fake, Action::Pending(Pending::Input { node: "surface".into(), port: "base_metalness".into(), value: Constant::Number(x) }));
@@ -328,20 +305,29 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
     let mut ed = editor(&mut fake);
     let use_ = TextureUse::Drive { node: "surface".into(), port: "base_color".into() };
     assert_eq!(ed.apply(&mut fake, Action::AddTexture(use_.clone())), Some(use_.clone()), "the picker opens");
-    ed.add_texture(&mut fake, "/tmp/mark.png", use_);
-    assert_eq!(fake.changes[0], ("appearance.texture.add".into(), json!({"path": "/tmp/mark.png"})));
+    let dir = solidcraft_engine::io::vfs::temp_dir().join(format!("solidcraft-graph-editor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("mark.png").to_string_lossy().to_string();
+    std::fs::write(&path, PNG_2X1).unwrap();
+    ed.add_texture(&mut fake, &path, use_);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(fake.changes[0], ("appearance.texture.add".into(), json!({"path": path})));
+    let key = solidcraft_engine::doc::appearance_graph::texture_key(PNG_2X1);
     let g = set_graph(&fake);
     let image = g.nodes.iter().find(|n| n.kind == "image").unwrap();
-    assert!(matches!(image.inputs.get("file"), Some(InputValue::Constant(Constant::Texture(t))) if t.texture == "ab".repeat(32)));
+    assert!(matches!(image.inputs.get("file"), Some(InputValue::Constant(Constant::Texture(t))) if t.texture == key));
+    assert_eq!(fake.graph, g, "the engine took the driven graph");
     // Laser-etched's mark is an interface input: its default is set by set_interface.
     let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
+    let key = fake.texture(PNG_2X1);
     let mut ed = editor(&mut fake);
     let input = fake.graph.interface[0].clone();
-    ed.apply(&mut fake, Action::Texture("cd".repeat(32), TextureUse::Interface(input)));
+    ed.apply(&mut fake, Action::Texture(key.clone(), TextureUse::Interface(input)));
+    assert!(ed.note.is_none(), "{:?}", ed.note);
     let (id, params) = fake.changes.last().unwrap();
     assert_eq!(id, "appearance.graph.edit");
     assert_eq!(params["ops"][0]["op"], "set_interface");
-    assert_eq!(params["ops"][0]["input"]["default"], json!({"texture": "cd".repeat(32)}));
+    assert_eq!(params["ops"][0]["input"]["default"], json!({"texture": key}));
 }
 
 #[test]
@@ -406,8 +392,8 @@ fn hostile_replies_become_messages() {
     assert!(model::Loaded::from_reply(&reply).is_err(), "more nodes than a graph may hold");
 }
 
-/// Draw the section for every worked example and both looks of stack and summary, with
-/// schema-shaped replies; nothing is sent while nobody touches it.
+/// Draw the section for every worked example and both looks of stack and summary, with the
+/// engine's replies; nothing is sent while nobody touches it.
 #[test]
 fn the_section_draws_every_example_without_sending_anything() {
     let ctx = crate::fonts::test_context();
@@ -423,12 +409,36 @@ fn the_section_draws_every_example_without_sending_anything() {
         assert!(actions.is_empty(), "{name}: {actions:?}");
         assert!(fake.changes.is_empty());
     }
-    // Not stack-shaped: a summary, no layer rows.
+    // Not stack-shaped: a summary, no layer rows. Track A's v1 rules make every graph the engine
+    // holds stack-shaped (a mix's `fg` is a standard surface), so this one is served as replies.
     let mut g = fixture("brushed-nickel-silver");
     g.output = "rough".into();
-    let mut fake = Fake::new(g);
-    let ed = editor(&mut fake);
+    let mut canned = Canned(g);
+    let mut ed = Editor::default();
+    ed.sync(&mut canned);
     ctx.run_ui(Default::default(), |ui| ui_scope(ui, |ui| assert!(super::body(ui, &ed, false, None).is_empty()))).textures_delta.clear();
+}
+
+/// Replies for a graph the engine would not hold; it changes nothing.
+struct Canned(MaterialGraph);
+
+impl Commands for Canned {
+    fn query(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        match id {
+            "appearance.graph.nodes" => Session::default().execute(id, &params).map_err(|e| e.to_string()),
+            "appearance.graph.list" => Ok(json!({"graphs": [{"id": "g", "name": self.0.name, "uses": 0}]})),
+            "appearance.graph.get" => Ok(json!({"id": "g", "graph": self.0, "cost": 0, "uses": 0})),
+            "appearance.graph.validate" => Session::default().execute(id, &params).map_err(|e| e.to_string()),
+            "appearance.texture.list" => Ok(json!({"textures": []})),
+            other => Err(format!("unexpected query {other}")),
+        }
+    }
+    fn change(&mut self, id: &str, _params: Value) -> Result<Value, String> {
+        Err(format!("{id} is not sent while nobody touches the section"))
+    }
+    fn revision(&self) -> u64 {
+        1
+    }
 }
 
 fn ui_scope(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
@@ -477,7 +487,7 @@ fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
     }
 }
 
-/// The Appearance dialog with the editor filled from schema-shaped replies, rendered from the
+/// The Appearance dialog with the editor filled from the engine's replies, rendered from the
 /// app's egui meshes. `SOLIDCRAFT_GRAPH_EDITOR_PNG` names a directory to keep the pictures in.
 #[test]
 fn the_dialog_shows_the_stack_editor_in_both_themes() {
@@ -492,8 +502,8 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
         h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
         h.app.start("appearance.assign");
         let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
-        fake.revision = h.app.session.revision;
-        fake.textures.push(json!({"texture": "ab".repeat(32), "name": "logo.png", "width": 512, "height": 256, "bytes": 9000, "uses": 1}));
+        fake.revision = Some(h.app.session.revision);
+        fake.texture(PNG_2X1);
         let mut ed = editor(&mut fake);
         ed.layer = 1;
         if let Some(crate::dialogs::Kind::Appearance(k)) = h.app.dialog.as_mut().map(|d| &mut d.kind) {
