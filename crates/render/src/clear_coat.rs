@@ -63,6 +63,47 @@ impl ClearCoat {
     }
 }
 
+/// Test oracle for the viewport's coat colour (`sc_coat_layer` in `solidcraft-gpu`, docs/material-graph.md
+/// §5.5): the coated BRDF of `surface` with its coat tinted by linear `coat_color`. A thin
+/// absorbing layer tints the substrate once on entry and once on exit; at coverage w each pass
+/// keeps `1 - w * (1 - coat_color)`, on top of the coat's Fresnel attenuation. The coat's own
+/// reflection is untinted. A white coat is [`OpaqueSurface::brdf`]; a surface without a coat is
+/// untouched. An index-matched coat (IOR 1) only tints. No CPU renderer uses this: it exists for
+/// the GPU tests (feature `test-reference`).
+#[cfg(any(test, feature = "test-reference"))]
+pub fn tinted_coat_brdf(surface: OpaqueSurface, coat_color: Vec3, normal: Vec3, view: Vec3, light: Vec3) -> Result<Vec3, SurfaceError> {
+    for c in [coat_color.x, coat_color.y, coat_color.z] {
+        if !c.is_finite() || !(0.0..=1.0).contains(&c) {
+            return Err(SurfaceError::BaseColor);
+        }
+    }
+    let Some(coat) = surface.clear_coat() else { return surface.brdf(normal, view, light) };
+    let n = unit_direction(normal)?;
+    let v = unit_direction(view)?;
+    let l = unit_direction(light)?;
+    let nv = n.dot(v).clamp(-1.0, 1.0);
+    let nl = n.dot(l).clamp(-1.0, 1.0);
+    let w = coat.weight();
+    let tint = |c: f64| (1.0 - w * (1.0 - c)).powi(2);
+    let tint = Vec3::new(tint(coat_color.x), tint(coat_color.y), tint(coat_color.z));
+    let base = OpaqueSurface::new(surface.base_color(), surface.metallic(), surface.roughness(), surface.dielectric_ior())?;
+    let under = base.brdf(n, v, l)?;
+    if nv <= 0.0 || nl <= 0.0 {
+        return Ok(Vec3::ZERO);
+    }
+    if w == 0.0 {
+        return Ok(under);
+    }
+    let h = unit_direction(v + l)?;
+    let nh = n.dot(h).clamp(0.0, 1.0);
+    let vh = v.dot(h).clamp(0.0, 1.0);
+    // The white layer, then the tint on the attenuated substrate alone.
+    let white = coat.layer(under, nv, nl, nh, vh);
+    let attenuated = if coat.ior() == 1.0 { under } else { under * ((1.0 - w * coat.energy_bound(nv)) * (1.0 - w * coat.energy_bound(nl))) };
+    let lobe = white - attenuated;
+    Ok(Vec3::new(attenuated.x * tint.x, attenuated.y * tint.y, attenuated.z * tint.z) + lobe)
+}
+
 /// Conditional opaque-lobe PDF, including the coat and base mixture. Rejected
 /// below-surface microfacet samples retain their mass; never renormalize them.
 pub fn surface_pdf(surface: OpaqueSurface, normal: Vec3, view: Vec3, light: Vec3) -> Result<f64, SurfaceError> {
@@ -105,6 +146,34 @@ mod tests {
                 assert_eq!(coat.energy_bound(nv), 0.0);
             }
         }
+    }
+    #[test]
+    fn a_white_coat_colour_is_the_clear_coat_and_a_tint_only_darkens_the_base() {
+        let v = Vec3::new(0.5, 0.0, 0.8);
+        let l = Vec3::new(-0.3, 0.2, 0.6);
+        for (weight, ior) in [(1.0, 1.5), (0.4, 1.5), (1.0, 1.0)] {
+            let base = OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.4, 1.5).unwrap();
+            let coated = base.with_clear_coat(ClearCoat::new(weight, 0.12, ior).unwrap());
+            let white = tinted_coat_brdf(coated, Vec3::new(1.0, 1.0, 1.0), Vec3::Z, v, l).unwrap();
+            assert!((white - coated.brdf(Vec3::Z, v, l).unwrap()).len() < 1e-15, "w={weight} ior={ior}");
+            let green = tinted_coat_brdf(coated, Vec3::new(0.1, 0.5, 0.1), Vec3::Z, v, l).unwrap();
+            assert!(green.x < white.x && green.y < white.y && green.z < white.z && green.x > 0.0);
+            // A black coat absorbs the whole substrate under it: an index-matched one leaves
+            // nothing, an interface its own reflection; a partial coat the uncoated share.
+            let black = tinted_coat_brdf(coated, Vec3::ZERO, Vec3::Z, v, l).unwrap();
+            assert!(black.x >= 0.0 && black.x < white.x, "{black:?}");
+            if weight == 1.0 && ior == 1.0 {
+                assert_eq!(black, Vec3::ZERO);
+            }
+            if weight == 1.0 && ior != 1.0 {
+                assert!((black.x - black.y).abs() < 1e-15 && (black.y - black.z).abs() < 1e-15, "only the white lobe: {black:?}");
+            }
+        }
+        // No coat: nothing to tint; out-of-range colours are refused.
+        let plain = OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.4, 1.5).unwrap();
+        assert_eq!(tinted_coat_brdf(plain, Vec3::ZERO, Vec3::Z, v, l).unwrap(), plain.brdf(Vec3::Z, v, l).unwrap());
+        assert!(tinted_coat_brdf(plain, Vec3::new(1.1, 0.0, 0.0), Vec3::Z, v, l).is_err());
+        assert!(tinted_coat_brdf(plain, Vec3::new(f64::NAN, 0.0, 0.0), Vec3::Z, v, l).is_err());
     }
     #[test]
     fn admission_zero_coat_and_reciprocity() {

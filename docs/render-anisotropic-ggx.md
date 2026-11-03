@@ -44,3 +44,25 @@ rotation, geometric/shading hemisphere separation, grazing directions, inverse-C
 sampling, PDF/throughput agreement and retained null-event mass. Broad-lobe energy
 checks are scoped consistency tests, not universal energy certification, measured
 material data or evidence of an integrated rendered image.
+
+## Viewport consumer (material graphs)
+
+The viewport's realistic view evaluates this lobe on the GPU for a material graph's
+`specular_roughness_anisotropy` (docs/material-graph.md §5.5): `sc_aniso_base_brdf` in
+`crates/gpu/src/shading/bsdf.wgsl`, the same D, separable Smith and Fresnel-weighted
+Lambert layer, for the product lights and the fixed preview lights. Roughness axes
+follow OpenPBR: `αt = r²·√(2 / (1 + (1 − a)²))` along the (rotated) tangent and
+`αb = (1 − a)·αt`, each kept at least `0.045²`. GPU tests compare it with this module's
+`AnisotropicSurface::brdf` (within 0.3 %), bound its white-furnace albedo, and check
+that anisotropy 0 takes today's isotropic code path bit for bit. The lobe evaluated
+at equal axes differs from today's isotropic expression only by f32 rounding: a few
+ULPs, more at very sharp peaks, where the isotropic `1 − (n·h)²` loses precision
+against α².
+
+Image-based light has no anisotropic prefiltering. The studio term looks up the
+prefiltered cube along a reflection about a normal bent toward the plane across the
+lobe's long axis (a public real-time approximation, as described in Filament's
+documentation; mathematics only), with the bend growing with anisotropy and fading
+below perceptual roughness 0.2. The split-sum albedo stays the isotropic one, so the
+white furnace is unchanged. The GPU path tracer has no anisotropic lobe and draws an
+isotropic one, reporting the approximation (decision O10).

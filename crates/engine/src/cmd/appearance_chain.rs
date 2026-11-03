@@ -66,7 +66,7 @@ fn look(cmd: &str, value: &Value) -> Result<Look> {
     super::appearance_look(cmd, &params)?.ok_or_else(|| bad(cmd, "from and to require a look; use appearance.assign to clear"))
 }
 
-fn scope(s: &Session, cmd: &str, value: &Value) -> Result<AppearanceScope> {
+pub(in crate::cmd) fn scope(s: &Session, cmd: &str, value: &Value) -> Result<AppearanceScope> {
     let object = value
         .as_object()
         .filter(|o| !o.is_empty() && o.keys().all(|k| matches!(k.as_str(), "bodies" | "components")))
@@ -126,7 +126,8 @@ pub(super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "appearance.replace";
     s.doc.appearances.check_budget().map_err(|e| bad(cmd, e.to_string()))?;
     let from = look(cmd, p.get("from").ok_or_else(|| bad(cmd, "from is required"))?)?;
-    let to = look(cmd, p.get("to").ok_or_else(|| bad(cmd, "to is required"))?)?;
+    let mut to = look(cmd, p.get("to").ok_or_else(|| bad(cmd, "to is required"))?)?;
+    crate::cmd::appearance_graph::settle_look(cmd, &s.doc, &mut to)?;
     let scope = p.get("scope").map(|v| scope(s, cmd, v)).transpose()?;
     // Every validation and allocation completes before obtaining a mutable document.
     let replacement = s.doc.appearances.replacing(&from, &to, scope.as_ref()).map_err(|e| bad(cmd, e.to_string()))?;

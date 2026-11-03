@@ -878,8 +878,9 @@ pub fn read_design(bytes: &[u8]) -> Result<Document> {
 
 /// Design file bytes.
 pub fn write_design(doc: &Document) -> Vec<u8> {
-    // Textures nothing references are dropped on save (docs/material-graph.md §4.1).
-    doc.without_unreferenced_textures().to_json().into_bytes()
+    // Textures nothing references are dropped on save (docs/material-graph.md §4.1), and the
+    // design is written in the oldest format that holds it (§4.4).
+    doc.without_unreferenced_textures().in_written_format().to_json().into_bytes()
 }
 
 /// Parse a binary or ASCII STL (used by tests and round-trip checks): triangles.

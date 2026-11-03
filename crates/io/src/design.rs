@@ -360,7 +360,9 @@ fn write_container(
         let render = replace(doc.render.as_ref(), fields([("resources", Value::Object(resources))])).map_err(invalid)?;
         replacements.insert("render".into(), render);
     }
-    let metadata = replace(doc, replacements).map_err(invalid)?;
+    let mut metadata = replace(doc, replacements).map_err(invalid)?;
+    // The oldest format that holds the design, as a plain design file gets (§4.4).
+    solidcraft_doc::format::write_oldest_format(&mut metadata);
     let metadata = serde_json::to_vec(&metadata).map_err(invalid)?;
     writer.part("document.json", &metadata, true)?;
     writer.part("container.json", &serde_json::to_vec(&json!({"format": VERSION})).map_err(invalid)?, false)?;

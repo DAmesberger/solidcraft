@@ -200,11 +200,13 @@ that embeds the viewport (`solidcraft-gpu`) turns the look on with
 `Frame::product_look`, and bakes and installs the studio itself:
 
 ```rust
-use solidcraft_gpu::view::{ProductLook, StudioEnvironment, StudioPreset};
+use solidcraft_gpu::view::{ProductLook, StudioEnvironment, StudioPreset, StudioRoom};
 // Off the window thread (or step by step with `StudioBake` where there are no threads):
 let studio = StudioEnvironment::bake(StudioPreset::Product);
 renderer.set_studio_environment(&device, &queue, &studio);
-frame.product_look = Some(ProductLook { exposure: 1.0, studio: StudioPreset::Product, ..ProductLook::default() });
+// Fit the room once from the scene's bounds (not per view):
+let room = StudioRoom::around(scene_min, scene_max);
+frame.product_look = Some(ProductLook { studio: StudioPreset::Product, room, ..ProductLook::default() });
 ```
 
 The look takes none of the 21 product-light slots; the frame's product lights, if any,
@@ -215,9 +217,12 @@ intensity to [0, 1024], rotation wrapped into [0, 2π)) and non-finite ones repl
 the defaults before upload (`ProductLook::sanitized`). The next `vec4` carries the
 scene's world units per millimetre (`Frame::units_per_mm`, with or without the look,
 clamped to [10⁻⁶, 10⁶] and 1 when not positive and finite), the scale at which material
-lengths given in millimetres are drawn: a constant of the scene, not of a material. The
-frame cache key hashes the drawn look and the units, so any change to them draws a new
-picture.
+lengths given in millimetres are drawn: a constant of the scene, not of a material. Two
+more `vec4`s, before the sky, carry the look's room (`ProductLook::room`: the subject's
+centre across, the ground's height and the extent B, then the floor-contact ellipse),
+all zero without a look or a room, and `None` for a room that is not finite, has an extent
+outside [10⁻⁶, 10¹²] or a negative footprint (`StudioRoom::sanitized`). The frame cache key
+hashes the drawn look, its room and the units, so any change to them draws a new picture.
 
 The PBR shader is split in two (`pbr::SOURCE` = the shared shading, `pbr::SHADE`, then the vertex stream). A
 fragment entry builds a `PbrFragment` (pixel, world position, interpolated normal, view
@@ -241,18 +246,37 @@ SolidCraft's paint callback bakes a look's studio on another thread natively and
 
 With the look, the PBR shader:
 
-- adds a procedural **studio** to the product lights: `Product` (four softboxes over a
-  light grey cyclorama and a dark floor), `Soft` (two large softboxes, bright cyclorama)
-  or `Contrast` (two strips and an overhead panel in a dark studio), turned by
-  `rotation` about +Z and scaled by `intensity`. No HDR file is read. Radiance is
-  relative, like the product lights; the presets are original visual studies;
-- reflects it with split-sum specular: a prefiltered Rgba16Float cube map, 128 × 128
-  texels a face at perceptual roughness 0 and five more levels to roughness 1, sampled
-  at level `roughness × 5`, times an analytic environment-BRDF fit, with
-  single-to-multiple-scattering compensation `1 + F0 (1 / (A + B) − 1)`;
-- lights the diffuse layer from nine spherical-harmonic irradiance terms, weighted by
-  what the specular lobe does not reflect, so a white lossless surface reflects exactly
-  the light it receives;
+- adds a **studio** to the product lights, built from one of upstream's starter lighting
+  rigs (`assets/render/starter/lighting/exports/rigs.json`, bound as exported and checked
+  against it by a test): `Product` binds `STU-002` (a graded key above front-left, a fill
+  card front-right at EV −2, a strip rim behind at EV −0.5; the Realistic default), `Soft`
+  binds `STU-004` (two broad side panels) and `Contrast` binds `STU-005` (two tall strips
+  and a low front fill). The rig's rectangular lights sit in multiples of the subject's
+  extent B about it, inside a room 4 B across with its floor at the ground
+  (`ProductLook::room`; without a room the studio is at infinity). Around them runs a
+  cyclorama: a floor with a pool of light under the subject sweeping up into the walls, a
+  bright horizon band and a soft ceiling, lit like a white cyclorama (its radiances are
+  shares of a white card's under the key) and brighter on the key's side. No direction is
+  darker than a tenth of the studio's mean radiance. The studio is turned by `rotation`
+  about +Z and scaled by `intensity`. No HDR file is read;
+- calibrates its exposure per studio: the studio is baked at the scale that lights a white
+  diffuse face at the centre, turned to the key, to 0.644 before tone mapping (0.80 on the
+  display after PBR Neutral, below its shoulder), so `exposure` 1 is the calibrated one and
+  frames stay stable while the view orbits;
+- reflects it with box-projected split-sum specular: the reflected ray is intersected with
+  the room before the lookup (one ray-box test, WebGL2-safe), so a flat face sweeps across
+  the studio and shows a gradient instead of one colour. Where a reflection meets the floor
+  under the subject it is darkened like the ground shadow's ellipse. The cube is a
+  prefiltered Rgba16Float cube map, 128 × 128 texels a face at perceptual roughness 0 and
+  five more levels to roughness 1, sampled at level `roughness × 5`, times an analytic
+  environment-BRDF fit, with single-to-multiple-scattering compensation
+  `1 + F0 (1 / (A + B) − 1)`;
+- lights the diffuse layer from the rig's lights directly (each rectangle's exact,
+  horizon-clipped polygon irradiance at the shaded point, from its emitting side) plus nine
+  spherical-harmonic irradiance terms of the cyclorama, weighted by what the specular lobe
+  does not reflect, so a white lossless surface reflects exactly the light it receives.
+  Each light has one energy owner per lobe: reflections read it from the cube, diffuse
+  shading from the direct term, so nothing is counted twice;
 - scales the radiance by `exposure`, tone maps it with Khronos PBR Neutral instead of
   per-channel Reinhard, encodes it once and adds a ±1 LSB triangular dither (two
   interleaved-gradient noise values) before the 8-bit store. For an sRGB attachment

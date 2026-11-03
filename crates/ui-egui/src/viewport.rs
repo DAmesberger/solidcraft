@@ -2164,6 +2164,17 @@ pub(crate) fn body_bounds(
 
 type BodyBounds = (std::sync::Arc<solidcraft_engine::doc::ModelState>, std::sync::Arc<Vec<(String, solidcraft_engine::geom::Aabb3)>>);
 
+/// The shown bodies' extent (from the cached boxes): what the Realistic view's studio is fitted to.
+fn shown_body_bounds(app: &SolveApp) -> solidcraft_engine::geom::Aabb3 {
+    let st = crate::open_meshing::shown_world(app);
+    let boxes = body_bounds(app, &st);
+    st.bodies
+        .iter()
+        .zip(boxes.iter())
+        .filter(|(x, _)| app.body_visible(&x.name))
+        .fold(solidcraft_engine::geom::Aabb3::EMPTY, |a, (_, (_, b))| a.union(b))
+}
+
 /// The model's extent: bodies (from the cached boxes) and sketches.
 pub fn model_bounds(app: &SolveApp) -> solidcraft_engine::geom::Aabb3 {
     let st = crate::open_meshing::shown_world(app);
@@ -4441,7 +4452,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ao_samples = ao_samples(app, ui.ctx(), proj.vp.to_f32(), size_px);
         // The Realistic view (`view.look`): the same scenes, lit by the studio. The standard
         // picture shows until the studio, baked off the window thread, is installed.
-        let product_look = crate::view_look::product_look(app, "model");
+        let product_look = crate::view_look::product_look_around(app, "model", &shown_body_bounds(app));
         if product_look.is_some() && !crate::gpu::studio_ready() {
             ui.ctx().request_repaint();
         }

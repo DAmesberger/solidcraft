@@ -11,8 +11,8 @@ workspace = true
 [features]
 default = []
 raytrace-cpu = []
-# The test-only f64 reference interpreter of material graphs (`material_graph::reference`), for
-# the GPU back ends' tests. Only dev-dependencies may enable it: `cargo xtask layers` refuses a
+# Test-only f64 references for the GPU back ends' tests: the material-graph interpreter
+# (`material_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only dev-dependencies may enable it: `cargo xtask layers` refuses a
 # normal or build dependency, or a feature, that does.
 test-reference = ["dep:serde_json"]
 

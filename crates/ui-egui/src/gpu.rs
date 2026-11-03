@@ -742,6 +742,10 @@ impl OffscreenFrames {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gpu_lighting_review.rs"]
+mod lighting_review;
+
 #[cfg(test)]
 mod tests {
     /// The product look's studio is baked off the window thread and installed by a later frame's
