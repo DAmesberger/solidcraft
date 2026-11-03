@@ -1,10 +1,23 @@
-# Material node graph (design note)
+# Photoreal view and material graphs (design note)
 
-Status: proposal for the `DAmesberger/solidcraft` fork, to be offered upstream once it is
-proven. Nothing here is implemented. It follows the photoreal product look, which is being
-prepared as a renderer-only upstream PR ([opaque PBR](render-opaque-pbr.md#opt-in-product-look),
-[clear coat](render-clear-coat.md)). Performance figures are **targets** until they are
-measured. Work estimates are in agent-hours.
+Status: proposal for the `DAmesberger/solidcraft` fork, to be offered upstream as **one
+package** once it is proven. The package has four parts:
+
+- the photoreal renderer (today's opt-in product look, branch `upstream-photoreal-look`:
+  [opaque PBR](render-opaque-pbr.md#opt-in-product-look), [clear coat](render-clear-coat.md));
+- the material node graph in the file format;
+- its editor and commands;
+- a photoreal **view mode** beside the existing shading.
+
+There is no renderer-only PR (§9). Of the new parts, nothing is implemented yet.
+Performance figures are **targets** until they are measured. Work estimates are in
+agent-hours.
+
+Three founder requirements bind the whole note:
+
+- the standard view stays the default;
+- files without material graphs open and save exactly as today;
+- material graphs are optional, needed only for photorealism.
 
 ## 1. Why and what
 
@@ -28,9 +41,12 @@ This note replaces that path with **one** generic, data-only material descriptio
   budget). Solidcraft compiles it to WGSL itself; a file never carries shader code.
 - It renders the same in the native and the WebGL2/wasm builds.
 - Everything is generic CAD material data. No product-specific fields, nodes or panels.
+- It is **optional**. A design without graphs is the same file as today (§4.4). Graphs
+  only show in the photoreal view mode (§6). The standard view, which stays the default
+  for modelling, shows each look's colour as today.
 
 What it is not: a general shading language, a MaterialX runtime, or a node editor in the
-first version (see §7). A sandboxed custom-WGSL node is a possible later extension (§3.9).
+first version (see §7.1). A sandboxed custom-WGSL node is a possible later extension (§3.9).
 
 ### Clean room
 
@@ -45,7 +61,7 @@ exchange is a mapping, not a translation. No MaterialX, OpenPBR or shader-librar
 read, copied or linked. The pattern mathematics is the fork's own (`pbr.rs`) or textbook
 material, cited as mathematics only: value noise; gradient noise (Perlin 2002, "Improving
 Noise"); cellular noise (Worley 1996); fBm. GPL/LGPL/AGPL code is not read. If a node-editor
-widget crate is ever considered (§6.1), its licence must be MIT/Apache/BSD, checked by
+widget crate is ever considered (§7.1), its licence must be MIT/Apache/BSD, checked by
 `cargo xtask licences --check`.
 
 ## 2. Concepts
@@ -55,7 +71,8 @@ widget crate is ever considered (§6.1), its licence must be MIT/Apache/BSD, che
 | **Graph** | A design-owned, named material definition: nodes, typed connections, one output surface node, and an optional *interface*. Stored once in the design, referenced by looks. |
 | **Node** | One operation from the fixed v1 catalogue (§3). It has typed **inputs** (a constant, a connection, or an interface reference) and compile-time **params** (enums and small integers that change the generated code). |
 | **Interface** | Up to 32 named, typed inputs a graph exposes (MaterialX's nodegraph interface). A look can override them, so one "Anodised aluminium" graph serves every colour. |
-| **Look** | Today's record, plus `graph` (an id) and `values` (interface overrides). The look's `color` remains the scalar display colour for Design mode, exports and old consumers. |
+| **Look** | Today's record, plus an optional `graph` (an id) and `values` (interface overrides). The look's `color` remains the colour the standard view, exports and old consumers show. |
+| **View look** | A viewport's `standard` (default, today's renderer) or `photoreal` drawing, independent of its visual style (§6). Not saved in the design. |
 | **Shape** | Everything about a graph that changes generated code: node kinds, params, topology, which inputs are connected and which are constants, texture colour spaces. Values never belong to the shape. |
 | **Flattened surface** | The graph's average opaque response (`OpaqueSurface` + optional `ClearCoat`), computed on the CPU. It feeds consumers that cannot evaluate graphs. |
 
@@ -202,12 +219,14 @@ octave (3D 40, gradient ×1.5, cellular ×3), `pattern.weave` 60, `image` 8 plus
 and `standard_surface` 0 (the lighting is fixed cost). Slope-carrying wires cost ×3 and
 triplanar subgraphs ×3. Validation computes the expanded cost and refuses a graph over the
 budget, so an author learns at once, not at frame time. The table is part of the node
-catalogue that `appearance.graph.nodes` returns (§6).
+catalogue that `appearance.graph.nodes` returns (§7.2).
 
 ### 3.7 Today's looks, expressed
 
-- **Old opaque PBR look:** one `standard_surface` with `base_color` = the look's `srgb8`
-  colour, `base_metalness`, `specular_roughness` and `specular_ior` (§4.4).
+- **Opaque PBR look (`pbr`):** it stays in the file exactly as today and is never
+  rewritten (§4.4). The renderer reads it, in memory, as one `standard_surface` with
+  `base_color` = the look's `srgb8` colour, `base_metalness`, `specular_roughness` and
+  `specular_ior`. Only an explicit "Convert to material graph" edit creates a graph.
 - **Clear coat:** `coat_weight`, `coat_roughness` and `coat_ior`, which are exactly
   `ClearCoat`'s weight, roughness and IOR. A pigmented body under lacquer keeps today's
   rule: base `specular_ior` = 1 (no second interface).
@@ -225,9 +244,10 @@ catalogue that `appearance.graph.nodes` returns (§6).
 - **`PeelOverWeave`:** both of the above; the weave drives only the albedo.
 - **`InkGrain`:** noise at 0.05 mm and 0.16 mm, an albedo of ±18 %, and 2 µm of relief.
 
-The built-in fork library ships these four as graphs (§9, track G). A program that embeds
-the viewport and calls `pbr_tri_with` keeps working through a shim until the shim is
-removed (decision O5).
+The built-in library ships these four as graphs (§10, track G). The `SurfacePattern` enum
+and `pbr_tri_with`'s detail vertices are **not part of the upstream package**: graphs
+replace them before submission. The fork keeps them only until Pcbcraft has moved to graphs
+(track H).
 
 ### 3.8 Worked examples
 
@@ -275,7 +295,7 @@ onto the lid):
  "output": "surface"}
 ```
 
-The mark is an interface input, so each look (or a runtime override, §6.3) binds its own
+The mark is an interface input, so each look (or a runtime override, §7.3) binds its own
 image without recompiling: a texture binding is not part of the shape.
 
 **Glossy solder mask over copper** (a board's trace; the copper shows through a tinted
@@ -381,14 +401,16 @@ Texture assets live beside them and are stored as container blobs.
 }
 ```
 
-- `Look` gains `graph: Option<GraphId>` and `values: BTreeMap<String, InterfaceValue>`.
-  `pbr` is **no longer written**; the migration step (§4.4) rewrites it. Looks without a
-  graph keep scalar shading exactly as today.
-- A look's `color` stays required. With a graph it is the display colour (the flattened
-  base colour, sRGB8), which the assigning command computes. Design mode, STEP/3MF colour
-  export and older readers' tools use it.
+- `Look` gains `graph: Option<GraphId>` and `values: BTreeMap<String, InterfaceValue>`,
+  both omitted when empty. `graph` and `pbr` are mutually exclusive. `pbr` remains a valid,
+  unchanged form, read and written as today. Looks without either keep scalar shading.
+- `appearances.graphs` and `appearances.textures` are omitted when empty, so a design
+  without graphs serialises exactly as today.
+- A look's `color` stays required. With a graph it is the colour the standard view shows
+  (the flattened base colour, sRGB8), which the assigning command computes. It is also what
+  STEP/3MF colour export and older readers' tools use.
 - `source` is generic provenance (library id, entry id, revision). It is optional and
-  inert, and drives only an explicit "update from library" with an impact preview (§6).
+  inert, and drives only an explicit "update from library" with an impact preview (§7.2).
 - A graph with `geometry_opacity` < 1 or `transmission_weight` > 0 requires the look's
   `opacity` = 1. Opacity stays the scalar legacy blend; it does not combine with graph
   optics, which keeps today's "PBR requires opacity 1" rule.
@@ -398,7 +420,10 @@ Texture assets live beside them and are stored as container blobs.
 - **Textures:** in a container (`.sc`), `image_blob` is `blobs/<sha256>.png|jpeg`, using
   the canvas blob mechanism that exists today ([design containers](design-container.md)).
   In a plain JSON design, `data` holds base64, as canvases do. The key is the SHA-256 of the
-  exact encoded bytes. Textures no graph or look references are dropped on save.
+  exact encoded bytes. Textures no graph or look references are dropped on save. Graphs
+  are design data and stay until deleted, even when no look uses them. The existing
+  `png`/`jpeg` blob kinds are reused, so the container format (`solidcraft-container/1`)
+  does not change.
 
 ### 4.2 Shared material libraries
 
@@ -409,8 +434,9 @@ textures is a ZIP container (`container.json`: `{"format":"solidcraft-library/1"
 may stay plain JSON. `library.apply` copies a graph (and its textures) into the design and
 records `source`, so the design never depends on the library file. A collision of graph ids
 refuses unless the command names a new id: an existing graph is never silently replaced.
-Exporting v2 from a design that uses graphs refuses, as exporting v1 refuses PBR loss
-today.
+Export writes v2 when the exported snapshot has no graphs, so material-free libraries stay
+readable by the last release (the same rule as designs, §4.4). Explicitly exporting v2 from
+a snapshot with graphs refuses, as exporting v1 refuses PBR loss today.
 
 ### 4.3 Texture limits
 
@@ -425,57 +451,95 @@ today.
 Decoding uses `solidcraft_render::texture_input` on a worker. Until a texture has decoded,
 its `image` node reads its `default` colour.
 
-### 4.4 The pending format change
+### 4.4 Compatibility and the pending format change
 
-The change is one file, `crates/doc/src/format/pending/appearance-graphs.rs`:
+**How the written format number is decided today.** `Formats::current()`
+([`format.rs`](../crates/doc/src/format.rs)) is the last folded format, plus one while
+`format/pending/` holds any change. `format::read` sets every loaded document's `format` to
+that `FORMAT` and its `format_pending` to all pending names. Saving serialises them as they
+are. The number therefore depends on the **build, not the content**: once any pending change
+exists, every design this build saves gets N+1, whether or not it uses the change, and the
+last release refuses all of them. After the release fold, every save writes the new number
+again. This is fine for most changes, but it would make "a material graph exists somewhere
+in the code" break every user's files for the last release.
+
+**Proposal: write the oldest format a design needs (opt-in per change).**
+
+- `Part` gains `used: Option<fn(&Value) -> bool>`, a predicate on the design's saved
+  JSON. `None` means "always used", which is what every existing part gets, so nothing about
+  today's changes moves.
+- On save, `Family::written_for(&Value)` picks the written number. It starts at the
+  current format and steps down past every format whose parts all declare `used` and are
+  all unused by this design. It stops at the first format with an undeclared or used part,
+  or at the last hand-written format. The result is that format's number, and, if it is a
+  pending format, its full `format_pending` list as today.
+- The rule lives in one place (the design writer, JSON and container alike, and autosave
+  and recovery). The in-memory `Document::format` stays `FORMAT`.
+- `appearance-graphs.rs` declares `used = appearances.graphs is non-empty`. A design
+  without graphs has no new JSON at all: the new fields are omitted when empty and `pbr` is
+  unchanged. While the change is pending, such a design is therefore written with the last
+  release's number, byte for byte what that release would write.
+- After the release fold the predicate travels with the part into `v<N+1>/`. Release N+1
+  keeps writing N for designs without graphs, as long as no other change of N+1 is used or
+  undeclared. The mechanism is generic, so later changes can opt in the same way.
+
+**Files without materials** open and save exactly as today: the same JSON, the same
+format number, and no `format_pending` added. This is enforced by a test that saves every
+design in `apps/solidcraft-cli/tests/corpus` and the format tests' fixtures, and compares
+the bytes with the output of the build before the change. Also tested:
+
+- a design with a graph writes N+1 and lists `appearance-graphs`;
+- deleting its last graph writes N again;
+- another pending part without a predicate still forces N+1, so the rule is conservative;
+- track I's evidence includes the last release's `solidcraft-cli` opening the down-levelled
+  files.
+
+If upstream declines the `format.rs` change, the package still works. The only loss is that
+material-free designs saved during the release cycle get N+1, as every change does today
+(decision O9).
+
+**`pbr` looks are not migrated.** They are already part of the released format, so
+rewriting them into graphs would force N+1 onto every file that uses them, which is exactly
+what the founder ruled out. A `pbr` look reads and writes unchanged. In photoreal it renders
+as the equivalent one-node graph, with bit-identical pixels to today's look (the same f32
+values reach the same `pbr_shade`). `appearance.assign {pbr: …}` keeps writing `pbr`. A
+coat, pattern or texture needs a graph. The founder's rule is met: no new fixed field
+appears, and the one existing field stays for compatibility.
+
+**The pending file**, `crates/doc/src/format/pending/appearance-graphs.rs`, has no step,
+because older designs need no rewrite:
 
 ```rust
 //! Looks can name a material graph (`appearances.graphs`, by id) with interface values, and
 //! graphs can use texture assets (`appearances.textures`, container blobs or base64). An
-//! older design gets the same response: each opaque-PBR look (`pbr`) becomes a one-node
-//! `standard_surface` graph with exactly its colour and values, and identical responses
-//! share one graph. The last release refuses a design that has this (the newer format number).
-use serde_json::Value;
-
-pub fn step(v: &mut Value) -> crate::Result<()> {
-    // Walk every saved Look (body, face, component overrides; physical-material defaults;
-    // appearance-pack swatches), replace `pbr` with `graph`, and add the graphs table.
-    Ok(())
-}
+//! older design gets none: its looks (scalar or `pbr`) are unchanged. A design without
+//! graphs is still written in the older format (`USED`); the last release refuses a design
+//! that has graphs (the newer format number).
+pub const USED: fn(&serde_json::Value) -> bool = |v| {
+    v.pointer("/appearances/graphs").and_then(serde_json::Value::as_object).is_some_and(|g| !g.is_empty())
+};
 ```
 
-**Equivalence:** the migrated graph sets `base_color` to `{"srgb8": color}`, so it decodes
-through the same `srgb8_to_linear` and has the same f32 values as today. A constant-only
-`standard_surface` compiles to the same lighting call as today's `fs_pbr`. The tests are:
+**What an older release does with a file that has graphs:** it reads the format number,
+finds it newer than any it knows, and refuses to open the design with its standard message
+("this design was saved by a newer SolidCraft (file format N+1 …): update SolidCraft to open
+it"). It neither opens it partly nor drops the graphs. Recovery files behave the same.
 
-- the old and migrated looks give equal `OpaqueSurface`s;
-- with the look off, the GPU frames are bit-identical;
-- with the look on, frames differ by at most 1/255;
-- the CPU product host gives bit-identical images.
+For sharing with someone on the older release, `file.save_as` takes
+`"flatten_material_graphs": true`. Desktop Save As has the matching checkbox, "For older
+SolidCraft", which is never on by default. It writes a **copy** in which:
 
-Two looks with equal `pbr` and colour share a graph. Graph ids are `pbr-1`, `pbr-2`, … in
-the order of a canonical walk, so migration is deterministic.
+- each graph look becomes its flattened `pbr` look (opaque, with its colour), or a scalar
+  look when the graph is transmissive;
+- textures are omitted;
+- the output lists every changed look.
 
-```json
-// before
-{"name":"Copper - Clean PBR","color":[204,122,80],"opacity":1,"pbr":{"metallic":1,"roughness":0.25,"dielectric_ior":1.5}}
-// after
-{"name":"Copper - Clean PBR","color":[204,122,80],"opacity":1,"graph":"pbr-1"}
-"graphs": {"pbr-1": {"name":"Copper - Clean PBR","output":"surface","nodes":[
-  {"id":"surface","kind":"standard_surface","inputs":{"base_color":{"srgb8":[204,122,80]},
-   "base_metalness":1,"specular_roughness":0.25,"specular_ior":1.5}}]}}
-```
-
-**The last release and a new file:** it reads the format number, finds it newer than the
-newest it knows, and refuses to open the design with its standard newer-format message. It
-never drops the graphs silently. Its `format_pending` list mechanism is unchanged. The
-command API keeps accepting `pbr` on `appearance.assign` and `material.create/edit` as
-shorthand, which creates or reuses the equivalent one-node graph. Scripts written for the
-current release keep working.
+By the rule above the copy is then written in the older format. The open design is
+unchanged.
 
 **Node-set versions:** the node catalogue is versioned with the design format. A new node
-kind or input arrives in its own pending file. An unknown kind, param or input refuses
-(`deny_unknown_fields`) rather than being dropped.
+kind or input arrives in its own pending file, with its own `used` predicate. An unknown
+kind, param or input refuses (`deny_unknown_fields`) rather than being dropped.
 
 ## 5. Renderer
 
@@ -526,8 +590,9 @@ fn material_eval(c: MatCtx) -> Surface {
   of one shape** on a page. Pages are rewritten only when a material's values hash changes.
 - **Vertices:** a graph-drawn vertex is position, normal and material offset (28 bytes),
   plus an object-space position (40 bytes) for shapes that read object space. Instanced
-  meshes are already in object space. Today's 48- and 64-byte material-carrying vertices
-  remain for embedding clients until O5.
+  meshes are already in object space. Today's 48-byte `pbr_tri` vertices remain for
+  embedding clients and `pbr` looks. The 64-byte detail vertices stay in the fork only,
+  until track H; they are not in the package.
 - **Cache:** at most 64 live pipelines (LRU) per renderer. New shapes compile within a
   per-frame budget (target: at most two new pipelines a frame, and none in a frame already
   over 8 ms). Until a shape's pipeline exists, its materials draw with the **flattened**
@@ -541,8 +606,9 @@ The constraints of wgpu 30's `downlevel_webgl2_defaults` (checked in `wgpu-types
 - **4 bind groups,** and all four are in use (0 frame uniforms, 1 accessibility, 2
   occlusion, 3 studio). The material page and its textures therefore join **group 3** with
   the studio cube. Group 3 becomes "studio + material": one bind group per (texture set,
-  page), with the studio bindings repeated in each (cheap: the same views). This changes
-  the layout the photoreal-look PR introduces; coordinate it with that PR (O5).
+  page), with the studio bindings repeated in each (cheap: the same views). The renderer
+  ships in the same package, so this layout is designed once and never changes after
+  review.
 - **No storage buffers or storage textures** in any stage, hence uniform pages, not a
   material SSBO.
 - **16 sampled textures and 16 samplers per stage:** the studio cube, the AO term and at
@@ -598,9 +664,9 @@ They will be measured with the existing `gpu` perf harness and recorded in
   - *Transmission:* see §5.6.
 - The graph's `Surface` carries a coat normal separate from the base normal, which today's
   look cannot express (orange peel now perturbs the base normal too).
-- **Without the product look** (the default preview), every graph draws its **flattened
-  surface** through today's path. This keeps the existing `cpu-product` parity tests valid
-  and leaves the default unchanged; patterns and coats show only with the look, as today.
+- **In the standard view mode** (§6, the default), nothing of this runs. A look draws its
+  `color` exactly as today, and the existing `cpu-product` parity tests stay valid.
+  Patterns, coats and textures show only in photoreal.
 
 ### 5.6 Fallbacks
 
@@ -608,15 +674,109 @@ They will be measured with the existing `gpu` perf harness and recorded in
 |---|---|
 | Shape not compiled yet / compile failed / over the cache | Flattened surface through the standard pipeline; a failure logs once per shape and reports in the render diagnostics. |
 | Texture not decoded yet or failed | The image node's `default` colour. |
-| Path tracer (progressive GPU, native) | v1: flattened surface + coat + transmission inputs mapped to its existing runtime transmission. v2: the same IR compiled into its material function (it has storage buffers) (O6). |
+| Path tracer (progressive GPU, native) | v1: flattened surface + coat + transmission inputs mapped to its existing runtime transmission. v2: the same IR compiled into its material function (it has storage buffers) (O5). |
 | CPU product host and CPU tests | The CPU evaluator (f64 interpreter of the IR) per hit. It is the oracle for the GPU and gives full parity, at CPU cost. |
-| Design mode, STEP/3MF colour, Drawing | The look's `color` (the flattened display colour). |
+| Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the flattened display colour). |
 | `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. |
 | A graph with features a renderer lacks | Each host advertises what it supports, as `pbr` is advertised today. A required feature that is absent refuses the render job; it never silently drops the feature. |
 
-## 6. Editing and commands
+## 6. Photoreal view mode
 
-### 6.1 The editor
+For modelling, photorealism mostly distracts from the shapes. The **standard** view, which
+is today's renderer, therefore stays the default. **Photoreal** is an additional way to
+view the same model, and it can be switched on and off at any time.
+
+### 6.1 The switch
+
+- **Model.** A viewport has two independent settings:
+  - its existing **visual style**: shaded with edges, shaded, wireframe or shaded with
+    hidden edges (`view.visual_style`);
+  - its new **look**: `standard` (default) or `photoreal`.
+
+  Edges follow the visual style in both looks. In Wireframe there are no faces, so the look
+  has no visible effect; it stays set for when faces return.
+- **Command.** `view.look`, with input `{look?: "standard" | "photoreal", view?: "model" |
+  "render_preview"}` and output `{look, view}`.
+  - Without `look` it toggles; without `view` it acts on the active view.
+  - Like `view.visual_style`, it is `noundo` and `doc_only`, has input and output schemas,
+    and is the same command for the UI, the CLI and MCP.
+  - The view's state query reports the look alongside the visual style.
+- **Key.** The default is **Shift+P**. It is free in today's command table and not on
+  `keymap.rs`'s reserved list, and it can be rebound in Keyboard Shortcuts like any command.
+- **Where it lives.** It sits in the navigation bar's visual-style menu, as a "Photoreal"
+  check row below the four styles. When photoreal is on, the slot's icon shows a small
+  badge. It is also in the command palette. It adds no toolbar of its own.
+- **Not saved in the design.** Solidcraft's convention for view settings is the visual
+  style: a viewport UI preference in the app's preferences JSON (`SolveApp::prefs`,
+  `visual_style`), never in the design or its undo history. The look follows that
+  convention exactly:
+  - it is stored as `view_look`, remembered between runs (decision O8), and `standard` by
+    default; Restore Defaults returns it to standard;
+  - opening a design never changes it, so a file from someone else never switches a user
+    into photoreal;
+  - one viewport serves all design tabs, as visual style does. The Render workspace preview
+    is a separate view with its own look. If Solidcraft gains split views, each view carries
+    its own look as it would its own visual style.
+
+### 6.2 Photoreal keeps modelling clear
+
+Photoreal changes how **faces** are lit: the studio IBL, material graphs, coat, ambient
+occlusion, PBR Neutral tone mapping and dither of the product look. Everything used to model
+is drawn as in the standard view, composited **after** tone mapping in display space with
+the theme's colour tokens, so neither exposure nor the tone curve alters it. That covers:
+
+- selection and hover highlights of faces, edges, vertices, bodies and components;
+- edges and silhouettes per visual style, hidden edges dashed;
+- sketches, constraints, dimensions, construction planes and axes, the grid, move
+  arrows and gizmos, measurements, section caps and clipping;
+- faded context while editing a component in place: the context keeps its standard faded
+  drawing, and only the active component is photoreal;
+- accessibility modes.
+
+A highlight is never a material change: selecting or hovering rebuilds no geometry and
+compiles nothing. Picking does not depend on the look.
+
+In photoreal, a **scalar look** (no `pbr` and no graph) and imported paint are lit as an
+implicit dielectric `standard_surface`: base `color`, roughness 0.5, IOR 1.5. A design with
+no appearances therefore looks sensible in photoreal. Without this, today's look draws
+non-PBR faces black when there are no product lights. Transparent scalar looks keep today's
+alpha blend.
+
+The tests are pixel comparisons in both looks:
+
+- the selection and hover highlight colours, edge colour and sketch overlay pixels are
+  identical;
+- the grid and dimensions are unchanged;
+- a face selected in photoreal shows the token colour exactly.
+
+### 6.3 The standard view is unaffected
+
+- The standard look is today's renderer, unchanged. A look shows its `color` and opacity
+  as today, whether it has a `pbr` response, a graph or neither.
+- The standard look compiles no graph pipeline, decodes no texture, bakes no studio and
+  allocates no material page. All of that starts the first time a view switches to
+  photoreal: the studio bakes off the window thread, as now, and the standard picture shows
+  until it is ready.
+- Test: a design with graphs and the same design with the graphs removed (same colours)
+  give bit-identical standard frames and equal GPU memory.
+- Switching rebuilds no geometry. Both looks draw the same tessellation. Photoreal's
+  vertex streams are built from it the first time, off the window thread, and kept. After
+  that, a switch takes one frame. A first switch on a model of one million triangles should
+  take at most 300 ms off the window thread. Both figures are targets.
+
+### 6.4 The existing graphics preference
+
+The fork's opt-in, **Preferences > Graphics > Studio lighting in the Render preview**
+(`render_studio_look`), is **replaced** by the view mode. The Render workspace preview gets
+its look from `view.look` with `view: "render_preview"`, still `standard` by default. The
+preference is not part of the upstream package. A fork user's saved `render_studio_look:
+true` becomes the render preview's `photoreal` once, and the key is then dropped. The
+embedding API `Frame::product_look` remains the mechanism underneath: the view mode sets
+it, and programs that embed `solidcraft-gpu` keep using it directly.
+
+## 7. Editing and commands
+
+### 7.1 The editor
 
 Solidcraft's Appearance editor gains a **Material** section for the selected look, shown
 when the look has a graph.
@@ -641,7 +801,7 @@ The editor shows a live swatch (a sphere and a flat coupon, rendered with the pr
 off the window thread) and the graph's cost against the budget. Every edit is a command
 (below); a slider drag is one undo step on release.
 
-### 6.2 Commands
+### 7.2 Commands
 
 All commands are atomic, have input and output schemas, and never open dialogs. A failed
 command leaves the design unchanged.
@@ -670,7 +830,7 @@ Example (MCP or CLI, `solidcraft-cli run`):
   {"op":"set_input","node":"surface","port":"coat_roughness","value":0.1}]}}
 ```
 
-### 6.3 Runtime overrides
+### 7.3 Runtime overrides
 
 Render jobs (`render.start`) and the embedding API (`solidcraft-gpu`) can override a
 graph's **interface** values for one job or frame, for example a texture bound to a
@@ -679,7 +839,7 @@ contract as today's runtime `clear_coats`. Overrides are values and texture bind
 they never compile anything. This generic mechanism is what lets any program bind
 per-instance images (labels, markings) at render time.
 
-## 7. Pcbcraft side
+## 8. Pcbcraft side
 
 Pcbcraft's cited table (`pcbcraft-core::materials`, 29 `MaterialId`s) stays in Pcbcraft.
 
@@ -702,38 +862,60 @@ Pcbcraft's cited table (`pcbcraft-core::materials`, 29 `MaterialId`s) stays in P
    against its table. A changed table produces an "update from library" impact preview,
    never a silent change.
 4. Material slots (render parameters) select between library graphs; markings bind
-   interface textures at render time (§6.3).
+   interface textures at render time (§7.3).
 5. `models::look` then projects to a graph instead of `OpaqueSurface` + `Detail`. Pcbcraft's
    3D view draws through the same graph renderer, so a part looks the same in Solidcraft
    and in Pcbcraft.
 
-## 8. Upstream plan
+## 9. Upstream plan
 
-The photoreal look PR (PR0, branch `upstream-photoreal-look`) goes first and stays
-renderer-only. Before PR1, a short upstream proposal (this note, trimmed) asks maintainers
-to agree the model. Their render-materials backlog asks for "versioned appearance …
-resource contracts" ([handoff](render-materials/IMPLEMENTATION_HANDOFF.md), task 2), which
-this note provides. Opening the proposal, a claim or a PR needs the founder's go each time.
-The repository's rules apply: claim by draft PR, one topic per PR, and the format change as
-one pending file.
+The package is **one proposal**: "Photoreal view and material graphs". There is no
+renderer-only PR. The branch `upstream-photoreal-look` becomes the first commits of the
+package, not a submission of its own, so the agent preparing it must not open it separately.
 
-| PR | Contents | Changes a default? |
+Every upstream step needs the founder's go: the proposal, the draft-PR claim and the PR.
+The repository's rules apply: claim by draft PR (lowest number wins), the format change as
+one pending file, real screenshots and a recording, and `cargo xtask ci` before every
+commit. The steps are:
+
+1. **Proposal first.** A short issue or discussion (this note, trimmed) asks maintainers to
+   agree the model, the view mode and the format rule (§4.4) before any code is posted.
+   Their render-materials backlog asks for "versioned appearance … resource contracts"
+   ([handoff](render-materials/IMPLEMENTATION_HANDOFF.md), task 2), which this package
+   provides.
+2. **One draft PR, stacked commits.** Each commit builds and passes `cargo xtask ci` on its
+   own, so review can go commit by commit. If maintainers prefer, the same commits become
+   stacked PRs. They are still reviewed and merged as one package; none of them merges
+   alone.
+
+| # | Commit (group) | Contents |
 |---|---|---|
-| PR1 | Graph types, validation, IR, CPU evaluator, flattening (`solidcraft-render`); no format, UI or GPU | No |
-| PR2 | Format: `appearances.graphs`/`textures`, the pending file and `pbr` migration, container blobs; commands `graph.*`, `texture.*`, `assign`; flattened rendering everywhere | No (migration is lossless) |
-| PR3 | GPU: `fs_pbr` → `material_eval` + `pbr_shade`, codegen, shape cache, uniform pages, group-3 merge, GLSL ES corpus test; constant graphs only | No (bit-identical frames) |
-| PR4 | Pattern, projection and image nodes on the GPU; anisotropy, `coat_color`, emission; textures and mips | No (look still opt-in) |
-| PR5 | Layered stack editor and swatches in the Appearance editor; locale strings | No |
-| PR6 | Catalog v3 libraries; built-in graphs for today's four patterns; retire the `SurfacePattern` vertex path | No |
+| 1 | Photoreal renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. **Without** the `SurfacePattern` enum, `pbr_tri_with` detail vertices and the `render_studio_look` preference. `fs_pbr` is split into `material_eval` + `pbr_shade`. |
+| 2 | Photoreal view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy photoreal resources, the Render-preview look (§6) |
+| 3 | Graph model | Types, validation, IR, cost model, CPU evaluator, flattening (`solidcraft-render`) |
+| 4 | Format and compatibility | The pending file, `appearances.graphs`/`textures`, texture blobs, the oldest-sufficient-format rule, Save As "For older SolidCraft" (§4.4) |
+| 5 | Commands | `appearance.graph.*`, `appearance.texture.*`, `assign` extension, runtime overrides; schemas |
+| 6 | GPU graphs | Code generation, shape cache, uniform pages, group-3 layout, pattern/projection/image nodes, anisotropy, `coat_color`, emission; the GLSL ES corpus test |
+| 7 | Editor | The layered stack and swatches in the Appearance editor; locale strings |
+| 8 | Libraries and content | Catalog v3, built-in graphs (today's four patterns and the examples), user docs, examples, screenshots |
 
-## 9. Work breakdown
+The PR body's `Changes a default:` line reads "No". The standard view stays the default,
+files without graphs save unchanged, and the Render preview stays standard.
+
+In the fork, the same series lands on `pcbcraft-via2` first. Pcbcraft keeps the fork-only
+`SurfacePattern` path until track H moves it to graphs; the path is then removed from the
+fork too.
+
+## 10. Work breakdown
 
 The contract comes first. **C0** fixes the following before any track starts:
 
 - the Rust types of the node catalogue, the IR and `Surface`;
 - the JSON schema;
+- the command and `view.look` schemas;
 - the prelude function signatures;
 - the uniform-page layout;
+- `Part::used`;
 - the five worked examples as golden fixtures with CPU-evaluated expected values at fixed
   points.
 
@@ -742,56 +924,76 @@ All later tracks build against those signatures.
 | Track | Scope | Depends on | Agent-hours |
 |---|---|---|---|
 | C0 | Contract (above) | – | 6 |
+| R | Renderer integration: bring `upstream-photoreal-look` into the package branch, remove `SurfacePattern`/detail vertices and `render_studio_look` from it, split `fs_pbr` into `material_eval` + `pbr_shade` with bit-identical frames | C0 | 6 |
+| V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in photoreal, lazy photoreal resources, shared tessellation; pixel tests in both looks | R | 12 |
 | A | Validation, IR, cost model, CPU evaluator with slopes, flattening; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 14 |
-| B | Format: tables, `Look.graph/values`, pending file and migration over every Look site, texture blobs and base64, save GC, catalog v3 container | C0 | 12 |
-| C1 | WGSL prelude (port of today's patterns), code generator, shape key, pipeline cache with budget and fallback, uniform pages, new vertex layouts, group-3 merge | C0, A (IR) | 14 |
-| C2 | `pbr_shade` additions: anisotropic GGX direct + studio, `coat_color` (with the CPU oracle), emission, transmission fallback; furnace tests | C0 | 10 |
+| B | Format: tables, `Look.graph/values` (with `pbr` unchanged), texture blobs and base64, save GC, catalog v3 container | C0 | 10 |
+| K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice, Save As "For older SolidCraft" | B | 8 |
+| C1 | WGSL prelude (port of today's patterns), code generator, shape key, pipeline cache with budget and fallback, uniform pages, new vertex layouts, group-3 layout | A (IR), R | 14 |
+| C2 | `pbr_shade` additions: anisotropic GGX direct + studio, `coat_color` (with the CPU oracle), emission, transmission fallback; furnace tests | R | 10 |
 | C3 | Textures on the GPU: decode worker, mips, bind groups, `image` node sampling | C1, B (assets) | 6 |
 | D | Commands and schemas, undo/atomicity, CLI/MCP docs, runtime overrides in `render.start` | A, B | 12 |
-| E | Layered stack editor, swatch renders, texture picker, locale strings, screenshots | D | 16 |
-| F | Consumers: path tracer and CPU host via the evaluator and flattening; Design mode and export colour | A, B | 6 |
+| E | Layered stack editor, swatch renders, texture picker, locale strings; built against C0's command schemas, then joined to D (4 of its 16) | C0, then D | 16 |
+| F | Consumers: path tracer and CPU host via the evaluator and flattening; export colour | A, B | 6 |
 | G | Built-in graph library (today's four patterns + examples), user docs, `examples/material-graphs.json` | A, D | 6 |
-| H | Pcbcraft: table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
-| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape, perf measurements against §5.4, GPU-vs-CPU oracle frames | C1–C3 | 8 |
+| I | Evidence: `cargo xtask ci`, wasm build, an actual WebGL2 browser frame of every corpus shape in both looks, the last release opening down-levelled files, perf measurements against §5.4 and §6.3, GPU-vs-CPU oracle frames | C1–C3, V, K | 10 |
+| P | Package assembly: the commit series, the proposal text, PR body, screenshots and a recording | all | 4 |
+| H | Pcbcraft (outside the package): table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
 
-- **Total:** about **120 agent-hours**.
+- **Total:** about **140 agent-hours** for the upstream package, plus **10** for Pcbcraft:
+  **150** in all.
 - **Critical path:** C0 (6) → A's IR (8 of its 14) → C1 (14) → integrating C2 and C3 (6)
-  → I (8) = about **42 agent-hours**.
+  → I (10) → P (4) = about **48 agent-hours**.
 
-Tracks A, B and C2 run in parallel from the start, and D, F and H fan out once A and B
-land. Reviews and merge rounds come on top of both figures.
+The other chains fit inside it:
+
+- R → V finishes by hour 24.
+- D is done by hour 32, and E's joining to it by hour 36.
+
+Tracks R, A, B and E start in parallel after C0. C2 and V start after R, and D, F, K and H
+fan out once A and B land. Reviews and merge rounds come on top of both figures.
 
 ### Risks
 
 1. **WebGL2 is unproven.** No browser has drawn a look frame yet. Uniform-array indexing
    by a varying, compile and link times (ANGLE) and the four-group limit are the likely
-   failure points. *Mitigation:* the GLSL corpus test from PR3 on, a browser frame in track
-   I before PR4, and the non-blocking compile with fallback.
-2. **Upstream disagreement on the model** (naming, table vs inline, scope), which would
-   force a rewrite after the fork has shipped files. *Mitigation:* the proposal before PR1,
+   failure points. *Mitigation:* the GLSL corpus test from commit 6 on, a browser frame in
+   track I before the package is offered, and the non-blocking compile with fallback.
+2. **The package is large** for upstream review, about eight commit groups. *Mitigation:*
+   the proposal first, a stacked series in which each commit passes CI on its own, and the
+   offer of stacked PRs.
+3. **Upstream disagreement on the model** (naming, table vs inline, scope), which would
+   force a rewrite after the fork has shipped files. *Mitigation:* the proposal before code,
    and keeping the fork's format pending (unreleased) until upstream agrees.
-3. **The group-3 layout changes after PR0.** Merging the material into the studio group
-   alters what PR0 introduces. *Mitigation:* agree it with the PR0 track now (O5).
-4. **Preview and final render diverge** while the path tracer uses flattened surfaces.
+4. **The format rule (§4.4) may be declined.** It touches shared `format.rs` policy.
+   *Mitigation:* it is opt-in per change and conservative by default, and the package works
+   without it (O9).
+5. **Overlay compositing in photoreal:** drawing highlights, edges and sketches after tone
+   mapping needs a clean pass order with the AO, supersample and cached-still paths.
+   *Mitigation:* pixel tests for each overlay in both looks (track V).
+6. **Preview and final render diverge** while the path tracer uses flattened surfaces.
    *Mitigation:* document it in v1; the path-tracer codegen is the first v2 item.
-5. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
+7. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
    *Mitigation:* keep masks sharp in the examples; the closure mix is in v2.
-6. **The node set freezes on release.** Every addition is then a format change.
+8. **The node set freezes on release.** Every addition is then a format change.
    *Mitigation:* start small, version the catalogue, refuse anything unknown.
-7. **The anisotropic studio approximation** may fail the furnace bound at high anisotropy.
+9. **The anisotropic studio approximation** may fail the furnace bound at high anisotropy.
    *Mitigation:* clamp anisotropy in the studio term to what passes, documented.
-8. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
-   LRU and flattened fallback; the stack editor produces few distinct shapes.
+10. **Pipeline count** in a design with many differently shaped graphs. *Mitigation:* the
+    LRU and flattened fallback; the stack editor produces few distinct shapes.
 
 ### Open decisions (with recommendations)
 
 | # | Decision | Recommendation |
 |---|---|---|
 | O1 | Graph identity: a design-level table of named graphs referenced by looks, or an inline graph copied into every look (value semantics, as `pbr` is today) | **Table.** Editing a material updates every use (as CAD users expect), files stay small with 100,000 overrides, and libraries map to it with provenance. `duplicate` gives divergence when wanted. |
-| O2 | First editor: layered stack or node canvas | **Layered stack** (§6.1); a canvas later. |
+| O2 | First editor: layered stack or node canvas | **Layered stack** (§7.1); a canvas later. |
 | O3 | `surface.mix` semantics in v1 | **Parameter blend**; closure mix in v2. |
 | O4 | Default projection space | **Object**, so patterns stick to moving and instanced parts; today's look uses world millimetres, which `space: world` keeps. |
-| O5 | The photoreal-look PR's `SurfacePattern` / `pbr_tri_with` vertex detail | **Leave the pattern enum out of PR0** (keep the studio, IBL, coat, AO and tone mapping) so that upstream never gets an API that PR6 removes. The fork keeps the enum until the graph path replaces it for Pcbcraft. Agree the group-3 layout with PR0 now. |
-| O6 | Path tracer in v1 | **Flattened** in v1; IR → path-tracer material in v2. |
-| O7 | Transmission inputs in v1 | **Include** them (validated, with a real-time fallback), so that glass and clear silicone need no second format change. |
-| O8 | Constant colour encoding | Store linear floats, and accept `{"srgb8": …}` for exact migration; commands also accept hex sRGB. |
+| O5 | Path tracer in v1 | **Flattened** in v1; IR → path-tracer material in v2. |
+| O6 | Transmission inputs in v1 | **Include** them (validated, with a real-time fallback), so that glass and clear silicone need no second format change. |
+| O7 | Constant colour encoding | Store linear floats; accept `{"srgb8": …}` for exact `pbr` equivalence; commands also accept hex sRGB. |
+| O8 | Is the view look remembered between runs? | **Yes, like visual style** (the existing convention), defaulting to standard and reset by Restore Defaults. Opening a design never changes it. The alternative, starting standard on every launch, would break that convention for a single setting. |
+| O9 | Written format number for material-free designs | **Opt-in "oldest sufficient format"** (`Part::used`, §4.4): generic, conservative, no change for existing parts. The fallback, if upstream declines it, is today's build-wide bump for the release cycle. |
+| O10 | Save As "For older SolidCraft" (flatten graphs into a copy) | **Include** it (about 3 of track K's hours). It makes sharing with the last release explicit, never a silent loss. |
+| O11 | The view-mode key | **Shift+P**, which is free and rebindable. Founder or maintainers may prefer another; nothing else depends on it. |
