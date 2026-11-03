@@ -30,10 +30,19 @@ fn catalog() -> Catalog {
         format: FORMAT.into(),
         id: "user.test".into(),
         name: "Original scalar test library".into(),
+        graphs: Default::default(),
+        textures: Default::default(),
         entries: vec![
             Entry::new(
                 "user.test",
-                Definition::Appearance(LibraryLook { name: "Warm oak colour".into(), color: [180, 120, 70], opacity: 0.8, pbr: None }),
+                Definition::Appearance(LibraryLook {
+                    name: "Warm oak colour".into(),
+                    color: [180, 120, 70],
+                    opacity: 0.8,
+                    pbr: None,
+                    graph: None,
+                    values: Default::default(),
+                }),
                 Provenance::default(),
             )
             .unwrap(),
@@ -43,7 +52,14 @@ fn catalog() -> Catalog {
                     name: "Timber density".into(),
                     density_g_cm3: 0.7,
                     physical_card: None,
-                    appearance: Some(LibraryLook { name: "Timber tint".into(), color: [180, 120, 70], opacity: 1.0, pbr: None }),
+                    appearance: Some(LibraryLook {
+                        name: "Timber tint".into(),
+                        color: [180, 120, 70],
+                        opacity: 1.0,
+                        pbr: None,
+                        graph: None,
+                        values: Default::default(),
+                    }),
                 }),
                 Provenance::default(),
             )
