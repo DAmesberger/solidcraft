@@ -72,3 +72,6 @@ pub fn validate(source: &str) -> Result<(naga::Module, naga::valid::ModuleInfo),
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod shade_tests;

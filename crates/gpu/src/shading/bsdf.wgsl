@@ -286,3 +286,14 @@ fn sc_see_through(base: vec3<f32>, weight: f32, color: vec3<f32>) -> vec4<f32> {
     let mean = (c.x + c.y + c.z) / 3.0;
     return vec4<f32>(base * (1.0 - w) + w * max(c - vec3<f32>(mean), vec3<f32>(0.0)), 1.0 - w * mean);
 }
+
+// A cut-out's coverage (`geometry_opacity`, not glass) on a shaded colour `c` that is already
+// premultiplied by its own coverage (1 when opaque, `sc_see_through`'s for glass): colour and
+// alpha both scaled by `opacity` in [0, 1], for the same premultiplied "over" blend. Opacity 1
+// (or NaN) is `c` unchanged.
+fn sc_cover(c: vec4<f32>, opacity: f32) -> vec4<f32> {
+    if (!(opacity < 1.0)) { return c; }
+    let o = max(opacity, 0.0);
+    return vec4<f32>(c.rgb * o, c.a * o);
+}
+

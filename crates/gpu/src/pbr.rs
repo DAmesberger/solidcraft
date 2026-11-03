@@ -311,9 +311,10 @@ fn surface_from_opaque(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, 
 // the fixed studio (or the frame's product lights), per-channel Reinhard and one encode; with it
 // the product lights, the studio (occluded), exposure, PBR Neutral and a dithered encode.
 // Every light reflects through `sc_layered_brdf` (an anisotropic base along `s.tangent`, a tinted
-// coat about `s.coat_normal`); emission adds after the lighting, before exposure. Alpha is 1,
-// except for a transmissive surface (`sc_see_through`): its colour is then premultiplied, for
-// a blended "over" (src + dst·(1 − a)) like today's see-through glass, without refraction.
+// specular, a tinted coat about `s.coat_normal`); emission adds after the lighting, before
+// exposure. Alpha is 1, except for a transmissive surface (`sc_see_through`) or a cut-out
+// (`s.opacity` < 1, `sc_cover`): its colour is then premultiplied, for a blended "over"
+// (src + dst·(1 − a)) like today's see-through glass, without refraction.
 fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
     let n = s.normal;
     let coat_n = s.coat_normal;
@@ -371,13 +372,13 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
         radiance += indirect * p.y;
         radiance += s.emission_color * s.emission_luminance;
         let encoded = look_encode(look_tone(radiance * p.x), f.pos.xy);
-        if (u.back.w > 0.5) { return vec4<f32>(to_linear(encoded), see.a); }
-        return vec4<f32>(encoded, see.a);
+        if (u.back.w > 0.5) { return sc_cover(vec4<f32>(to_linear(encoded), see.a), s.opacity); }
+        return sc_cover(vec4<f32>(encoded, see.a), s.opacity);
     }
     radiance += s.emission_color * s.emission_luminance;
     let mapped = radiance / (vec3<f32>(1.0) + radiance);
-    if (u.back.w > 0.5) { return vec4<f32>(mapped, see.a); }
-    return vec4<f32>(pbr_encode(mapped), see.a);
+    if (u.back.w > 0.5) { return sc_cover(vec4<f32>(mapped, see.a), s.opacity); }
+    return sc_cover(vec4<f32>(pbr_encode(mapped), see.a), s.opacity);
 }
 "#
     };

@@ -362,7 +362,8 @@ fn gpu_specular_tint_matches_the_f64_oracle() {
 
 /// The tangent is made perpendicular and turned counter-clockwise about the normal, a tangent
 /// along the normal (or none) gives no direction; OpenPBR's roughness axes; the see-through
-/// fallback's body colour and coverage; the bent reflection at full bend and without roughness.
+/// fallback's body colour and coverage; the bent reflection at full bend and without roughness;
+/// a cut-out's premultiplied coverage (opacity 1 unchanged, below 0 nothing).
 #[test]
 fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
     let body = r#"
@@ -382,6 +383,8 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
             let r = sc_aniso_reflect(n, vec3<f32>(1.0, 0.0, 0.0), v, 0.5, 1.0);
             o = vec4<f32>(r - vec3<f32>(v.x, -v.y, v.z), length(r));
         }
+        case 9u: { o = sc_cover(vec4<f32>(0.4, 0.6, 0.8, 0.9), 0.5); }
+        case 10u: { o = sc_cover(vec4<f32>(0.4, 0.6, 0.8, 0.9), 1.0) + sc_cover(vec4<f32>(1.0), -1.0); }
         case 8u: {
             // A smooth surface is not bent.
             let v = sc_unit(vec3<f32>(0.3, 0.4, 0.8));
@@ -390,11 +393,11 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
         default: {}
     }
 "#;
-    let Some(got) = evaluate_cases(body, &[[0.0; 4]; 9], 1) else { return gpu_required() };
+    let Some(got) = evaluate_cases(body, &[[0.0; 4]; 11], 1) else { return gpu_required() };
     let near = |g: [f32; 4], e: [f64; 4]| g.iter().zip(e).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-5);
     let at = 0.25 * (2.0 / 1.25_f64).sqrt();
     let at1 = 0.25 * 2.0_f64.sqrt();
-    let expected: [[f64; 4]; 9] = [
+    let expected: [[f64; 4]; 11] = [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
@@ -404,6 +407,8 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
         [0.3 + 0.5 * (2.0 / 3.0), 0.3, 0.3, 1.0 - 0.5 / 3.0],
         [0.0, 0.0, 0.0, 1.0],
         [0.0, 0.0, 0.0, 0.0],
+        [0.2, 0.3, 0.4, 0.45],
+        [0.4, 0.6, 0.8, 0.9],
     ];
     for (k, e) in expected.iter().enumerate() {
         assert!(near(got[k], *e), "case {k}: {:?} vs {e:?}", got[k]);
@@ -428,7 +433,7 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
     c += sc_tinted_fresnel(sc_specular_f0(c, 0.5, 1.5, vec4<f32>(p, 1.0)), sc_specular_f90(0.5, 1.5, vec4<f32>(p, 1.0)), p.x);
     let x = sc_aniso_ggx_d(un, alpha) + sc_aniso_smith_g1(un, alpha);
     let s = sc_see_through(c, p.x, vec3<f32>(0.5, 0.2, 0.1));
-    return vec4<f32>(s.rgb + vec3<f32>(x), s.a);
+    return sc_cover(vec4<f32>(s.rgb + vec3<f32>(x), s.a), p.y);
 }
 "#;
     let source = format!("{}\n{probe}", super::library());
@@ -455,6 +460,7 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
         "sc_aniso_tangent",
         "sc_tinted_base_brdf",
         "sc_specular_f0",
+        "sc_cover",
     ] {
         assert!(out.contains(name), "{name} is in the GLSL");
     }
