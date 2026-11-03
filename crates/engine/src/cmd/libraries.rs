@@ -20,7 +20,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library.export", "Export Design Library", crate::checked!("library.export", export)).icon("export").noundo().doc_only()
         .contract(&EXPORT_CONTRACT)
         .output(output_schema_for::<LibraryExported>)
-        .params("path: .json; id? (default user.local), name?, provenance?, overwrite? false, format? solidcraft-library/2 (default) | solidcraft-library/1 (refuses PBR/cards). Copies assigned looks and design-local physical definitions; never changes the design"),
+        .params("path: .json; id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names a material graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
     CommandSpec::new("library.apply", "Apply Local Library Entry", crate::checked!("library.apply", apply)).icon("import").enabled(super::not_in_sketch)
         .contract(&APPLY_CONTRACT)
         .output(output_schema_for::<LibraryApplied>)
@@ -74,7 +74,10 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "library export path must end in .json"));
     }
     let catalog = Catalog::from_document(&s.doc, &request.id, &request.name, request.provenance)
-        .and_then(|catalog| catalog.in_format(&request.format))
+        .and_then(|catalog| match &request.format {
+            Some(format) => catalog.in_format(format),
+            None => Ok(catalog),
+        })
         .map_err(|e| bad(cmd, e.to_string()))?;
     let bytes = catalog.encode().map_err(|e| bad(cmd, e.to_string()))?;
     #[cfg(not(target_arch = "wasm32"))]

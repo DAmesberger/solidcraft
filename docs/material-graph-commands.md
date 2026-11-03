@@ -100,6 +100,8 @@ reads only files the page was given.
 - `appearance.list`, `appearance.copy` and `appearance.pick_up` return `graph` and `values`, so
   a copied look pastes with its graph.
 
+`library.export` writes `solidcraft-library/3` by default when an exported look names a
+graph (`solidcraft-library/2` otherwise); an explicit `/1` or `/2` refuses graphs.
 `library.apply` copies an entry's graph, with its source and its textures, into the design.
 The same graph already under that id is reused; a different one is refused unless
 `graph_id` names a new id for the copy.
@@ -132,7 +134,9 @@ design, its history and its file do not change.
 ```
 
 - An override names `graph` (wherever it is bound) or `body_index` with `body_name` (as
-  `render.scene` lists the body), and merges `values` over the looks' own. At most 256.
+  `render.scene` lists the body), and merges `values` over the looks' own. A body override
+  applies to each of the body's looks (its own and its faces') whose graph exposes every input
+  it sets, and is refused when none does. At most 256.
 - A texture value names a design texture or one of `graph_textures` (at most 16, each at most
   16 MiB), by SHA-256. A runtime texture no override reads is refused.
 - `render.preflight` and `render.start` report the captured `graphs`: per material its graph,

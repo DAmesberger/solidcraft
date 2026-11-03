@@ -5,7 +5,7 @@
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use solidcraft_io::catalog::{Catalog, FORMAT, Provenance, V1_FORMAT};
+use solidcraft_io::catalog::{Catalog, FORMAT, Provenance, V1_FORMAT, V3_FORMAT};
 
 /// Read a local library file and check it, without changing the design.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -36,11 +36,12 @@ pub struct LibraryExportParams {
     /// Replace the file if it exists. Without it, an existing file is refused and left as it is.
     #[serde(default)]
     pub overwrite: bool,
-    /// The file format. `solidcraft-library/1` refuses a design whose looks or materials have
-    /// PBR or physical cards, before writing anything.
-    #[serde(default = "default_format")]
+    /// The file format. Default: the oldest that keeps everything, `solidcraft-library/2`, or
+    /// `solidcraft-library/3` when a look names a material graph (docs/material-graph.md §4.2).
+    /// An explicit `solidcraft-library/1` refuses PBR or physical cards, and `/1` or `/2` refuse
+    /// material graphs, before writing anything.
     #[schemars(schema_with = "format_schema")]
-    pub format: String,
+    pub format: Option<String>,
 }
 
 fn default_id() -> String {
@@ -49,10 +50,6 @@ fn default_id() -> String {
 
 fn default_name() -> String {
     "My library".into()
-}
-
-fn default_format() -> String {
-    FORMAT.into()
 }
 
 /// Copy one library entry, at an exact revision, into this design in one undo step: an
@@ -174,7 +171,7 @@ fn provenance() -> Value {
 }
 
 fn format_schema(_: &mut SchemaGenerator) -> Schema {
-    json_schema!({"type": "string", "enum": [FORMAT, V1_FORMAT]})
+    json_schema!({"type": "string", "enum": [FORMAT, V1_FORMAT, V3_FORMAT]})
 }
 
 /// A look as a library saves it.
@@ -186,7 +183,9 @@ fn look() -> Value {
             "name": {"type": "string"},
             "color": {"description": "Red, green and blue, 0 to 255.", "type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3},
             "opacity": {"type": "number", "minimum": 0, "maximum": 1},
-            "pbr": {"description": "metallic (0 to 1), roughness (0.045 to 1) and dielectric_ior (1 to 3).", "type": "object"}
+            "pbr": {"description": "metallic (0 to 1), roughness (0.045 to 1) and dielectric_ior (1 to 3).", "type": "object"},
+            "graph": {"description": "A material graph of the library's `graphs`, by id (v3).", "type": "string"},
+            "values": {"description": "The graph's interface values, by input name (v3).", "type": "object"}
         },
         "required": ["name", "color", "opacity"]
     })
@@ -215,8 +214,10 @@ fn catalog_schema(_: &mut SchemaGenerator) -> Schema {
         "description": "A local library: no network, external resources or links to a design.",
         "type": "object",
         "properties": {
-            "format": {"type": "string", "enum": [FORMAT, V1_FORMAT]},
+            "format": {"type": "string", "enum": [FORMAT, V1_FORMAT, V3_FORMAT]},
             "id": {"description": "The library's id.", "type": "string"},
+            "graphs": {"description": "Material graphs the looks name, by id (v3).", "type": "object"},
+            "textures": {"description": "Texture assets the graphs and looks name, by SHA-256 (v3).", "type": "object"},
             "name": {"description": "The library's name.", "type": "string"},
             "entries": {
                 "type": "array",
