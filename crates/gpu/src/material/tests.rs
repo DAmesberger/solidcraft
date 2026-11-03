@@ -1004,3 +1004,47 @@ fn debug_corpus_graph() {
         }
     }
 }
+
+/// Slopes through vector maths (a component-wise multiply, add, mix, abs, power and clamp of a
+/// vector3, and of a position) into a height: the GPU carries each component's gradient as the
+/// reference does, so the relief survives.
+#[test]
+fn vector_slopes_match_the_reference() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let graph = |op: &str, extra: Value, source: &str| {
+        json!({"name": "vector slope", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"u": [0.7, 0, 0], "v": [0, 0.9, 0]}},
+            {"id": "n", "kind": "pattern.noise", "params": {"kind": "gradient"}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.8}},
+            {"id": "w", "kind": "pattern.weave", "inputs": {"texcoord": {"from": "uv"}, "pitch_mm": [0.6, 0.8]}},
+            {"id": "v", "kind": "combine3", "inputs": {"x": {"from": "n"}, "y": {"from": "w"}, "z": {"from": "n"}}},
+            {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
+            {"id": "op", "kind": op, "inputs": extra},
+            {"id": "s", "kind": "separate3", "inputs": {"in": {"from": "op"}}},
+            {"id": "h", "kind": "add", "inputs": {"a": {"from": "s.y"}, "b": {"from": "s.z"}}},
+            {"id": "nh", "kind": "normal.from_height", "inputs": {"height": {"from": "h"}, "relief_mm": 0.02}},
+            {"id": "out", "kind": "standard_surface", "inputs": {"geometry_normal": {"from": "nh"}}}], "output": "out"})
+        .to_string()
+        .replace("SRC", source)
+    };
+    let cases = [
+        graph("multiply", json!({"a": {"from": "SRC"}, "b": [2.0, 1.5, 0.5]}), "v"),
+        graph("add", json!({"a": {"from": "SRC"}, "b": {"from": "v"}}), "v"),
+        graph("mix", json!({"a": {"from": "SRC"}, "b": [0.2, 0.9, 0.4], "t": {"from": "n"}}), "v"),
+        graph("abs", json!({"in": {"from": "SRC"}}), "v"),
+        graph("power", json!({"a": {"from": "SRC"}, "b": 2.5}), "v"),
+        graph("clamp", json!({"in": {"from": "SRC"}, "low": 0.3, "high": 0.7}), "v"),
+        graph("sin", json!({"in": {"from": "SRC"}}), "p"),
+        graph("normalize", json!({"in": {"from": "SRC"}}), "v"),
+        graph("multiply", json!({"a": {"from": "SRC"}, "b": {"from": "v"}}), "p"),
+    ];
+    for (i, text) in cases.iter().enumerate() {
+        let (field, d) = worst_against_reference(&device, &queue, text).unwrap_or_else(|e| panic!("case {i}: {e}"));
+        assert!(d < 1e-3, "case {i}: {field} differs by {d}\n{text}");
+        // The relief is there: the normal is not the geometric one everywhere.
+        let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let tilted = reference::sample_points()
+            .iter()
+            .any(|p| reference::evaluate(&ir, &words, &[], p).is_ok_and(|e| (e.surface.normal[2] - p.world_normal[2]).abs() > 1e-4));
+        assert!(tilted, "case {i}: the height tilts the normal");
+    }
+}
