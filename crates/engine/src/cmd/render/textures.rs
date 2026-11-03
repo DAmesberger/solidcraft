@@ -48,6 +48,7 @@ fn load(
         MapRole::Roughness => 2,
         MapRole::Metallic => 3,
         MapRole::AmbientOcclusion => 4,
+        MapRole::Height => 5,
     };
     let key = (path.to_string(), role_key);
     if let Some(map) = captured.get(&key) {
