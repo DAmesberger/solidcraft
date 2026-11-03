@@ -136,44 +136,10 @@ fn pbr_fragment(pos: vec4<f32>, wp: vec3<f32>, n: vec3<f32>) -> PbrFragment {
     return PbrFragment(pos, wp, n, sc_unit(view), footprint);
 }
 
-// One evaluated surface point, as a material gives it to `pbr_shade`: the WGSL mirror of
-// `solidcraft_render::material_graph::SurfaceSample` (the `OpaqueSurface` core, its clear coat,
-// and the inputs the core lacks), with the point's shading frame. Colours are linear. Today's
-// `pbr_shade` reads the core, the coat and `normal`; the other inputs keep their
-// `surface_from_opaque` defaults until the shading that reads them lands.
-struct Surface {
-    base_color: vec3<f32>,
-    metalness: f32,
-    // Perceptual.
-    roughness: f32,
-    // The dielectric base's; 1: no interface of its own.
-    ior: f32,
-    // 0: no coat.
-    coat_weight: f32,
-    coat_roughness: f32,
-    // 1: no coat interface.
-    coat_ior: f32,
-    // Unit shading normals of the base and of the coat.
-    normal: vec3<f32>,
-    coat_normal: vec3<f32>,
-    specular_weight: f32,
-    specular_color: vec3<f32>,
-    // 0: isotropic. Stretched along `tangent` (unit; zero while isotropic), turned by
-    // `rotation` radians about the normal.
-    anisotropy: f32,
-    rotation: f32,
-    tangent: vec3<f32>,
-    // Tint of light through the coat.
-    coat_color: vec3<f32>,
-    // Relative luminance, like the product lights.
-    emission_luminance: f32,
-    emission_color: vec3<f32>,
-    transmission_weight: f32,
-    transmission_color: vec3<f32>,
-    transmission_depth_mm: f32,
-    // Cut-out coverage, not glass.
-    opacity: f32,
-};
+// One evaluated surface point, as a material gives it to `pbr_shade`: the shared library's
+// `sc_Surface` (the WGSL mirror of `material_graph::SurfaceSample`), which both GPU targets of the
+// material system fill.
+alias Surface = sc_Surface;
 
 // `SurfaceSample::from(OpaqueSurface)`: base colour, (metallic, roughness, IOR) and the coat's
 // (weight, roughness, IOR), every other input at its default, both normals `n`.
@@ -302,8 +268,7 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
 }
 
 /// [`SOURCE`]'s shared shading alone, for shaders that bring their own material and entries
-/// (material graphs' generated shaders, which drop the gate when they use it).
-#[cfg(test)]
+/// (material graphs' generated shaders).
 pub const SHADE: &str = concat!(crate::shading::library_source!(), "\n", shade_source!());
 
 /// The PBR shader appended to the viewport's: the shared shading library (`crate::shading`), the

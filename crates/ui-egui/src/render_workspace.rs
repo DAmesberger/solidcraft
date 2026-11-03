@@ -2206,10 +2206,16 @@ fn paint_product(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, camera
             }
             app.viewport.hl_key = highlight_key;
         }
+        // The preview's own look (`view.look` with `view: render_preview`); the window repaints
+        // until the studio is baked.
+        let product_look = crate::view_look::product_look(app, "render_preview");
+        if product_look.is_some() && !crate::gpu::studio_ready() {
+            ui.ctx().request_repaint();
+        }
         let slot = app.render_workspace.slot.clone();
         let callback = ViewportCallback(Frame {
             product_lights: Some(light::preview(app)?),
-            product_look: None,
+            product_look,
             units_per_mm: 1.0,
             product: true,
             upload_error: Some(app.render_workspace.upload_error.clone()),

@@ -19,7 +19,7 @@ use wgpu::util::DeviceExt;
 mod ao;
 mod clouds;
 pub use clouds::{CloudFilter, CloudStyle, ColorMode, DOT_SIZE, Dot, FILTERS, GpuCloud, cloud_dot};
-mod ibl;
+pub(crate) mod ibl;
 #[cfg(not(target_arch = "wasm32"))]
 mod msaa_check;
 mod oit;
@@ -217,7 +217,7 @@ pub(crate) struct Tally {
 
 impl Tally {
     /// A draw call of `vertices` triangle corners (or indices), `instances` times.
-    fn triangles(&self, vertices: u32, instances: u32) {
+    pub(crate) fn triangles(&self, vertices: u32, instances: u32) {
         self.call();
         self.triangles.set(self.triangles.get().saturating_add(u64::from(vertices / 3) * u64::from(instances)));
     }
@@ -466,6 +466,9 @@ pub struct GpuScene {
     /// Opaque product PBR vertices ([`PBR_SIZE`] each); linear base color and explicit optical
     /// parameters.
     pub pbr: Vec<u8>,
+    /// Opaque material-graph surfaces (docs/material-graph.md §5.2): their uniform pages and one
+    /// vertex list per (shape, page, texture set).
+    pub graphs: crate::material::GraphScene,
     /// Translucent triangles (alpha from the colour), drawn after the opaque ones without
     /// writing depth.
     pub trans: Vec<u8>,
@@ -1626,6 +1629,8 @@ struct Batches {
     key: Option<u64>,
     tris: Option<Batch>,
     pbr: Option<Batch>,
+    /// The scene's material-graph surfaces.
+    graphs: crate::material::cache::GraphBatches,
     trans: Option<Batch>,
     shadow: Option<Batch>,
     glass: Option<Batch>,
@@ -1713,6 +1718,7 @@ impl Batches {
                 order.push(block.key);
             }
             self.block_order = order;
+            geometry += self.graphs.take(device, queue, &sc.graphs);
             let mut own = |label: &str, data: &[u8], stride: usize| {
                 geometry += data.len() as u64;
                 upload(device, label, data, stride)
@@ -2094,6 +2100,8 @@ pub struct Renderer {
     ss_filter_look: wgpu::RenderPipeline,
     /// The product look's studios, the PBR pipeline's group [`pbr::STUDIO_GROUP`].
     studios: ibl::Studios,
+    /// Material-graph pipelines by shape, and their fallback.
+    materials: crate::material::cache::Materials,
     /// The frame drawn offscreen at the viewport's own size (for the see-through surfaces' order-
     /// independent transparency), copied as it is.
     copy_blit: wgpu::RenderPipeline,
@@ -2481,7 +2489,7 @@ impl Renderer {
     /// kind. When the two differ (a 1× window pass with no depth, say, and a multisampled scene
     /// target), the scene is always drawn offscreen and blitted into the window's pass.
     pub fn with_window_target(device: &wgpu::Device, t: GpuTarget, window: GpuTarget, tess: Option<crate::TessGpu>) -> Self {
-        let source = format!("{SHADER}\n{}", pbr::SOURCE);
+        let source = format!("{SHADER}\n{}\n{}", pbr::SOURCE, crate::material::STREAM);
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sc_viewport"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2692,9 +2700,12 @@ impl Renderer {
         });
         let ao_layout = ao::Resources::layout(device);
         let ao = || ao::Resources::new(device, &ao_layout, &bgl, &module, reversed);
+        // The product look's studios (group 3): read by the PBR pipeline and, in the Realistic
+        // look, by the opaque faces' `face_lit`, so the solid pipelines take the group too.
+        let studios = ibl::Studios::new(device);
         let solid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sc_solid"),
-            bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout)],
+            bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
             immediate_size: 0,
         });
         let built = [Some(tri_layout())];
@@ -2942,9 +2953,7 @@ impl Renderer {
                 solid("sc_tris_hl_instanced_flat", "fs_tri", None, highlight_depth(t.depth), TriSource::InstancedFlat),
             )
         };
-        // The PBR pipeline reads the product look's studio (group 3); groups 1 and 2 are the solid
-        // pipelines', bound for them before the PBR draw.
-        let studios = ibl::Studios::new(device);
+        // The PBR pipeline has the solid pipelines' groups, bound before their draws.
         let pbr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sc_pbr"),
             bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
@@ -2974,6 +2983,7 @@ impl Renderer {
             })
         };
         let pbr = || pbr_pipeline("vs_pbr", pbr_layout());
+        let materials = crate::material::cache::Materials::new(device, [&bgl, &access_bgl, &ao_layout], t.format, t.samples, opaque());
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -3038,6 +3048,7 @@ impl Renderer {
                 ss_blit_look,
                 ss_filter_look,
                 studios,
+                materials,
                 copy_blit,
                 ss_scaled: false,
                 oit,
@@ -3462,6 +3473,7 @@ impl Renderer {
     /// content is the same as the picture drawn last is not drawn again: that picture is blitted
     /// instead, so pointer moves and UI animations over a still view cost no scene work.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, frame: &Frame) {
+        let started = web_time::Instant::now();
         let res = self;
         let cb = frame;
         let key = frame_key(cb);
@@ -3469,7 +3481,8 @@ impl Renderer {
             // A still frame shows the picture as it is; the first one filters it down once.
             let filter = res.ss_scaled && res.cached.is_none();
             if filter {
-                res.cache_picture(device, encoder, cb.size_px, product_look(cb).is_some());
+                let redither = res.redithers(cb);
+                res.cache_picture(device, encoder, cb.size_px, redither);
             }
             // The scene isn't drawn again: `paint`'s blit (and that filter) is all this frame draws.
             res.ss_stats = DrawStats { draw_calls: u32::from(filter), ..DrawStats::default() };
@@ -3499,12 +3512,19 @@ impl Renderer {
                 }
             }
             res.product.sort_glass(queue, cb.back);
+            res.materials.prepare(device, queue, &res.product.graphs, started);
+            res.product.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
             res.highlight.take(device, queue, &res.uniform, &res.uniform_bgl, cb.hl_key, &cb.hl_slot, None, false);
-            queue.write_buffer(&res.uniform, 0, &uniform_bytes(cb, cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()));
+            queue.write_buffer(
+                &res.uniform,
+                0,
+                &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()),
+            );
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.
             res.ss_ready = (res.window_differs() || cb.ssaa != 1.0) && res.supersample(device, encoder, cb, false);
-            res.ss_key = res.ss_ready.then_some(key);
+            // A picture with shapes still compiling is not kept: the next frame draws them.
+            res.ss_key = res.ss_ready.then_some(key).filter(|_| !res.materials.wants_redraw());
             return;
         }
         res.take_ready_tessellation();
@@ -3521,6 +3541,8 @@ impl Renderer {
         res.sketch.take(device, queue, &res.uniform, &res.uniform_bgl, cb.sketch_key, &cb.sketch_slot, None, res.oit.is_some());
         res.highlight.take(device, queue, &res.uniform, &res.uniform_bgl, cb.hl_key, &cb.hl_slot, None, res.oit.is_some());
         res.preview.take(device, queue, &res.uniform, &res.uniform_bgl, cb.pv_key, &cb.pv_slot, None, res.oit.is_some());
+        res.materials.prepare(device, queue, &res.model.graphs, started);
+        res.model.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
         // See-through surfaces are drawn without sorting where the device can (order-independent
         // transparency, in an offscreen frame); else their triangles are sorted for the view.
         let see_through = res.oit.is_some() && res.model.see_through();
@@ -3528,7 +3550,11 @@ impl Renderer {
             res.model.sort_glass(queue, cb.back);
         }
         res.model.cull(queue, &cb.view_proj, cb.size_px);
-        queue.write_buffer(&res.uniform, 0, &uniform_bytes(cb, cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()));
+        queue.write_buffer(
+            &res.uniform,
+            0,
+            &frame_uniform(cb, res.drawn_look(cb), cb.size_px[0], cb.size_px[1], res.linear_out, res.target.reversed_depth()),
+        );
         if let Some(a) = &cb.access
             && a.version != res.access_version
         {
@@ -3537,7 +3563,7 @@ impl Renderer {
         }
         let ao_binds = [scene_bind(&res.model, &res.bind), scene_bind(&res.preview, &res.bind)];
         // PBR surfaces join the depth map only with the product look (the only frames that occlude them).
-        let look = product_look(cb).is_some();
+        let look = res.drawn_look(cb).is_some();
         res.ao.prepare(device, encoder, ao_binds, cb.ao_radius, cb.size_px, res.target.reversed_depth(), [&res.model, &res.preview], look);
         // Images: upload new or changed textures, drop removed ones, rebuild the quads.
         res.textures.retain(|id, _| cb.images.iter().any(|i| i.id == *id));
@@ -3590,7 +3616,7 @@ impl Renderer {
         }
         res.clouds.prepare(device, queue, &res.cloud_pipes, &cb.clouds);
         res.ss_ready = (cb.ssaa != 1.0 || see_through || res.window_differs()) && res.supersample(device, encoder, cb, see_through);
-        res.ss_key = res.ss_ready.then_some(key);
+        res.ss_key = res.ss_ready.then_some(key).filter(|_| !res.materials.wants_redraw());
     }
 
     /// Draw the frame into `pass` within `viewport` (x, y, width, height in physical pixels):
@@ -3609,7 +3635,7 @@ impl Renderer {
                 pass.set_pipeline(&self.copy_blit);
                 pass.set_bind_group(0, &cached.bind, &[]);
             } else {
-                let filter = if product_look(frame).is_some() { &self.ss_blit_look } else { &self.ss_blit };
+                let filter = if self.redithers(frame) { &self.ss_blit_look } else { &self.ss_blit };
                 pass.set_pipeline(if self.ss_scaled { filter } else { &self.copy_blit });
                 pass.set_bind_group(0, &ss.bind, &[]);
             }
@@ -3634,6 +3660,23 @@ impl Renderer {
     }
 
     /// What the last frame drew; the handle stays current as later frames are drawn.
+    /// What material-graph drawing did in the last frame: shapes compiled, waiting and failed, and
+    /// draws that showed a base response (docs/material-graph.md §5.2, §5.6).
+    pub fn material_stats(&self) -> crate::material::MaterialStats {
+        self.materials.stats()
+    }
+
+    /// Material-graph shapes are still compiling, so the next frame draws more than the last: a
+    /// client asks for another frame (the kept picture is not reused meanwhile).
+    pub fn wants_redraw(&self) -> bool {
+        self.materials.wants_redraw()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn materials_mut(&mut self) -> &mut crate::material::cache::Materials {
+        &mut self.materials
+    }
+
     pub fn stats(&self) -> DrawStatsHandle {
         self.stats.clone()
     }
@@ -3669,6 +3712,20 @@ impl Renderer {
     /// Whether `preset`'s studio is installed.
     pub fn has_studio_environment(&self, preset: StudioPreset) -> bool {
         self.studios.has(preset)
+    }
+
+    /// The look `frame` is drawn in: its product look, except that a look with nothing to light
+    /// it, no product lights and its studio not installed yet, draws the standard picture until
+    /// the studio is (the Realistic view of a modelling viewport: docs/material-graph.md §6.3).
+    fn drawn_look(&self, frame: &Frame) -> Option<ProductLook> {
+        product_look(frame).filter(|look| frame.product_lights.is_some() || self.studios.has(look.studio))
+    }
+
+    /// Whether a supersampled frame is filtered down with the product look's ±1 LSB re-dither.
+    /// Only the product preview's: in a modelling view's Realistic look the selection, edges and
+    /// sketches keep their exact theme colours, as in the standard look (§6.2).
+    fn redithers(&self, frame: &Frame) -> bool {
+        frame.product && self.drawn_look(frame).is_some()
     }
 
     /// Evaluate planned bodies with `later`'s pipeline once it has compiled (#4860).
@@ -3729,9 +3786,12 @@ impl Renderer {
                 }
             }
         };
+        // The solid and PBR pipelines' groups 1 to 3; the studio is read only in the product look.
+        let studio = res.studios.bind(res.drawn_look(cb).map(|look| look.studio));
         if phase == Phase::AfterSeeThrough {
             pass.set_bind_group(1, &res.access_bind, &[]);
             pass.set_bind_group(2, &res.ao.maps.bind, &[]);
+            pass.set_bind_group(pbr::STUDIO_GROUP, studio, &[]);
             Self::draw_over(res, pass, sk, h, pv, m, &tris, &lines);
             return;
         }
@@ -3741,6 +3801,7 @@ impl Renderer {
         lines(pass, &res.overlay, &sk.under);
         pass.set_bind_group(1, &res.access_bind, &[]);
         pass.set_bind_group(2, &res.ao.maps.bind, &[]);
+        pass.set_bind_group(pbr::STUDIO_GROUP, studio, &[]);
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         let planned = |pass: &mut wgpu::RenderPass<'static>, p: &wgpu::RenderPipeline| {
             for d in m.planned.iter().filter(|d| d.class == TriClass::Opaque) {
@@ -3842,8 +3903,8 @@ impl Renderer {
             }
         }
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
-        pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(product_look(cb).map(|look| look.studio)), &[]);
         tris(pass, &res.pbr, &m.pbr);
+        m.graphs.draw(pass, &res.materials, tally);
         if !cb.product {
             res.clouds.paint(pass, &res.cloud_pipes, tally);
         }
@@ -4277,6 +4338,11 @@ fn load_depth<T>(first: bool, clear: T) -> wgpu::LoadOp<T> {
 
 /// Uniform bytes for a frame.
 pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -> Vec<u8> {
+    frame_uniform(cb, cb.product_look, w, h, linear, reversed)
+}
+
+/// [`uniform_bytes`] with the look the frame is drawn in ([`Renderer::drawn_look`]).
+fn frame_uniform(cb: &Frame, look: Option<ProductLook>, w: f32, h: f32, linear: bool, reversed: bool) -> Vec<u8> {
     let mut v: Vec<f32> = gpu_view_proj(cb.view_proj, reversed).iter().flatten().copied().collect();
     v.extend([cb.back[0], cb.back[1], cb.back[2], if linear { 1.0 } else { 0.0 }]);
     v.extend([w.max(1.0), h.max(1.0), 0.0, if cb.outline { 1.0 } else { 0.0 }]);
@@ -4307,7 +4373,7 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
         v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
     }
     // The product look ([`ProductLook::uniform`]; all zero without it), then the scene's units.
-    v.extend(cb.product_look.map_or([0.0; 4], |look| look.uniform()));
+    v.extend(look.map_or([0.0; 4], |look| look.uniform()));
     v.extend([units_per_mm(cb), 0.0, 0.0, 0.0]);
     v.extend(cb.sky.map(|value| if value.is_finite() { value } else { 0.0 }));
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -4481,10 +4547,13 @@ mod tests {
         }
     }
 
-    /// The viewport shader parses and validates (a bad shader would only fail at run time).
+    /// The viewport shader, with the PBR shading its opaque faces share in the Realistic look
+    /// (`pbr::SOURCE`, as the renderer compiles them), parses and validates (a bad shader would
+    /// only fail at run time).
     #[test]
     fn shader_is_valid() {
-        let module = naga::front::wgsl::parse_str(super::SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::SHADER)));
+        let source = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty()).validate(&module).unwrap();
     }
 
@@ -4809,7 +4878,10 @@ mod tests {
 }
 
 #[cfg(test)]
-mod glass_tests {
+mod realistic_tests;
+
+#[cfg(test)]
+pub(crate) mod glass_tests {
     use super::*;
 
     #[test]
@@ -5123,7 +5195,7 @@ mod glass_tests {
     }
 
     /// Render `frame` through `r` into a fresh 64 × 64 target and read the pixels back.
-    fn render_frame(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame, with_depth: bool) -> Vec<u8> {
+    pub(crate) fn render_frame(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame, with_depth: bool) -> Vec<u8> {
         const SIZE: u32 = 64;
         let depth = crate::depth_format(device, true);
         let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -5193,7 +5265,7 @@ mod glass_tests {
     }
 
     /// A frame showing `scene` at a fixed view, `ssaa` times the viewport's pixels each way.
-    fn test_frame(scene: GpuScene, ssaa: f32) -> Frame {
+    pub(crate) fn test_frame(scene: GpuScene, ssaa: f32) -> Frame {
         const SIZE: u32 = 64;
         let none = || Arc::new(Mutex::new(None));
         Frame {
@@ -5233,14 +5305,14 @@ mod glass_tests {
     }
 
     /// `preset`'s studio, baked once for all the tests (off the renderer, as a client bakes it).
-    fn studio(preset: StudioPreset) -> StudioEnvironment {
+    pub(crate) fn studio(preset: StudioPreset) -> StudioEnvironment {
         static BAKED: [std::sync::OnceLock<StudioEnvironment>; 3] = [const { std::sync::OnceLock::new() }; 3];
         let slot = BAKED.get(preset.id() as usize).unwrap_or(&BAKED[0]);
         slot.get_or_init(|| StudioEnvironment::bake(preset)).clone()
     }
 
     /// A PBR square over the whole fixed view, facing the viewer (+Z).
-    fn pbr_scene(base: Vec3, metallic: f64, roughness: f64, ior: f64) -> Option<GpuScene> {
+    pub(super) fn pbr_scene(base: Vec3, metallic: f64, roughness: f64, ior: f64) -> Option<GpuScene> {
         let surface = solidcraft_render::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok()?;
         let mut scene = GpuScene::default();
         for p in [[-12.0, -12.0, 0.0], [12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, -12.0, 0.0], [12.0, 12.0, 0.0], [-12.0, 12.0, 0.0]] {
@@ -5269,7 +5341,7 @@ mod glass_tests {
     }
 
     /// The pixels inside the square (away from the frame's edge), RGB.
-    fn inner_pixels(bytes: &[u8]) -> Vec<[u8; 3]> {
+    pub(crate) fn inner_pixels(bytes: &[u8]) -> Vec<[u8; 3]> {
         const SIZE: usize = 64;
         let mut out = Vec::new();
         for y in 8..SIZE - 8 {

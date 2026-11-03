@@ -127,6 +127,18 @@ pub(crate) fn navigation_button(ui: &mut Ui, rect: Rect, button: NavigationButto
     navigation_button_editable(ui, rect, button, false)
 }
 
+/// A small dot on the top-right corner of a menu slot's icon ([`navigation_button`]'s), in the
+/// primary colour: the slot's menu has an extra mode switched on (the visual-style slot's
+/// Realistic view).
+pub(crate) fn navigation_menu_badge(ui: &Ui, rect: Rect) {
+    let t = Tokens::get();
+    let metrics =
+        NavigationMetrics::for_size(if rect.height() < NavigationMetrics::for_size(Size::Regular).button { Size::Compact } else { Size::Regular });
+    let icon = Rect::from_center_size(pos2(rect.left() + NAV_MENU_LEFT + metrics.icon / 2.0, rect.center().y), vec2(metrics.icon, metrics.icon));
+    let radius = (metrics.icon / 7.0).max(2.0);
+    ui.painter().circle(icon.right_top() + vec2(-radius * 0.5, radius * 0.5), radius, t.form_primary, egui::Stroke::new(1.0, t.dialog_body));
+}
+
 pub(crate) fn navigation_button_editable(ui: &mut Ui, rect: Rect, button: NavigationButton<'_>, editing: bool) -> Response {
     let t = Tokens::get();
     let metrics =

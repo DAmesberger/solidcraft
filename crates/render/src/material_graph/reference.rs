@@ -37,8 +37,9 @@
 //!
 //! # The node formulas (the contract the back ends mirror)
 //!
-//! The noise and projection functions mirror the shared library (`crates/gpu/src/shading/`);
-//! **re-check** them when track S's `noise.wgsl` and track C1's `patterns.wgsl` land.
+//! The noise and projection functions mirror the shared library (`crates/gpu/src/shading/`,
+//! track S, mg-s de76684da). The patterns are defined here first; **re-check** them when track
+//! C1's `patterns.wgsl` lands.
 //!
 //! - **Gradients.** Every float carries its world-space gradient per mm. Positions carry their
 //!   Jacobian (identity in world space, rows of the inverse object-to-world map in object space);

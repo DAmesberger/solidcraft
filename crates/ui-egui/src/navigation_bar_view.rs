@@ -303,6 +303,12 @@ pub(crate) fn show(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     ui.data_mut(|d| d.insert_temp(menu_id, open));
 }
 
+/// Whether the view the bar steers shows the Realistic look.
+fn realistic(app: &SolveApp) -> bool {
+    let view = if crate::render_workspace::active(app) { "render_preview" } else { "model" };
+    crate::view_look::current(app, view) == crate::view_look::REALISTIC
+}
+
 pub(crate) fn current_style(app: &SolveApp) -> &str {
     app.tr(match app.ui.visual_style {
         1 => "navbar.style.shaded",
@@ -371,7 +377,11 @@ pub(crate) fn paint_row(
                         if editing.is_some() {
                             ui_kit::navigation_button_editable(ui, *bounds, button, true)
                         } else {
-                            ui_kit::navigation_button(ui, *bounds, button)
+                            let response = ui_kit::navigation_button(ui, *bounds, button);
+                            if slot.id == "visual_style" && realistic(app) {
+                                ui_kit::navigation_menu_badge(ui, *bounds);
+                            }
+                            response
                         }
                     }
                 })
@@ -443,6 +453,23 @@ fn style_menu(app: &mut SolveApp, ui: &mut egui::Ui) -> bool {
             let _ = app.run("view.visual_style", json!({"style":style}));
             chosen = true;
         }
+    }
+    // The look is a mode of its own beside the style (docs/material-graph.md §6.1).
+    ui_kit::navigation_menu_separator(ui);
+    let mut look = ui_kit::NavigationMenuRow::new("realistic", app.tr("navbar.realistic"), "render_scene");
+    look.selected = realistic(app);
+    let unavailable = crate::view_look::unavailable(app);
+    look.enabled = unavailable.is_none();
+    let response = look.show(ui);
+    crate::scenario::publish_target("nav:style:realistic", response.rect);
+    let tip = unavailable.unwrap_or_else(|| app.tr("cmd.view_look").to_owned());
+    let key = crate::keymap::display_for(app, "view.look");
+    let response = crate::command_help::tooltip(response, "view.look", key.map_or(tip.clone(), |key| format!("{tip} ({key})")));
+    if response.clicked() {
+        if let Err(why) = app.run("view.look", json!({})) {
+            app.set_status(why, true);
+        }
+        chosen = true;
     }
     ui_kit::navigation_menu_separator(ui);
     let mut later = ui_kit::NavigationMenuRow::new("translucent", app.tr("navbar.translucent"), "style_translucent");

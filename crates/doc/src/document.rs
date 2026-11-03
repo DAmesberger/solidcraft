@@ -3676,6 +3676,8 @@ impl Document {
         if d.features.len() > MAX_FEATURES || d.params.len() > MAX_PARAMS {
             return Err(DocError::Invalid("document too large".into()));
         }
+        // Material graphs, textures and the looks that use them (docs/material-graph.md §4).
+        d.check_appearance_graphs()?;
         // A design from elsewhere may nest groups too deep, loop, or name things that are gone.
         if let Some((groups, order)) = d.browser_pruned() {
             (d.browser_groups, d.browser_order) = (groups, order);

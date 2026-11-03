@@ -161,10 +161,17 @@ fn inherited_component_appearance_and_legacy_assignment_survive_transfer() {
     let mut s = Session::default();
     let source = run(&mut s, "component.create", json!({"name":"Source"}))["component"].as_u64().unwrap();
     run(&mut s, "solid.box", json!({"length":10,"width":10,"height":10,"body_name":"Block"}));
-    s.doc_mut()
-        .appearances
-        .components
-        .insert(source, solidcraft_doc::appearance::Look { name: "Green".into(), color: [0, 150, 0], opacity: 0.7, pbr: None });
+    s.doc_mut().appearances.components.insert(
+        source,
+        solidcraft_doc::appearance::Look {
+            name: "Green".into(),
+            color: [0, 150, 0],
+            opacity: 0.7,
+            pbr: None,
+            graph: None,
+            values: Default::default(),
+        },
+    );
     s.refresh();
     let look = s.doc.model_body_look(s.model.state().body("Block").unwrap()).unwrap();
     run(&mut s, "component.move_bodies", json!({"component":0,"bodies":["Block"]}));

@@ -184,10 +184,17 @@ remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
 ## Opt-in product look
 
 The GPU viewport has a second, opt-in shading path, the product look. It is the
-renderer underneath the Realistic view mode ([material graphs](material-graph.md) §6),
-which sets it; until that mode lands, nothing in SolidCraft turns it on, and the Render
-preview draws the default preview. Without it, everything above, the `cpu-product`
-parity and the viewport BRDF probe stay as they are. Progressive and CPU renders never
+renderer underneath the **Realistic** view mode ([material graphs](material-graph.md) §6):
+`view.look` (Shift+P, or **Realistic** in the navigation bar's visual-style menu) sets it
+for the modelling viewport or, with `view: "render_preview"`, for the Render preview. Each
+view's look is a preference remembered like the visual style, Standard by default and never
+saved in the design; without a GPU viewport the command refuses. In the Realistic look
+opaque faces with a scalar look are lit as a dielectric (their colour, roughness 0.5,
+IOR 1.5) through the same shading as PBR surfaces; selection and hover highlights, edges,
+sketches, faded and see-through surfaces keep the standard drawing, in theme colours. Until
+the studio is installed a frame with the look and no product lights draws the standard
+picture. Without the look, everything above, the `cpu-product` parity and the viewport BRDF
+probe stay as they are. Progressive and CPU renders never
 use it. Memory and upload bounds do not change: PBR vertices stay 48 bytes. A program
 that embeds the viewport (`solidcraft-gpu`) turns the look on with
 `Frame::product_look`, and bakes and installs the studio itself:
