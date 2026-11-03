@@ -294,6 +294,8 @@ struct PageGpu {
 
 struct DrawGpu {
     shape: ShapeKey,
+    /// What its vertices hash to: an unchanged draw keeps its buffer.
+    hash: u64,
     ir: Arc<Ir>,
     object: bool,
     page: usize,
@@ -312,9 +314,10 @@ pub(crate) struct GraphBatches {
 }
 
 impl GraphBatches {
-    /// Upload `scene`: pages whose words changed are rewritten, the others kept; the vertices are
-    /// uploaded anew. Returns the bytes written.
-    pub(crate) fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphScene) -> u64 {
+    /// Upload `scene`: pages whose words changed are rewritten, the others kept, and only draws
+    /// whose vertices changed are uploaded (a value edit writes pages alone). Returns the page and
+    /// vertex bytes written.
+    pub(crate) fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphScene) -> (u64, u64) {
         let mut written = 0u64;
         let mut pages = std::mem::take(&mut self.pages);
         pages.truncate(scene.pages().len());
@@ -344,12 +347,25 @@ impl GraphBatches {
         if rebind {
             self.bound = None;
         }
-        self.draws.clear();
+        let pages_written = written;
+        written = 0;
+        let mut old: HashMap<(ShapeKey, usize, u64), DrawGpu> =
+            std::mem::take(&mut self.draws).into_iter().map(|d| ((d.shape, d.page, d.hash), d)).collect();
         for draw in scene.draws() {
             let stride = GraphScene::stride(draw.object);
             let vertices = u32::try_from(draw.vertices.len() / stride).unwrap_or(0);
             let (Some(ir), Ok(page)) = (scene.shape(&draw.shape), usize::try_from(draw.page)) else { continue };
             if vertices < 3 || draw.vertices.len() as u64 > device.limits().max_buffer_size {
+                continue;
+            }
+            let hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                draw.vertices.hash(&mut h);
+                h.finish()
+            };
+            if let Some(kept) = old.remove(&(draw.shape, page, hash)) {
+                self.draws.push(DrawGpu { ir: ir.clone(), object: draw.object, ..kept });
                 continue;
             }
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -362,13 +378,9 @@ impl GraphBatches {
             bytes.resize(bytes.len().div_ceil(4) * 4, 0);
             queue.write_buffer(&buffer, 0, &bytes);
             written += bytes.len() as u64;
-            self.draws.push(DrawGpu { shape: draw.shape, ir: ir.clone(), object: draw.object, page, buffer, vertices: vertices / 3 * 3 });
+            self.draws.push(DrawGpu { shape: draw.shape, hash, ir: ir.clone(), object: draw.object, page, buffer, vertices: vertices / 3 * 3 });
         }
-        written
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.draws.is_empty()
+        (pages_written, written)
     }
 
     /// Make the group-3 binds (studio + page) for the frame's studio, when it or the pages changed.
@@ -398,16 +410,6 @@ impl GraphBatches {
             if fallback {
                 pipelines.fallback_draws.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-        }
-    }
-
-    /// The surfaces' depth or occlusion term in an AO pass, with that pass's pipelines for plain
-    /// and object vertices.
-    pub(crate) fn draw_ao(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &[wgpu::RenderPipeline; 2]) {
-        for draw in &self.draws {
-            pass.set_pipeline(if draw.object { &pipelines[1] } else { &pipelines[0] });
-            pass.set_vertex_buffer(0, draw.buffer.slice(..));
-            pass.draw(0..draw.vertices, 0..1);
         }
     }
 }

@@ -593,3 +593,53 @@ fn the_ambient_occlusion_radius_follows_what_is_drawn() {
     app.preferences.ambient_occlusion = false;
     assert_eq!(super::ao_radius(&app), 0.0, "off");
 }
+
+/// Material-graph looks in the model view: in the Realistic view (with a GPU), a body whose look
+/// names a graph puts its faces into the scene's material stream, over the faces it still draws;
+/// a face's own graph look wins over the body's; the Standard view, or a look without a graph,
+/// adds nothing; and a value edit changes only the uniform page, not the vertices.
+#[test]
+fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    let graph = |base: [f64; 3]| {
+        json!({"name": "Brushed", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}},
+            {"id": "lines", "kind": "pattern.brushed", "inputs": {"texcoord": {"from": "uv"}}},
+            {"id": "s", "kind": "standard_surface", "inputs": {"base_color": base, "specular_roughness": {"from": "lines", "fallback": 0.4}, "base_metalness": 1}}],
+            "output": "s"})
+    };
+    app.run("appearance.graph.create", json!({"id": "brushed", "name": "Brushed", "graph": graph([0.8, 0.77, 0.7])})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "plain", "name": "Plain", "graph": {"name": "Plain", "interface": [{"name": "tint", "type": "color3", "default": [0.5, 0.5, 0.5]}],
+        "nodes": [{"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"interface": "tint"}}}], "output": "s"}})).unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "brushed"})).unwrap();
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "graph": "plain", "values": {"tint": [0.1, 0.2, 0.3]}})).unwrap();
+    let counts = |app: &SolveApp| {
+        let sc = build_scene(app);
+        let draws = sc.graphs.draws().to_vec();
+        let vertices = draws.iter().map(|d| d.vertices.len() / solidcraft_gpu::material::GraphScene::stride(d.object)).sum::<usize>();
+        (draws, vertices, sc.graphs.pages().to_vec(), sc.tris.len() + sc.blocks.len())
+    };
+    let (draws, vertices, _, _) = counts(&app);
+    assert!(draws.is_empty() && vertices == 0, "the Standard view draws no graph");
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.view_look = crate::view_look::REALISTIC;
+    let (draws, vertices, pages, faces_drawn) = counts(&app);
+    assert_eq!(draws.len(), 2, "two shapes: the body's graph and the top face's");
+    assert!(faces_drawn > 0, "the faces are still drawn as the scene's own triangles");
+    let mesh = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.mesh()).unwrap_or_default();
+    assert_eq!(vertices, mesh.triangles.len() * 3, "every face is shaded by a graph");
+    let top: usize = draws.iter().filter(|d| !d.object).map(|d| d.vertices.len() / solidcraft_gpu::material::VERTEX_SIZE).sum();
+    assert!(top > 0 && top < vertices, "the top face has its own graph");
+    // A value edit: the same shapes and vertices, another page.
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "graph": "plain", "values": {"tint": [0.9, 0.2, 0.3]}})).unwrap();
+    let (edited, _, edited_pages, _) = counts(&app);
+    assert_eq!(edited, draws, "a value edit keeps every vertex");
+    assert_ne!(edited_pages, pages, "and rewrites the page");
+    // A look without a graph adds nothing.
+    app.run("appearance.assign", json!({"bodies": [body], "color": [10, 20, 30]})).unwrap();
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "color": [10, 20, 30]})).unwrap();
+    assert!(counts(&app).0.is_empty());
+}

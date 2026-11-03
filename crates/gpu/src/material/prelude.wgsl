@@ -33,9 +33,15 @@ fn fs_mat(i: MatOut) -> @location(0) vec4<f32> {
     let ox = dpdx(i.op) * mm;
     let oy = dpdy(i.op) * mm;
     let fw = f.footprint * mm;
+    // Under a section the face it shades is cut away: so is its shading.
+    if (clipped(i.wp)) { discard; }
     let frame = sc_object_frame(wx, wy, ox, oy);
     let n = sc_unit(i.n);
     let n_object = sc_unit(transpose(frame.to_world) * n);
-    let c = sc_GraphCtx(i.record, f.v, n, sc_default_tangent(n), abs(dot(n, f.v)), n_object, i.wp * mm, i.op * mm, max(max(fw.x, fw.y), fw.z), frame);
+    // The geometric tangent is the object's, carried into world space (the reference's placed
+    // point): a rotated occurrence keeps its patterns' orientation.
+    let carried = frame.to_world * sc_default_tangent(n_object);
+    let tangent = sc_clean_tangent(carried, n, sc_default_tangent(n));
+    let c = sc_GraphCtx(i.record, f.v, n, tangent, abs(dot(n, f.v)), n_object, i.wp * mm, i.op * mm, max(max(fw.x, fw.y), fw.z), frame);
     return pbr_shade(material_eval(c), f);
 }

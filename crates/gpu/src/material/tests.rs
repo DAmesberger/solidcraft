@@ -87,21 +87,6 @@ fn every_fixture_shape_validates_and_translates_for_webgl2() {
     }
 }
 
-/// The viewport module carries the material streams (its AO passes draw them): their entries
-/// translate to WebGL2 too.
-#[test]
-fn the_viewport_module_has_the_material_streams() {
-    let source = format!("{}\n{}\n{}", crate::view::SHADER, crate::pbr::SOURCE, super::STREAM);
-    let entries = [
-        (naga::ShaderStage::Vertex, "vs_mat"),
-        (naga::ShaderStage::Vertex, "vs_mat_object"),
-        (naga::ShaderStage::Fragment, "fs_ao_depth_mat"),
-        (naga::ShaderStage::Fragment, "fs_ao_term_mat"),
-        (naga::ShaderStage::Fragment, "fs_pbr"),
-    ];
-    glsl(&source, &entries).unwrap_or_else(|e| panic!("{e}"));
-}
-
 /// Derivatives stay in uniform control flow: `fs_mat` takes all of them before anything else, and
 /// generated code never branches or takes one (§5.1).
 #[test]
@@ -111,7 +96,10 @@ fn generated_code_is_straight_line_without_derivatives() {
     let last_derivative = ["dpdx", "dpdy", "fwidth"].iter().filter_map(|d| entry.rfind(d)).max().unwrap_or(0);
     let first_call = entry.find("material_eval").unwrap_or(0);
     assert!(last_derivative < first_call, "derivatives before the material");
-    assert!(!entry.contains("if ") && !entry.contains("for ") && !entry.contains("loop"), "fs_mat does not branch");
+    // Its one branch, the section clip, comes after every derivative.
+    assert!(entry.find("if ").is_some_and(|b| b > last_derivative), "the clip follows the derivatives");
+    assert_eq!(entry.matches("if ").count(), 1, "fs_mat branches only for the section");
+    assert!(!entry.contains("for ") && !entry.contains("loop"), "fs_mat does not loop");
     for (name, text) in FIXTURES {
         let eval = super::material_eval(&fixture(text).ir).unwrap_or_default();
         for banned in ["if ", "if(", "for ", "loop", "while", "dpdx", "dpdy", "fwidth", "discard", "return"] {
@@ -515,6 +503,12 @@ fn add_square(scene: &mut GpuScene, l: &Lowered, i: usize, n: usize) {
         let p = [if p[0] < 0.0 { x0 } else { x1 }, p[1], p[2]];
         scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
     }
+    // The face the graph shades, as the scene draws it.
+    let face = scene.color([200, 200, 200, 255]);
+    for p in SQUARE {
+        let p = [if p[0] < 0.0 { x0 } else { x1 }, p[1], p[2]];
+        scene.tri(p, [0.0, 0.0, 1.0], face);
+    }
 }
 
 fn pbr_square(surface: solidcraft_render::surface::OpaqueSurface) -> GpuScene {
@@ -713,15 +707,19 @@ fn shapes_compile_within_the_frame_budget() {
         }
         let m = edited.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
         let n = shapes.len() as f32;
+        let face = edited.color([200, 200, 200, 255]);
         for p in SQUARE {
             let x = -12.0 + 24.0 * (i as f32 + if p[0] < 0.0 { 0.0 } else { 1.0 }) / n;
             edited.graphs.vertex(m, [x, p[1], p[2]], [0.0, 0.0, 1.0], [x, p[1], p[2]]);
+            edited.tri([x, p[1], p[2]], [0.0, 0.0, 1.0], face);
         }
     }
     render_frame(&mut r, &device, &queue, &realistic(edited, 4, 1.0), true);
     let s = r.material_stats();
     assert_eq!((s.compiled, s.pending, s.fallback_draws), (0, 0, 0), "a value edit compiles nothing: {s:?}");
-    assert!(r.uploads().geometry >= super::PAGE_BYTES, "the edited page is rewritten");
+    let uploads = r.uploads();
+    assert!(uploads.material_pages >= super::PAGE_BYTES, "the edited page is rewritten: {uploads:?}");
+    assert_eq!(uploads.material_vertices, 0, "and no vertex is uploaded again: {uploads:?}");
 }
 
 /// The cache keeps at most its capacity, never drops a shape drawn this frame (a shape past it

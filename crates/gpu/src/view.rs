@@ -202,6 +202,10 @@ pub struct UploadStats {
     pub planned: u64,
     /// Vertices of planned bodies evaluated again on the GPU (chunks whose plans changed).
     pub evaluated: u64,
+    /// Material-graph uniform pages rewritten (a value edit writes only these).
+    pub material_pages: u64,
+    /// Material-graph vertices uploaded (only draws whose vertices changed).
+    pub material_vertices: u64,
 }
 
 /// The renderer's last [`DrawStats`], shared with the UI that shows them.
@@ -466,8 +470,10 @@ pub struct GpuScene {
     /// Opaque product PBR vertices ([`PBR_SIZE`] each); linear base color and explicit optical
     /// parameters.
     pub pbr: Vec<u8>,
-    /// Opaque material-graph surfaces (docs/material-graph.md §5.2): their uniform pages and one
-    /// vertex list per (shape, page, texture set).
+    /// Material-graph shading of opaque faces this scene also draws (in `tris`, its blocks, plans
+    /// or instances), for the realistic look (docs/material-graph.md §5.2): their uniform pages
+    /// and one vertex list per (shape, page, texture set). Drawn over those faces without
+    /// writing depth, so the faces keep their depth, occlusion, edges and highlights.
     pub graphs: crate::material::GraphScene,
     /// Translucent triangles (alpha from the colour), drawn after the opaque ones without
     /// writing depth.
@@ -1718,7 +1724,9 @@ impl Batches {
                 order.push(block.key);
             }
             self.block_order = order;
-            geometry += self.graphs.take(device, queue, &sc.graphs);
+            let (pages, vertices) = self.graphs.take(device, queue, &sc.graphs);
+            self.uploads.material_pages = pages;
+            self.uploads.material_vertices = vertices;
             let mut own = |label: &str, data: &[u8], stride: usize| {
                 geometry += data.len() as u64;
                 upload(device, label, data, stride)
@@ -2489,7 +2497,7 @@ impl Renderer {
     /// kind. When the two differ (a 1× window pass with no depth, say, and a multisampled scene
     /// target), the scene is always drawn offscreen and blitted into the window's pass.
     pub fn with_window_target(device: &wgpu::Device, t: GpuTarget, window: GpuTarget, tess: Option<crate::TessGpu>) -> Self {
-        let source = format!("{SHADER}\n{}\n{}", pbr::SOURCE, crate::material::STREAM);
+        let source = format!("{SHADER}\n{}", pbr::SOURCE);
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sc_viewport"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2983,7 +2991,7 @@ impl Renderer {
             })
         };
         let pbr = || pbr_pipeline("vs_pbr", pbr_layout());
-        let materials = crate::material::cache::Materials::new(device, [&bgl, &access_bgl, &ao_layout], t.format, t.samples, opaque());
+        let materials = crate::material::cache::Materials::new(device, [&bgl, &access_bgl, &ao_layout], t.format, t.samples, overlay_depth(t.depth));
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -3135,6 +3143,24 @@ fn highlight_depth(format: Option<wgpu::TextureFormat>) -> Option<wgpu::DepthSte
         bias: depth_bias(reversed, HIGHLIGHT_BIAS),
     })
 }
+
+/// Material-graph surfaces (`GpuScene::graphs`) shade faces the scene also draws as opaque
+/// triangles: they test against those faces' depth without writing it, pushed back half as far
+/// ([`OVERLAY_BIAS`]), so f32 differences between the two (planned bodies are evaluated on the GPU)
+/// never let the face show through, while edges, hover and selection tints still draw over them.
+fn overlay_depth(format: Option<wgpu::TextureFormat>) -> Option<wgpu::DepthStencilState> {
+    let reversed = reversed_depth(format);
+    format.map(|format| wgpu::DepthStencilState {
+        format,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(depth_compare(reversed, wgpu::CompareFunction::LessEqual)),
+        stencil: Default::default(),
+        bias: depth_bias(reversed, OVERLAY_BIAS),
+    })
+}
+
+/// Half of [`FACE_BIAS`]: in front of the faces, behind the edges drawn on them.
+const OVERLAY_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: FACE_STEPS / 2, slope_scale: FACE_SLOPE / 2.0, clamp: 0.0 };
 
 /// See [`highlight_depth`]. Negative: toward the eye (depth grows away from it).
 const HIGHLIGHT_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: -8, slope_scale: -1.0, clamp: 0.0 };

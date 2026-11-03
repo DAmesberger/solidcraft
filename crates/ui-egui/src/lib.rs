@@ -314,6 +314,7 @@ pub(crate) mod view_look;
 pub mod view_pick;
 pub mod viewport;
 mod viewport_details;
+pub(crate) mod viewport_graphs;
 mod viewport_layout;
 mod viewport_status;
 mod viewport_status_fixture;
