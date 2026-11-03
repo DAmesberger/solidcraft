@@ -69,6 +69,6 @@ The viewport evaluates it in the shared shading library (`sc_coat_layer` in
 `crates/gpu/src/shading/bsdf.wgsl`, which also takes a coat normal of its own); its
 studio term tints the base's reflection and diffuse light by the same two passes. The
 f64 oracle is `clear_coat::tinted_coat_brdf`, compiled only for tests (the render
-crate's `oracle` feature, enabled by the GPU crate's tests); no CPU renderer shades a
+crate's `test-reference` feature, enabled by the GPU crate's tests); no CPU renderer shades a
 coat colour. The GPU path tracer has no lobe for it and draws the coat untinted,
 reporting the approximation (decision O10).

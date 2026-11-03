@@ -4439,9 +4439,15 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let size_px = [rect.width() * ppp, rect.height() * ppp];
         let ssaa = supersampling(app, ui.ctx(), proj.vp.to_f32(), size_px);
         let ao_samples = ao_samples(app, ui.ctx(), proj.vp.to_f32(), size_px);
+        // The Realistic view (`view.look`): the same scenes, lit by the studio. The standard
+        // picture shows until the studio, baked off the window thread, is installed.
+        let product_look = crate::view_look::product_look(app, "model");
+        if product_look.is_some() && !crate::gpu::studio_ready() {
+            ui.ctx().request_repaint();
+        }
         let cb = ViewportCallback(Frame {
             product_lights: None,
-            product_look: None,
+            product_look,
             units_per_mm: 1.0,
             ssaa,
             ao_samples,

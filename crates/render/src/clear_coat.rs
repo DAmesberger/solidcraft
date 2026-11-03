@@ -69,8 +69,8 @@ impl ClearCoat {
 /// keeps `1 - w * (1 - coat_color)`, on top of the coat's Fresnel attenuation. The coat's own
 /// reflection is untinted. A white coat is [`OpaqueSurface::brdf`]; a surface without a coat is
 /// untouched. An index-matched coat (IOR 1) only tints. No CPU renderer uses this: it exists for
-/// the GPU tests (feature `oracle`).
-#[cfg(any(test, feature = "oracle"))]
+/// the GPU tests (feature `test-reference`).
+#[cfg(any(test, feature = "test-reference"))]
 pub fn tinted_coat_brdf(surface: OpaqueSurface, coat_color: Vec3, normal: Vec3, view: Vec3, light: Vec3) -> Result<Vec3, SurfaceError> {
     for c in [coat_color.x, coat_color.y, coat_color.z] {
         if !c.is_finite() || !(0.0..=1.0).contains(&c) {

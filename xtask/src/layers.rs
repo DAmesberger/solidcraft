@@ -76,6 +76,12 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 /// Entries ending in `*` are prefixes.
 pub const UI_CRATES: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit", "egui_kittest", "rfd", "bevy*"];
 
+/// Features that exist only for tests: `(crate, feature)`. Only a dev-dependency may enable one;
+/// no normal or build dependency, no feature of any crate and not the crate's own `default`.
+/// The material graph's f64 reference interpreter is a test oracle and never ships
+/// (docs/material-graph.md, decision O12).
+pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[("render", "test-reference")];
+
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 5;
 
@@ -108,12 +114,16 @@ pub struct Dep {
     pub kind: DepKind,
     /// `true` if the dependency is a workspace member.
     pub workspace: bool,
+    /// Features the dependency enables.
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Crate {
     pub name: String,
     pub deps: Vec<Dep>,
+    /// The crate's own `[features]` table: each feature and what it enables.
+    pub features: Vec<(String, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +133,7 @@ pub enum Violation {
     StandaloneHasWorkspaceDep { krate: String, dep: String },
     TestkitAsNormalDep { krate: String },
     UiBelowL5 { krate: String, dep: String, layer: u8 },
+    TestOnlyFeature { krate: String, feature: String, via: String },
 }
 
 impl std::fmt::Display for Violation {
@@ -143,6 +154,9 @@ impl std::fmt::Display for Violation {
             Violation::UiBelowL5 { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L5+")
             }
+            Violation::TestOnlyFeature { krate, feature, via } => {
+                write!(f, "{krate} enables the test-only feature `{feature}` {via}; only a dev-dependency may")
+            }
         }
     }
 }
@@ -151,6 +165,7 @@ impl std::fmt::Display for Violation {
 pub fn check(crates: &[Crate]) -> Vec<Violation> {
     let mut out = Vec::new();
     for c in crates {
+        test_only_features(c, &mut out);
         let Some(class) = classify(&c.name) else {
             out.push(Violation::Unregistered { krate: c.name.clone() });
             continue;
@@ -199,6 +214,27 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
     out
 }
 
+/// Test-only features reach product builds through a normal or build dependency, a feature
+/// that forwards them, or the owner's `default`. Apps are checked too: they are what ships.
+fn test_only_features(c: &Crate, out: &mut Vec<Violation>) {
+    for (owner, feature) in TEST_ONLY_FEATURES {
+        let package = format!("solidcraft-{owner}");
+        let full = format!("{package}/{feature}");
+        for d in &c.deps {
+            if d.name == package && d.kind != DepKind::Dev && d.features.iter().any(|f| f == feature) {
+                out.push(Violation::TestOnlyFeature { krate: c.name.clone(), feature: full.clone(), via: format!("in a {:?} dependency", d.kind) });
+            }
+        }
+        for (name, enables) in &c.features {
+            let forwards = enables.iter().any(|e| e == &full || *e == format!("{package}?/{feature}"));
+            let own_default = c.name == package && name == "default" && enables.iter().any(|e| e == feature);
+            if forwards || own_default {
+                out.push(Violation::TestOnlyFeature { krate: c.name.clone(), feature: full.clone(), via: format!("through its feature `{name}`") });
+            }
+        }
+    }
+}
+
 /// Build the model from `cargo metadata --format-version 1 --no-deps`.
 pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
     let pkgs = meta["packages"].as_array().ok_or("metadata: no packages array")?;
@@ -215,9 +251,16 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
                 _ => DepKind::Normal,
             };
             let workspace = members.contains(&dname.as_str()) || d["path"].is_string();
-            deps.push(Dep { name: dname, kind, workspace });
+            let features = d["features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect();
+            deps.push(Dep { name: dname, kind, workspace, features });
         }
-        out.push(Crate { name, deps });
+        let features = p["features"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect()))
+            .collect();
+        out.push(Crate { name, deps, features });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -238,7 +281,11 @@ mod tests {
     use super::*;
 
     fn c(name: &str, deps: &[(&str, DepKind, bool)]) -> Crate {
-        Crate { name: name.into(), deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w }).collect() }
+        Crate {
+            name: name.into(),
+            deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w, features: Vec::new() }).collect(),
+            features: Vec::new(),
+        }
     }
     use DepKind::*;
 
@@ -307,6 +354,35 @@ mod tests {
         for app in ["solidcraft", "solidcraft-cli", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("solidcraft-ui-egui", Normal, true)])]).is_empty());
         }
+    }
+
+    #[test]
+    fn test_only_features_stay_in_dev_dependencies() {
+        let with = |kind: DepKind| {
+            let mut krate = c("solidcraft-gpu", &[("solidcraft-render", kind, true)]);
+            krate.deps[0].features = vec!["test-reference".into()];
+            krate
+        };
+        assert!(check(&[with(Dev)]).is_empty());
+        for kind in [Normal, Build] {
+            let v = check(&[with(kind)]);
+            assert!(matches!(&v[..], [Violation::TestOnlyFeature { .. }]), "{kind:?}: {v:?}");
+        }
+        // Apps are exempt from layering, not from this.
+        let mut app = with(Normal);
+        app.name = "solidcraft".into();
+        assert!(matches!(&check(&[app])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut forwarding = c("solidcraft-engine", &[]);
+        forwarding.features = vec![("oracle".into(), vec!["solidcraft-render/test-reference".into()])];
+        assert!(matches!(&check(&[forwarding])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut weak = c("solidcraft-engine", &[]);
+        weak.features = vec![("oracle".into(), vec!["solidcraft-render?/test-reference".into()])];
+        assert!(matches!(&check(&[weak])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut default_on = c("solidcraft-render", &[]);
+        default_on.features = vec![("default".into(), vec!["test-reference".into()]), ("test-reference".into(), vec!["dep:serde_json".into()])];
+        assert!(matches!(&check(&[default_on.clone()])[..], [Violation::TestOnlyFeature { .. }]));
+        default_on.features.remove(0);
+        assert!(check(&[default_on]).is_empty());
     }
 
     #[test]

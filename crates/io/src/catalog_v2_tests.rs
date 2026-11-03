@@ -58,7 +58,14 @@ fn pinned_v1_bytes_revisions_and_scalar_material_canonical_fields_are_preserved(
     let material = LibraryMaterial {
         name: "Original scalar material".into(),
         density_g_cm3: 0.7,
-        appearance: Some(LibraryLook { name: "Original scalar material".into(), color: [180, 120, 70], opacity: 1.0, pbr: None }),
+        appearance: Some(LibraryLook {
+            name: "Original scalar material".into(),
+            color: [180, 120, 70],
+            opacity: 1.0,
+            pbr: None,
+            graph: None,
+            values: Default::default(),
+        }),
         physical_card: None,
     };
     let provenance = Provenance {

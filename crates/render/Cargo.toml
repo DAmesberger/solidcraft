@@ -11,8 +11,10 @@ workspace = true
 [features]
 default = []
 raytrace-cpu = []
-# Test-only f64 oracles for the GPU shading tests (`clear_coat::tinted_coat_brdf`); no renderer uses them.
-oracle = []
+# Test-only f64 references for the GPU back ends' tests: the material-graph interpreter
+# (`material_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only dev-dependencies may enable it: `cargo xtask layers` refuses a
+# normal or build dependency, or a feature, that does.
+test-reference = ["dep:serde_json"]
 
 [dependencies]
 solidcraft-geom = { workspace = true }
@@ -23,6 +25,7 @@ png = { workspace = true }
 sha2 = { workspace = true }
 web-time = { workspace = true }
 weezl = { workspace = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

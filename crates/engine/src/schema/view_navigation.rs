@@ -251,19 +251,20 @@ pub enum LookView {
     RenderPreview,
 }
 
-/// Set a view's look. Until the Realistic view is built (track V), only `standard` is accepted.
+/// Set or toggle a view's look. The window applies it; it is never saved in the design.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewLookParams {
-    /// Omit to toggle.
+    /// Omit to toggle the view's current look (in a window; a session without one refuses).
     #[serde(default)]
     pub look: Option<ViewLook>,
-    /// Default: the modelling viewport.
+    /// Default: the active view (the Render preview while the Render workspace is open, else the
+    /// modelling viewport).
     #[serde(default)]
     pub view: Option<LookView>,
 }
 
-/// What `view.look` returns: the validated request, which the UI applies.
+/// What `view.look` returns: the look the view now has, and which view.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ViewLookResult {
     pub look: ViewLook,

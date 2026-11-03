@@ -1,11 +1,13 @@
 //! Looks can name a material graph (`appearances.graphs`, a table by id; `Look::graph` and
-//! `Look::values`) and graphs can use texture assets (`appearances.textures`, container blobs
-//! or base64 in plain JSON). docs/material-graph.md §4.
+//! `Look::values`) and graphs can use texture assets (`appearances.textures`, keyed by the
+//! SHA-256 of their bytes: container blobs, or base64 in a plain JSON design). Both tables, and
+//! a look's `graph` and `values`, are omitted when empty. docs/material-graph.md §4.
 //!
 //! An older design gets none: its scalar and `pbr` looks are unchanged and are never migrated
-//! (decision O9), so there is no `step`. The last release refuses a design that has graphs (the
-//! newer format number). Once `Part::used` lands (track K), a design without graphs is written
-//! in the older format, byte for byte (decision O8).
-//!
-//! Contract status: the record types are in `crate::appearance_graph`; until track B wires them
-//! into `Appearances` and `Look`, nothing is saved by this change.
+//! (decision O9), so there is no `step`. A design without graphs is still written in the older
+//! format, byte for byte, once `Part::used` reads [`USED`] (track K, decision O8); the last
+//! release refuses a design that has graphs (the newer format number).
+
+/// Whether a design's saved JSON uses this change: it has a material graph.
+#[allow(dead_code)] // read by `Part::used` once the writer picks the oldest sufficient format
+pub const USED: fn(&serde_json::Value) -> bool = crate::appearance_graph::graphs_used;

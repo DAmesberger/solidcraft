@@ -114,6 +114,23 @@ revision cover the writer contract. Changing only the envelope version leaves en
 revisions unchanged. PBR and complete card data participate in revisions when present.
 V1 wire input rejects even null v2-only fields. Older readers refuse v2.
 
+## Portable catalog v3
+
+`solidcraft-library/3` adds material graphs ([material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/material-graph.md)
+§4.2): a `graphs` table by id and a `textures` table keyed by the SHA-256 of each
+image's bytes, both omitted when empty. An appearance value may name a graph with
+`graph` and set its interface with `values`; `graph` and `pbr` exclude each other.
+Every graph a look names must be in the catalog, and every texture a graph or look
+names must be in its `textures`.
+
+A v3 catalog with textures is a ZIP container: `container.json`
+(`{"format":"solidcraft-library/1"}`), `catalog.json` (at most 4 MiB, each texture with
+an `image_blob` reference) and `blobs/<sha256>.png|jpeg`. It is read by the design
+container's bounded reader; a blob must hash to its texture's key. A v3 catalog
+without textures stays plain JSON. Exporting a design writes v2 unless an exported
+look names a graph, and copies only the graphs and textures those looks use. An
+explicit v2 or v1 envelope refuses graphs. Older readers refuse v3.
+
 ## Scalar catalog v1 compatibility
 
 The independent JSON format marker is `solidcraft-library/1`. It has `id`, `name` and an
