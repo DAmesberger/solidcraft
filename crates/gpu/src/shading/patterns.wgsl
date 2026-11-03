@@ -305,3 +305,113 @@ fn sc_clean_unit(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     let bad = any(bits >= vec3<u32>(0x7f800000u));
     return select(sc_proj_unit(v, fallback), fallback, bad);
 }
+
+// Material-graph evaluation, shared by both GPU targets' generated code (crates/gpu/src/material/
+// codegen.rs): its input, its output and the helpers it calls.
+
+// What a material is evaluated at: the record (vec4 index of its uniform data), the unit
+// direction toward the eye, the unit geometric normal in world and object space, the position
+// (mm) in both spaces, the pixel footprint in world mm (0: unfiltered) and the object frame.
+struct sc_GraphCtx {
+    record: u32,
+    v: vec3<f32>,
+    n: vec3<f32>,
+    n_object: vec3<f32>,
+    p_world: vec3<f32>,
+    p_object: vec3<f32>,
+    fp_world: f32,
+    frame: sc_ObjectFrame,
+};
+
+// One evaluated surface point: the WGSL mirror of `material_graph::SurfaceSample` (the
+// `OpaqueSurface` core, its clear coat and the inputs the core lacks), with its shading frame.
+// Colours are linear.
+struct sc_Surface {
+    base_color: vec3<f32>,
+    metalness: f32,
+    // Perceptual.
+    roughness: f32,
+    // The dielectric base's; 1: no interface of its own.
+    ior: f32,
+    // 0: no coat.
+    coat_weight: f32,
+    coat_roughness: f32,
+    // 1: no coat interface.
+    coat_ior: f32,
+    // Unit shading normals of the base and of the coat.
+    normal: vec3<f32>,
+    coat_normal: vec3<f32>,
+    specular_weight: f32,
+    specular_color: vec3<f32>,
+    // 0: isotropic. Stretched along `tangent` (unit; zero while isotropic), turned by
+    // `rotation` radians about the normal.
+    anisotropy: f32,
+    rotation: f32,
+    tangent: vec3<f32>,
+    // Tint of light through the coat.
+    coat_color: vec3<f32>,
+    // Relative luminance, like the product lights.
+    emission_luminance: f32,
+    emission_color: vec3<f32>,
+    transmission_weight: f32,
+    transmission_color: vec3<f32>,
+    transmission_depth_mm: f32,
+    // Cut-out coverage, not glass.
+    opacity: f32,
+};
+
+// An `image` node's outputs.
+struct sc_Image { color: vec3<f32>, value: f32, alpha: f32, };
+
+// An image with no texture (none bound, or not decoded yet, §5.6): its `default` colour with no
+// coverage (alpha 0), so a mask read through its alpha shows no mark; `value` is `channel`'s (0
+// the Rec. 709 luminance, 1–3 r, g, b, 4 alpha).
+fn sc_image_default(color: vec3<f32>, channel: u32) -> sc_Image {
+    let picked = select(select(select(sc_luminance(color), color.r, channel == 1u), color.g, channel == 2u), color.b, channel == 3u);
+    return sc_Image(color, select(picked, 0.0, channel == 4u), 0.0);
+}
+
+// Three planar samples of a triplanar image, blended by the weights `w`.
+fn sc_image_blend(a: sc_Image, b: sc_Image, c: sc_Image, w: vec3<f32>) -> sc_Image {
+    return sc_Image(w.x * a.color + w.y * b.color + w.z * c.color, w.x * a.value + w.y * b.value + w.z * c.value,
+        w.x * a.alpha + w.y * b.alpha + w.z * c.alpha);
+}
+
+// An unconnected texcoord: the origin, with no gradient.
+fn sc_texcoord_none() -> sc_Texcoord {
+    return sc_Texcoord(vec2<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(1.0), 0.0);
+}
+
+// `surface.mix` in v1 (decision O3): the two surfaces' parameters blended, `t` = 1 being `fg`;
+// normals and the tangent by normalised lerp.
+fn sc_surface_mix(bg: sc_Surface, fg: sc_Surface, t: f32) -> sc_Surface {
+    return sc_Surface(
+        mix(bg.base_color, fg.base_color, vec3<f32>(t)),
+        mix(bg.metalness, fg.metalness, t),
+        mix(bg.roughness, fg.roughness, t),
+        mix(bg.ior, fg.ior, t),
+        mix(bg.coat_weight, fg.coat_weight, t),
+        mix(bg.coat_roughness, fg.coat_roughness, t),
+        mix(bg.coat_ior, fg.coat_ior, t),
+        sc_unit(mix(bg.normal, fg.normal, vec3<f32>(t))),
+        sc_unit(mix(bg.coat_normal, fg.coat_normal, vec3<f32>(t))),
+        mix(bg.specular_weight, fg.specular_weight, t),
+        mix(bg.specular_color, fg.specular_color, vec3<f32>(t)),
+        mix(bg.anisotropy, fg.anisotropy, t),
+        mix(bg.rotation, fg.rotation, t),
+        sc_unit(mix(bg.tangent, fg.tangent, vec3<f32>(t))),
+        mix(bg.coat_color, fg.coat_color, vec3<f32>(t)),
+        mix(bg.emission_luminance, fg.emission_luminance, t),
+        mix(bg.emission_color, fg.emission_color, vec3<f32>(t)),
+        mix(bg.transmission_weight, fg.transmission_weight, t),
+        mix(bg.transmission_color, fg.transmission_color, vec3<f32>(t)),
+        mix(bg.transmission_depth_mm, fg.transmission_depth_mm, t),
+        mix(bg.opacity, fg.opacity, t));
+}
+
+// The evaluated surface as returned: the tangent is zero while the surface is isotropic.
+fn sc_surface_finish(s: sc_Surface) -> sc_Surface {
+    var sc_out = s;
+    sc_out.tangent = select(s.tangent, vec3<f32>(0.0), s.anisotropy == 0.0);
+    return sc_out;
+}

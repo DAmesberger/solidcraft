@@ -726,3 +726,47 @@ fn shape_compile_times() {
         println!("{name}: generate {generated:.2} ms, + validate {validated:.2} ms; a frame that makes its pipeline {pipeline:?} ms");
     }
 }
+
+/// A second target (the path tracer's) gets the same code with its own name, record reads and
+/// image samples, and nothing of the raster back end's.
+#[test]
+fn another_target_shares_the_generated_code() {
+    struct Probe;
+    impl super::Target for Probe {
+        fn name(&self) -> &str {
+            "graph_eval_3"
+        }
+        fn vec4(&self, index: &str) -> String {
+            format!("probe_vec4({index})")
+        }
+        fn image(&self, binding: u8, tc: &str, default: &str, params: super::ImageParams) -> String {
+            format!("probe_image({binding}u, {tc}, {default}, {}u)", params.wrap)
+        }
+    }
+    for (name, text) in FIXTURES {
+        let ir = fixture(text).ir;
+        let raster = super::material_eval(&ir).unwrap_or_default();
+        let probe = super::generate(&ir, &Probe).unwrap_or_default();
+        assert!(probe.starts_with("fn graph_eval_3(c: sc_GraphCtx) -> sc_Surface {"), "{name}");
+        assert!(!probe.contains("mat_"), "{name}: no raster names in another target's code");
+        assert_eq!(probe.replace("probe_vec4(", "mat_page.m[").matches("mat_page.m[").count(), raster.matches("mat_page.m[").count(), "{name}");
+        if ir.textures.is_empty() {
+            assert!(!probe.contains("probe_image"));
+        } else {
+            assert!(probe.contains("probe_image(0u, "), "{name}: images go through the target");
+        }
+    }
+    struct Bad;
+    impl super::Target for Bad {
+        fn name(&self) -> &str {
+            "evil() {"
+        }
+        fn vec4(&self, index: &str) -> String {
+            index.to_owned()
+        }
+        fn image(&self, _: u8, _: &str, default: &str, _: super::ImageParams) -> String {
+            default.to_owned()
+        }
+    }
+    assert!(super::generate(&fixture(FIXTURES[4].1).ir, &Bad).is_err(), "a target name must be an identifier");
+}

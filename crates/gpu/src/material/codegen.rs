@@ -1,5 +1,5 @@
 //! The raster back end's code generator (docs/material-graph.md §5.1): a material graph's IR to
-//! one straight-line WGSL function, `material_eval(c: GraphCtx) -> Surface`, over the shared
+//! one straight-line WGSL function, `material_eval(c: sc_GraphCtx) -> sc_Surface`, over the shared
 //! shading library (`crate::shading`).
 //!
 //! Every identifier in the output is generated (`v3`, `s3`, `g3`) and every value is read from
@@ -85,8 +85,49 @@ fn lit(x: f64) -> String {
 
 const ZERO3: &str = "vec3<f32>(0.0)";
 
+/// An `image` node's shape params.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageParams {
+    pub srgb: bool,
+    /// 0 repeat, 1 clamp, 2 mirror.
+    pub wrap: u8,
+    /// 0 rgb (`value` is the luminance), 1 r, 2 g, 3 b, 4 a.
+    pub channel: u8,
+}
+
+/// What differs between the GPU targets of the one generator (§5.7): the raster back end here,
+/// the path tracer's in `crate::path`. Everything else the generated code calls is the shared
+/// library's.
+pub trait Target {
+    /// The generated function's name; it takes `c: sc_GraphCtx` and returns `sc_Surface`.
+    fn name(&self) -> &str;
+    /// The material record's vec4 at `index`, a WGSL `u32` expression such as `k + 3u`.
+    fn vec4(&self, index: &str) -> String;
+    /// One planar sample of texture binding `binding` (an index into `Ir::textures`) at `tc`, an
+    /// `sc_Texcoord` expression: an `sc_Image` expression. `default` is the node's default colour
+    /// (a `vec3<f32>` expression). Triplanar images call this per plane and blend.
+    fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String;
+}
+
+/// The viewport's target: `material_eval`, records in the uniform page `mat_page`.
+pub struct Raster;
+
+impl Target for Raster {
+    fn name(&self) -> &str {
+        "material_eval"
+    }
+    fn vec4(&self, index: &str) -> String {
+        format!("mat_page.m[{index}]")
+    }
+    fn image(&self, _binding: u8, _tc: &str, default: &str, params: ImageParams) -> String {
+        // Sampling lands with the GPU textures (track C3): until then the node's `default`.
+        format!("sc_image_default({default}, {}u)", params.channel)
+    }
+}
+
 struct Gen<'a> {
     ir: &'a Ir,
+    target: &'a dyn Target,
     out: String,
     /// The WGSL kind of each instruction's value `vN`.
     kinds: Vec<Kind>,
@@ -133,7 +174,7 @@ impl Gen<'_> {
                     (3, 0) => "xyz",
                     _ => return Err(CodegenError(format!("a uniform of width {width} at float {offset}"))),
                 };
-                let read = format!("mat_page.m[k + {index}u].{swizzle}");
+                let read = format!("{}.{swizzle}", self.target.vec4(&format!("k + {index}u")));
                 if seed && *width == 1 { format!("bitcast<u32>({read})") } else { read }
             }
             Operand::Geometry(g) => match g {
@@ -141,7 +182,7 @@ impl Gen<'_> {
                 GeometryInput::WorldPosition => "c.p_world".to_owned(),
                 GeometryInput::ObjectNormal => "c.n_object".to_owned(),
                 GeometryInput::WorldNormal => "c.n".to_owned(),
-                GeometryInput::Facing => "abs(dot(c.n, c.frag.v))".to_owned(),
+                GeometryInput::Facing => "abs(dot(c.n, c.v))".to_owned(),
                 GeometryInput::Tangent => "sc_default_tangent(c.n)".to_owned(),
             },
             Operand::Texture(_) => "0.0".to_owned(),
@@ -161,7 +202,7 @@ impl Gen<'_> {
         let have = self.kind_of(op);
         if matches!(op, Operand::Absent | Operand::Texture(_)) {
             return Ok(match want {
-                Kind::Tc => "mat_texcoord_none()".to_owned(),
+                Kind::Tc => "sc_texcoord_none()".to_owned(),
                 k => k.splat("0.0"),
             });
         }
@@ -215,7 +256,7 @@ impl Gen<'_> {
 
     /// Position, normal and footprint of a projection in `space` (0 object, 1 world).
     fn space(space: i64) -> (&'static str, &'static str, &'static str) {
-        if space == 0 { ("c.p_object", "c.n_object", "c.fp_object") } else { ("c.p_world", "c.n", "c.fp_world") }
+        if space == 0 { ("c.p_object", "c.n_object", "c.fp_world") } else { ("c.p_world", "c.n", "c.fp_world") }
     }
 
     /// A pattern call over a texcoord operand: once, or three times and blended when the
@@ -333,7 +374,7 @@ impl Gen<'_> {
                         let position = Self::operand(&instr, 1);
                         let object = position == Operand::Geometry(GeometryInput::ObjectPosition);
                         let p = if position == Operand::Absent { "c.p_world".to_owned() } else { self.arg(&position, Kind::V3)? };
-                        let fp = if object { "c.fp_object" } else { "c.fp_world" };
+                        let fp = "c.fp_world";
                         self.line(&format!(
                             "let s{n} = sc_pattern_noise3({p}, {fp}, {noise_kind}u, {dims}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope});"
                         ));
@@ -387,11 +428,30 @@ impl Gen<'_> {
                     kind = Kind::F;
                 }
                 "image" => {
-                    // Sampling lands with the GPU textures (track C3): until then the node's
-                    // `default` colour, as for a texture that is not decoded yet (§5.6).
-                    let channel = Self::param(&instr, 2).clamp(0, 4);
+                    let params = ImageParams {
+                        srgb: Self::param(&instr, 0) == 0,
+                        wrap: u8::try_from(Self::param(&instr, 1).clamp(0, 2)).unwrap_or(0),
+                        channel: u8::try_from(Self::param(&instr, 2).clamp(0, 4)).unwrap_or(0),
+                    };
                     let [default] = self.args_at(&instr, 2, [Kind::V3])?;
-                    self.line(&format!("let s{n} = mat_image_default({default}, {channel}u);"));
+                    let binding = match Self::operand(&instr, 1) {
+                        Operand::Texture(b) => Some(b),
+                        _ => None,
+                    };
+                    let texcoord = Self::operand(&instr, 0);
+                    let sample = |t: &str| match binding {
+                        Some(b) => self.target.image(b, t, &default, params),
+                        None => format!("sc_image_default({default}, {}u)", params.channel),
+                    };
+                    let call = match self.kind_of(&texcoord) {
+                        Kind::Tri => {
+                            let t = self.raw(&texcoord, false)?;
+                            let (x, y, z) = (sample(&format!("{t}.x")), sample(&format!("{t}.y")), sample(&format!("{t}.z")));
+                            format!("sc_image_blend({x}, {y}, {z}, {t}.w)")
+                        }
+                        _ => sample(&self.arg(&texcoord, Kind::Tc)?),
+                    };
+                    self.line(&format!("let s{n} = {call};"));
                     self.line(&format!("let v{n} = s{n}.color;"));
                     kind = Kind::V3;
                 }
@@ -727,7 +787,7 @@ impl Gen<'_> {
         let mut text = String::new();
         let _ = write!(
             text,
-            "let {name} = Surface({base_color} * {base_weight}, {metalness}, {roughness}, {ior}, {coat_weight}, {coat_roughness}, {coat_ior}, \
+            "let {name} = sc_Surface({base_color} * {base_weight}, {metalness}, {roughness}, {ior}, {coat_weight}, {coat_roughness}, {coat_ior}, \
              {name}_n, {coat_normal}, {specular_weight}, {specular_color}, {anisotropy}, {rotation}, {name}_tangent, {coat_color}, \
              {emission_luminance}, {emission_color}, {transmission_weight}, {transmission_color}, {transmission_depth}, {opacity});"
         );
@@ -736,11 +796,21 @@ impl Gen<'_> {
     }
 }
 
-/// `material_eval` for a lowered graph: straight-line WGSL over the shared library, reading every
-/// value from the material's record at `c.record` (its slots after the base response).
+/// The raster back end's `material_eval` for a lowered graph: [`generate`] for [`Raster`].
 pub fn material_eval(ir: &Ir) -> Result<String, CodegenError> {
-    let mut g = Gen { ir, out: String::new(), kinds: vec![Kind::F; ir.instrs.len()], grads: vec![false; ir.instrs.len()] };
-    g.out.push_str("fn material_eval(c: GraphCtx) -> Surface {\n");
+    generate(ir, &Raster)
+}
+
+/// The evaluation function of a lowered graph for `target`: straight-line WGSL over the shared
+/// library, `fn <name>(c: sc_GraphCtx) -> sc_Surface`, reading every value from the material's
+/// record at `c.record` (its slots after the [`BASE_VEC4`] of the base response).
+pub fn generate(ir: &Ir, target: &dyn Target) -> Result<String, CodegenError> {
+    let name = target.name();
+    if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') || name.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return Err(CodegenError("a target function name that is not an identifier".to_owned()));
+    }
+    let mut g = Gen { ir, target, out: String::new(), kinds: vec![Kind::F; ir.instrs.len()], grads: vec![false; ir.instrs.len()] };
+    g.out.push_str(&format!("fn {name}(c: sc_GraphCtx) -> sc_Surface {{\n"));
     g.line(&format!("let k = c.record + {BASE_VEC4}u;"));
     for i in 0..ir.instrs.len() {
         g.emit(i)?;
@@ -752,14 +822,14 @@ pub fn material_eval(ir: &Ir) -> Result<String, CodegenError> {
         g.surface(&fg, &layer.fg)?;
         let t = g.arg(&layer.mix, Kind::F)?;
         let out = format!("m{i}");
-        g.line(&format!("let {out} = mat_surface_mix({last}, {fg}, sc_clean({t}, 0.0, 1.0, 0.5));"));
+        g.line(&format!("let {out} = sc_surface_mix({last}, {fg}, sc_clean({t}, 0.0, 1.0, 0.5));"));
         last = out;
     }
-    g.line(&format!("return {last};"));
+    g.line(&format!("return sc_surface_finish({last});"));
     g.out.push_str("}\n");
     Ok(g.out)
 }
 
 /// The constant-graph `material_eval`: the base response at the head of the record. It draws
 /// every material of a shape that is not compiled yet (§5.2), and any constant graph.
-pub const FALLBACK_EVAL: &str = "fn material_eval(c: GraphCtx) -> Surface {\n    return mat_base_response(c.record, c.n);\n}\n";
+pub const FALLBACK_EVAL: &str = "fn material_eval(c: sc_GraphCtx) -> sc_Surface {\n    return mat_base_response(c.record, c.n);\n}\n";
