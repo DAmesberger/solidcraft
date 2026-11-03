@@ -188,6 +188,84 @@ mod test_support {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use test_support::test_picture_renderer;
 
+/// Whether the studio of the last frame that asked for the product look is installed. The
+/// window repaints until it is ([`studio_ready`]), since the bake finishes between frames.
+static STUDIO_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the product look's studio is installed in the renderer. A frame that asks for the look
+/// before then draws it without the studio (the frame's product lights only).
+pub fn studio_ready() -> bool {
+    STUDIO_READY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The product look's studio while it is being baked. The renderer never bakes it, so the paint
+/// callback does: on another thread natively (about 0.1 s in an optimised build), and a frame's
+/// bounded share at a time on the web, which has no threads ([`StudioBake::FRAME_WORK`]).
+#[derive(Default)]
+struct StudioBaking {
+    #[cfg(not(target_arch = "wasm32"))]
+    thread: Option<(StudioPreset, std::sync::Arc<std::sync::Mutex<Option<StudioEnvironment>>>)>,
+    #[cfg(target_arch = "wasm32")]
+    steps: Option<StudioBake>,
+}
+
+impl StudioBaking {
+    /// Move the bake of `preset`'s studio on; the finished studio once it is baked.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
+        if self.thread.as_ref().is_none_or(|(baking, _)| *baking != preset) {
+            let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let sink = result.clone();
+            let spawned = std::thread::Builder::new().name("solidcraft-studio".into()).spawn(move || {
+                let studio = StudioEnvironment::bake(preset);
+                if let Ok(mut slot) = sink.lock() {
+                    *slot = Some(studio);
+                }
+            });
+            if let Err(error) = spawned {
+                // Bake on this thread instead: one slow frame rather than no studio.
+                log::warn!("studio bake thread did not start ({error}); baking on the window thread");
+                return Some(StudioEnvironment::bake(preset));
+            }
+            self.thread = Some((preset, result));
+            return None;
+        }
+        let studio = self.thread.as_ref().and_then(|(_, result)| result.lock().ok().and_then(|mut slot| slot.take()));
+        if studio.is_some() {
+            self.thread = None;
+        }
+        studio
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
+        if self.steps.as_ref().is_none_or(|bake| bake.preset() != preset) {
+            self.steps = Some(StudioBake::new(preset));
+        }
+        let done = self.steps.as_mut().is_some_and(|bake| bake.step(StudioBake::FRAME_WORK));
+        if done { self.steps.take().and_then(StudioBake::finish) } else { None }
+    }
+}
+
+/// Install the studio that a frame's product `look` names once it is baked, starting the bake if
+/// it has not started.
+fn bake_studio(device: &wgpu::Device, queue: &wgpu::Queue, resources: &mut egui_wgpu::CallbackResources, look: Option<ProductLook>) {
+    let Some(look) = look.filter(|look| look.intensity > 0.0) else { return };
+    let installed = resources.get::<Renderer>().is_none_or(|r| r.has_studio_environment(look.studio));
+    STUDIO_READY.store(installed, std::sync::atomic::Ordering::Relaxed);
+    if installed {
+        return;
+    }
+    if resources.get::<StudioBaking>().is_none() {
+        resources.insert(StudioBaking::default());
+    }
+    let studio = resources.get_mut::<StudioBaking>().and_then(|baking| baking.advance(look.studio));
+    if let (Some(studio), Some(renderer)) = (studio, resources.get_mut::<Renderer>()) {
+        renderer.set_studio_environment(device, queue, &studio);
+        STUDIO_READY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl egui_wgpu::CallbackTrait for ViewportCallback {
     fn prepare(
         &self,
@@ -197,6 +275,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        bake_studio(device, queue, resources, self.0.product_look);
         if let Some(res) = resources.get_mut::<Renderer>() {
             res.prepare(device, queue, encoder, &self.0);
         }
@@ -660,6 +739,31 @@ impl OffscreenFrames {
 
 #[cfg(test)]
 mod tests {
+    /// The product look's studio is baked off the window thread and installed by a later frame's
+    /// prepare; a frame without the look starts nothing.
+    #[test]
+    fn product_look_studio_is_baked_off_the_window_thread_and_installed() {
+        let Some((_, device, queue)) = super::offscreen_device() else { return };
+        let depth = solidcraft_gpu::depth_format(&device, true);
+        let target = super::GpuTarget { format: super::wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false };
+        let mut resources = egui_wgpu::CallbackResources::default();
+        resources.insert(super::Renderer::new(&device, target, None));
+        super::bake_studio(&device, &queue, &mut resources, None);
+        assert!(resources.get::<super::StudioBaking>().is_none(), "no look, no bake");
+        let look = Some(super::ProductLook::default());
+        let installed = |resources: &egui_wgpu::CallbackResources| {
+            resources.get::<super::Renderer>().is_some_and(|r| r.has_studio_environment(super::StudioPreset::Product))
+        };
+        super::bake_studio(&device, &queue, &mut resources, look);
+        assert!(!installed(&resources) && !super::studio_ready(), "the first frame only starts the bake");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while !installed(&resources) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            super::bake_studio(&device, &queue, &mut resources, look);
+        }
+        assert!(installed(&resources) && super::studio_ready());
+    }
+
     #[test]
     fn blur_radius_schedule_and_hostile_values() {
         use crate::blur::{schedule, validate_radius};

@@ -175,7 +175,7 @@ relative preview values, not calibrated lux or spectral data. The single-scatter
 model can darken rough metals. Transparent legacy looks retain approximate sorted
 alpha blending, including when seen in front of an opaque PBR surface; that is not
 glass optics. Nondefault exposure/environment controls remain explicitly unsupported;
-an embedding client can opt the real-time preview into the product look below.
+the opt-in product look below lights only the real-time preview.
 
 Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
@@ -184,12 +184,13 @@ remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
 
 ## Opt-in product look
 
-The GPU viewport has a second, opt-in shading path, the product look, for programs that
-embed the viewport (`solidcraft-gpu`). SolidCraft's own app does not send it yet, so
-everything above, the `cpu-product` parity and the viewport BRDF probe stay as they are.
-Progressive and CPU renders never use it. Memory and upload bounds do not change: plain
-PBR vertices stay 48 bytes. A frame turns the look on with `Frame::product_look`, and the
-client bakes and installs the studio itself:
+The GPU viewport has a second, opt-in shading path, the product look. In SolidCraft it
+lights the Render workspace's real-time preview when **Preferences > Graphics > Studio
+lighting in the Render preview** (`render_studio_look`) is on. It is off by default, and
+then everything above, the `cpu-product` parity and the viewport BRDF probe stay as they
+are. Progressive and CPU renders never use it. Memory and upload bounds do not change:
+plain PBR vertices stay 48 bytes. A program that embeds the viewport (`solidcraft-gpu`)
+turns the look on with `Frame::product_look`, and bakes and installs the studio itself:
 
 ```rust
 use solidcraft_gpu::view::{ProductLook, StudioEnvironment, StudioPreset, SurfacePattern};
@@ -215,6 +216,12 @@ pipeline (`vs_pbr_detailed`); `pbr_tri` writes no detail and carries no coat. Th
 varying is flat (`@interpolate(flat, either)`, which WebGL2 supports), since the coat's
 IOR rides in the fraction of the pattern float and is compared exactly; the shader also
 snaps an IOR within 10⁻⁴ of 1 to 1.
+
+SolidCraft's preview uses `ProductLook::default()` (the `Product` studio). Its paint
+callback bakes the studio on another thread natively and in `StudioBake::FRAME_WORK`
+steps a frame on the web, installs it when done, and repaints until then. The preview
+writes only `pbr_tri` vertices, so it shows the studio, PBR Neutral and the dither, but no
+coat or pattern (no saved appearance carries them yet).
 
 With the look, the PBR shader:
 
@@ -352,7 +359,10 @@ surface. The derivatives guard scans `pbr::SOURCE` and also stops at unparenthes
 branches, loops and `continue`. The PBR entry points (both vertex layouts, `fs_pbr` and the
 prepass's) translate to WebGL2's GLSL ES 3.00 through naga's GL backend, with the flat
 detail varying and the studio's cube; the GPU frames themselves run on a native adapter
-only (Metal here), and no browser has drawn a look frame yet.
+only (Metal here), and no browser has drawn a look frame yet. In `solidcraft-ui-egui`, the preference test
+checks that the preview has no look by default, gets the default look once it is set, and
+loses it on Restore Defaults; a GPU test checks that the paint callback bakes the studio off
+the window thread and installs it on a later frame.
 
 ## Validation and original example
 

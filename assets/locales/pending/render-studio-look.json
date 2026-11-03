@@ -1,0 +1,30 @@
+{
+  "en": {
+    "prefs.render_studio_look": "Studio lighting in the Render preview",
+    "prefs.render_studio_look_help": "Light the Render workspace's live preview with a soft studio that PBR appearances reflect, with filmic tone mapping. Final renders do not change."
+  },
+  "de": {
+    "prefs.render_studio_look": "Studiobeleuchtung in der Render-Vorschau",
+    "prefs.render_studio_look_help": "Beleuchtet die Live-Vorschau des Render-Arbeitsbereichs mit einem weichen Studio, das sich in PBR-Erscheinungsbildern spiegelt, mit filmischem Tone-Mapping. Endgültige Renderings ändern sich nicht."
+  },
+  "ar": {
+    "prefs.render_studio_look": "إضاءة الاستوديو في معاينة التصيير",
+    "prefs.render_studio_look_help": "إضاءة المعاينة الحية في مساحة عمل التصيير باستوديو ناعم تعكسه مظاهر PBR، مع تعيين نغمي سينمائي. لا تتغير عمليات التصيير النهائية."
+  },
+  "he": {
+    "prefs.render_studio_look": "תאורת סטודיו בתצוגה המקדימה של רינדור",
+    "prefs.render_studio_look_help": "מאיר את התצוגה המקדימה החיה של סביבת הרינדור בסטודיו רך שמראי PBR משקפים, עם מיפוי גוונים קולנועי. רינדורים סופיים אינם משתנים."
+  },
+  "ja": {
+    "prefs.render_studio_look": "レンダープレビューでスタジオ照明を使用",
+    "prefs.render_studio_look_help": "レンダーワークスペースのライブプレビューを、PBR 外観に映り込む柔らかなスタジオで照らし、フィルム調のトーンマッピングを適用します。最終レンダーは変わりません。"
+  },
+  "vi": {
+    "prefs.render_studio_look": "Ánh sáng studio trong bản xem trước kết xuất",
+    "prefs.render_studio_look_help": "Chiếu sáng bản xem trước trực tiếp của không gian Kết xuất bằng một studio dịu được phản chiếu trên các diện mạo PBR, với ánh xạ tông màu kiểu phim. Bản kết xuất cuối cùng không thay đổi."
+  },
+  "zh": {
+    "prefs.render_studio_look": "在渲染预览中使用影棚照明",
+    "prefs.render_studio_look_help": "用柔和的影棚照亮渲染工作区的实时预览，PBR 外观会反射该影棚，并使用电影感色调映射。最终渲染不会改变。"
+  }
+}
