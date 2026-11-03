@@ -1,0 +1,30 @@
+{
+  "en": {
+    "navbar.realistic": "Realistic",
+    "view.look.no_gpu": "The Realistic view needs a GPU viewport; this window draws without one."
+  },
+  "de": {
+    "navbar.realistic": "Realistisch",
+    "view.look.no_gpu": "Die realistische Ansicht braucht einen GPU-Viewport; dieses Fenster zeichnet ohne."
+  },
+  "ar": {
+    "navbar.realistic": "واقعي",
+    "view.look.no_gpu": "يحتاج العرض الواقعي إلى منفذ عرض يعمل بوحدة معالجة الرسومات؛ هذه النافذة ترسم بدونها."
+  },
+  "he": {
+    "navbar.realistic": "מציאותי",
+    "view.look.no_gpu": "התצוגה המציאותית דורשת אזור תצוגה עם מעבד גרפי; חלון זה מצייר בלעדיו."
+  },
+  "ja": {
+    "navbar.realistic": "リアル",
+    "view.look.no_gpu": "リアルな表示には GPU ビューポートが必要です。このウィンドウは GPU なしで描画しています。"
+  },
+  "vi": {
+    "navbar.realistic": "Chân thực",
+    "view.look.no_gpu": "Khung nhìn chân thực cần khung nhìn dùng GPU; cửa sổ này đang vẽ không có GPU."
+  },
+  "zh": {
+    "navbar.realistic": "真实感",
+    "view.look.no_gpu": "真实感视图需要 GPU 视口；此窗口在没有 GPU 的情况下绘制。"
+  }
+}

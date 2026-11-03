@@ -35,7 +35,7 @@ fn resolved(s: &mut Session, p: &Value) -> Result<Look> {
     let fallback = crate::view::colors::BODY;
     let color =
         s.doc.body_color(body).map(|rgb| rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).unwrap_or([fallback.0, fallback.1, fallback.2]);
-    Ok(Look { name: "Default".into(), color, opacity: 1.0, pbr: None })
+    Ok(Look { name: "Default".into(), color, opacity: 1.0, pbr: None, graph: None, values: Default::default() })
 }
 
 pub(in crate::cmd) fn pick_up(s: &mut Session, p: &Value) -> Result<Value> {

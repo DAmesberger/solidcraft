@@ -367,7 +367,7 @@ fn solid(i: TOut, front: bool) -> vec4<f32> {
     if (u.ana.x > 0.5 && length(i.n) > 0.5) {
         return analysis(i, k);
     }
-    let c = lit(i, occlusion(i));
+    let c = face_lit(i, occlusion(i));
     // Silhouettes (styles with edges): where a curved surface turns away from the eye, a line
     // about 1.5 px wide, on the visible surface only (depth-correct).
     if (u.screen.w > 0.5 && length(i.n) > 0.5 && fw > 1e-6) {
@@ -646,6 +646,26 @@ fn shade(i: TOut) -> vec4<f32> {
     return lit(i, 1.0);
 }
 
+// An opaque face of a model or product scene (`solid`): lit as `lit` in the standard look. In the
+// Realistic look (`look_on()`) a scalar look is an implicit dielectric `standard_surface` (base
+// colour, roughness 0.5, IOR 1.5) through `pbr_shade`, the shading of every PBR surface: the studio,
+// the frame's product lights, PBR Neutral and the dithered encode (docs/material-graph.md §6.2).
+// Highlights, faded and see-through surfaces, lines and overlays never come here: they keep the
+// standard drawing, in display space, in either look.
+fn face_lit(i: TOut, visibility: f32) -> vec4<f32> {
+    if (look_on() && length(i.n) > 0.5) {
+        var view = u.back.xyz;
+        if (u.eye.w > 0.5) { view = u.eye.xyz - i.wp; }
+        let v = sc_unit(view);
+        var n = sc_unit(i.n);
+        if (dot(n, v) < 0.0) { n = -n; }
+        let surface = surface_from_opaque(srgb_decode(i.c.rgb), vec3<f32>(0.0, 0.5, 1.5), vec3<f32>(0.0, 1.0, 1.0), n);
+        let shaded = pbr_shade(surface, PbrFragment(i.pos, i.wp, n, v, vec3<f32>(0.0)));
+        return vec4<f32>(shaded.rgb, i.c.a);
+    }
+    return lit(i, visibility);
+}
+
 fn product_light_unit(v: vec3<f32>) -> vec3<f32> {
     let scale=max(max(abs(v.x),abs(v.y)),abs(v.z));
     if scale == 0.0 { return vec3<f32>(0.0,0.0,1.0); }
@@ -715,16 +735,14 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>) -> vec4<f32> {
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
     if (dot(n, v) < 0.0) { n = -n; }
-    // The product look lights non-PBR faces with the frame's product lights only (no studio).
-    if u.product_lights_meta.x>0.0 || look_on() {
+    // The frame's product lights, when it names them; the product look's opaque faces are lit in
+    // `face_lit`, and everything drawn here keeps this drawing in either look.
+    if u.product_lights_meta.x>0.0 {
         var radiance=vec3<f32>(0.0);
         for (var k=0u;k<min(u32(u.product_lights_meta.y),21u);k+=1u) {
             if u.product_lights[k*4u].w == 4.0 {radiance+=to_linear(base.rgb)*u.product_lights[k*4u+1u].xyz/3.141592653589793;continue;}
             let sample=product_light_sample(k,i.wp);
             radiance+=to_linear(base.rgb)*sample[1]*(max(dot(n,sample[0]),0.0)/3.141592653589793);
-        }
-        if look_on() {
-            return out_color(vec4<f32>(look_encode(look_tone(radiance*look_params().x),i.pos.xy),base.a));
         }
         let mapped=radiance/(vec3<f32>(1.0)+radiance);
         let encoded=select(mapped*12.92,1.055*pow(mapped,vec3<f32>(1.0/2.4))-vec3<f32>(0.055),mapped>vec3<f32>(0.0031308));

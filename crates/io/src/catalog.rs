@@ -1,12 +1,23 @@
 //! Portable material libraries; no network, external resources or design links.
+//!
+//! Catalog v3 adds material graphs and their texture assets (docs/material-graph.md §4.2): a
+//! v3 catalog with textures is a container (a ZIP: `container.json`, `catalog.json` and
+//! `blobs/<sha256>.png|jpeg`, read by the design container's bounded reader); one without
+//! textures stays plain JSON. A library without graphs is written as v2.
 use crate::{IoError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use solidcraft_doc::appearance_graph::{self, Graphs, Textures};
 use solidcraft_doc::{Document, UserMaterial, appearance::Look, valid_density};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const FORMAT: &str = "solidcraft-library/2";
 pub const V1_FORMAT: &str = "solidcraft-library/1";
+/// A library with material graphs (and, in a container, textures).
+pub const V3_FORMAT: &str = "solidcraft-library/3";
+/// `container.json`'s format for a library container.
+pub const CONTAINER_FORMAT: &str = "solidcraft-library/1";
+/// The largest catalog JSON: a plain library, or `catalog.json` in a container.
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 1024;
 /// Bound source inspection even when many assignments reuse the same definition.
@@ -58,21 +69,42 @@ pub struct LibraryLook {
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<solidcraft_doc::pbr_appearance::PbrParameters>,
+    /// A material graph of the catalog's `graphs` (v3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<appearance_graph::GraphId>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, appearance_graph::Constant>,
 }
 impl LibraryLook {
     pub fn from_look(look: &Look) -> Result<Self> {
-        let out = Self { name: look.name.clone(), color: look.color, opacity: look.opacity, pbr: look.pbr };
+        let out = Self {
+            name: look.name.clone(),
+            color: look.color,
+            opacity: look.opacity,
+            pbr: look.pbr,
+            graph: look.graph.clone(),
+            values: look.values.clone(),
+        };
         out.validate()?;
         Ok(out)
     }
     pub fn to_look(&self) -> Look {
-        Look { name: self.name.clone(), color: self.color, opacity: self.opacity, pbr: self.pbr }
+        Look {
+            name: self.name.clone(),
+            color: self.color,
+            opacity: self.opacity,
+            pbr: self.pbr,
+            graph: self.graph.clone(),
+            values: self.values.clone(),
+        }
     }
     fn validate(&self) -> Result<()> {
         if !text(&self.name, 128) || !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {
             return Err(invalid("library appearance needs a 1–128 byte name and finite opacity 0–1"));
         }
-        self.to_look().opaque_surface().map_err(|e| invalid(e.to_string()))?;
+        let look = self.to_look();
+        look.opaque_surface().map_err(|e| invalid(e.to_string()))?;
+        appearance_graph::check_look_shape(&look).map_err(|e| invalid(e.to_string()))?;
         Ok(())
     }
 }
@@ -122,6 +154,16 @@ pub enum Definition {
     Material(LibraryMaterial),
 }
 impl Definition {
+    /// The look it holds: an appearance, or a material's look.
+    pub fn look(&self) -> Option<&LibraryLook> {
+        match self {
+            Self::Appearance(look) => Some(look),
+            Self::Material(material) => material.appearance.as_ref(),
+        }
+    }
+    fn requires_v3(&self) -> bool {
+        self.look().is_some_and(|look| look.graph.is_some())
+    }
     fn requires_v2(&self) -> bool {
         match self {
             Self::Appearance(look) => look.pbr.is_some(),
@@ -192,6 +234,13 @@ pub struct Catalog {
     pub name: String,
     #[serde(deserialize_with = "bounded_entries")]
     pub entries: Vec<Entry>,
+    /// Material graphs the entries' looks name (v3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub graphs: Graphs,
+    /// Texture assets the graphs and looks name, by SHA-256 (v3): blobs in a container, base64
+    /// `data` once read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub textures: Textures,
 }
 
 fn bounded_entries<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Vec<Entry>, D::Error> {
@@ -225,23 +274,41 @@ fn bounded_entries<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::re
 }
 impl Catalog {
     pub fn validate(&self) -> Result<()> {
-        if !matches!(self.format.as_str(), FORMAT | V1_FORMAT) || !identifier(&self.id) || !text(&self.name, 128) || self.entries.len() > MAX_ENTRIES
+        if !matches!(self.format.as_str(), FORMAT | V1_FORMAT | V3_FORMAT)
+            || !identifier(&self.id)
+            || !text(&self.name, 128)
+            || self.entries.len() > MAX_ENTRIES
         {
-            return Err(invalid("unsupported or invalid library (v1/v2, 1024 entries, 128 byte name)"));
+            return Err(invalid("unsupported or invalid library (v1–v3, 1024 entries, 128 byte name)"));
+        }
+        let v3 = self.format == V3_FORMAT;
+        if !v3 && (!self.graphs.is_empty() || !self.textures.is_empty()) {
+            return Err(invalid("only catalog v3 can preserve material graphs and textures; export refused"));
         }
         let mut ids = std::collections::BTreeSet::new();
         for entry in &self.entries {
             if self.format == V1_FORMAT && entry.definition.requires_v2() {
                 return Err(invalid("catalog v1 cannot preserve PBR or engineering cards; export refused"));
             }
+            if !v3 && entry.definition.requires_v3() {
+                return Err(invalid("only catalog v3 can preserve material graphs; export refused"));
+            }
             entry.validate(&self.id)?;
             if !ids.insert(&entry.id) {
                 return Err(invalid("duplicate library entry identity"));
             }
         }
+        appearance_graph::check_tables(&self.graphs, &self.textures).map_err(|e| invalid(e.to_string()))?;
+        for look in self.entries.iter().filter_map(|e| e.definition.look()) {
+            appearance_graph::check_look_in(&look.to_look(), &self.graphs, &self.textures).map_err(|e| invalid(e.to_string()))?;
+        }
         Ok(())
     }
+    /// Read a library: plain JSON (v1–v3), or a v3 container with textures.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if crate::is_design_container(bytes) {
+            return Self::decode_container(bytes);
+        }
         if bytes.len() > MAX_BYTES {
             return Err(invalid("material library exceeds 4 MiB"));
         }
@@ -268,7 +335,87 @@ impl Catalog {
         catalog.validate()?;
         Ok(catalog)
     }
+    /// A library container: `container.json` names the library format, `catalog.json` is the
+    /// catalog with each texture's `image_blob`, and each blob must hash to its texture's key.
+    fn decode_container(bytes: &[u8]) -> Result<Self> {
+        let mut reader = crate::design::PackageReader::new(std::io::Cursor::new(bytes))?;
+        let header: serde_json::Value =
+            serde_json::from_slice(&reader.limited_part("container.json", 4096)?).map_err(|e| invalid(format!("invalid library container: {e}")))?;
+        if header != serde_json::json!({ "format": CONTAINER_FORMAT }) {
+            return Err(invalid(format!("not a material library container (`{CONTAINER_FORMAT}`)")));
+        }
+        let json = reader.limited_part("catalog.json", MAX_BYTES)?;
+        let mut catalog: Self = serde_json::from_slice(&json).map_err(|e| invalid(format!("invalid material library: {e}")))?;
+        if catalog.format != V3_FORMAT || catalog.textures.len() > appearance_graph::limits::TEXTURES_PER_DESIGN {
+            return Err(invalid("a library container holds a v3 catalog with at most 256 textures"));
+        }
+        for (key, texture) in &mut catalog.textures {
+            let blob = texture.image_blob.take().filter(|_| texture.data.is_empty() && matches!(texture.format.as_str(), "png" | "jpeg"));
+            let Some(blob) = blob else {
+                return Err(invalid("a texture in a library container is one png or jpeg blob"));
+            };
+            let reference = serde_json::json!({ "image_blob": blob });
+            let bytes = reader.limited_blob(&reference, "image_blob", &texture.format, appearance_graph::limits::TEXTURE_BYTES)?;
+            if crate::design::digest(bytes) != *key {
+                return Err(invalid("texture key does not match its blob hash"));
+            }
+            texture.data = solidcraft_doc::canvas::base64_encode(bytes);
+        }
+        catalog.validate()?;
+        Ok(catalog)
+    }
+    /// The library's bytes: a container when it holds textures, else plain JSON.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        if !self.textures.is_empty() {
+            return self.encode_container();
+        }
+        self.encode_json()
+    }
+    fn encode_container(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        let mut writer = crate::design::PackageWriter::new();
+        let mut textures = Textures::new();
+        for (key, texture) in &self.textures {
+            let bytes = texture.bytes(key).map_err(|e| invalid(e.to_string()))?;
+            let blob = writer.blob(&bytes, &texture.format, false)?;
+            let name = blob.as_str().ok_or_else(|| invalid("texture blob name"))?.to_string();
+            textures.insert(
+                key.clone(),
+                appearance_graph::TextureAsset {
+                    name: texture.name.clone(),
+                    width: texture.width,
+                    height: texture.height,
+                    format: texture.format.clone(),
+                    image_blob: Some(name),
+                    data: String::new(),
+                },
+            );
+        }
+        let stored = Catalog {
+            format: self.format.clone(),
+            id: self.id.clone(),
+            name: self.name.clone(),
+            entries: self.entries.clone(),
+            graphs: self.graphs.clone(),
+            textures,
+        };
+        let json = serde_json::to_vec_pretty(&stored).map_err(|e| invalid(e.to_string()))?;
+        if json.len() > MAX_BYTES {
+            return Err(invalid("material library catalog exceeds 4 MiB"));
+        }
+        writer.part("catalog.json", &json, true)?;
+        writer.part(
+            "container.json",
+            &serde_json::to_vec(&serde_json::json!({ "format": CONTAINER_FORMAT })).map_err(|e| invalid(e.to_string()))?,
+            false,
+        )?;
+        let bytes = writer.finish()?;
+        if bytes.len() > crate::design::max_design() {
+            return Err(invalid("material library exceeds the design file limit"));
+        }
+        Ok(bytes)
+    }
+    fn encode_json(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let mut budget = 4096usize;
         for entry in &self.entries {
@@ -285,7 +432,7 @@ impl Catalog {
     }
     /// Change only the envelope version; reject any lossy downgrade.
     pub fn in_format(mut self, format: &str) -> Result<Self> {
-        if !matches!(format, FORMAT | V1_FORMAT) {
+        if !matches!(format, FORMAT | V1_FORMAT | V3_FORMAT) {
             return Err(invalid("unsupported library format"));
         }
         self.format = format.into();
@@ -293,11 +440,13 @@ impl Catalog {
         Ok(self)
     }
     pub fn read(path: &str) -> Result<Self> {
-        // Check the VFS size first as well: its browser read clones the stored bytes.
-        if crate::vfs::len(path).map_err(|e| invalid(e.to_string()))? > MAX_BYTES as u64 {
-            return Err(invalid("material library exceeds 4 MiB"));
+        // Check the VFS size first as well: its browser read clones the stored bytes. A
+        // container (textures) may be as large as a design file; plain JSON stays within 4 MiB.
+        let limit = crate::design::max_design().max(MAX_BYTES);
+        if crate::vfs::len(path).map_err(|e| invalid(e.to_string()))? > limit as u64 {
+            return Err(invalid("material library exceeds the design file limit"));
         }
-        Self::decode(&crate::vfs::read(path, MAX_BYTES).map_err(|e| invalid(e.to_string()))?)
+        Self::decode(&crate::vfs::read(path, limit).map_err(|e| invalid(e.to_string()))?)
     }
     pub fn from_document(doc: &Document, id: &str, name: &str, provenance: Provenance) -> Result<Self> {
         if !identifier(id) || !text(name, 128) {
@@ -347,7 +496,23 @@ impl Catalog {
                 insert(Definition::Appearance(LibraryLook::from_look(look)?))?;
             }
         }
-        let out = Self { format: FORMAT.into(), id: id.into(), name: name.into(), entries: entries.into_values().collect() };
+        // The graphs the exported looks name, and the textures those graphs and looks name.
+        let entries: Vec<Entry> = entries.into_values().collect();
+        let tables = &doc.appearances.tables;
+        let mut graphs = Graphs::new();
+        let mut used = BTreeSet::new();
+        for look in entries.iter().filter_map(|e| e.definition.look()) {
+            if let Some(graph_id) = &look.graph {
+                let graph =
+                    tables.graphs.get(graph_id).ok_or_else(|| invalid(format!("material graph `{}` is not in the design", graph_id.as_str())))?;
+                used.extend(appearance_graph::graph_textures(graph).map(str::to_string));
+                graphs.insert(graph_id.clone(), graph.clone());
+            }
+            used.extend(appearance_graph::look_textures(&look.to_look()).map(str::to_string));
+        }
+        let textures: Textures = tables.textures.iter().filter(|(key, _)| used.contains(*key)).map(|(k, t)| (k.clone(), t.clone())).collect();
+        let format = if graphs.is_empty() && textures.is_empty() { FORMAT } else { V3_FORMAT };
+        let out = Self { format: format.into(), id: id.into(), name: name.into(), entries, graphs, textures };
         out.validate()?;
         Ok(out)
     }
