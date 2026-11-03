@@ -22,6 +22,8 @@ struct U {
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
     look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
     units: vec4<f32>,  // x: world units per millimetre (`Frame::units_per_mm`), the scale of material lengths
+    look_room: vec4<f32>, // the product look's room (`ibl::StudioRoom`): subject centre x, y, ground z, extent (0: none)
+    look_foot: vec4<f32>, // its floor-contact ellipse radii x, y (world units)
     sky: vec4<f32>,    // xyz = world up; w = 1: shade in linear light with a sky fill (#7974)
 };
 

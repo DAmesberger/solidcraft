@@ -102,7 +102,7 @@ fn prefiltering_conserves_the_studio_energy() {
     }
 }
 
-/// The nine-term irradiance against the cosine-weighted integral of the studio's own radiance.
+/// The nine-term irradiance against the cosine-weighted integral of the cyclorama's own radiance.
 #[test]
 fn irradiance_matches_the_cosine_integral() {
     for preset in StudioPreset::ALL {
@@ -120,7 +120,8 @@ fn irradiance_matches_the_cosine_integral() {
                         continue;
                     }
                     let w = theta.sin() * (PI / f64::from(steps_t)) * (2.0 * PI / f64::from(steps_p)) * cosine;
-                    let l = env.source(d);
+                    // The rig's lights reach diffuse surfaces directly; the terms hold the rest.
+                    let l = env.ambient_source(d);
                     add(&mut e, l, w);
                 }
             }
@@ -144,8 +145,9 @@ fn irradiance_matches_the_cosine_integral() {
 #[test]
 fn the_sharpest_level_shows_the_studio() {
     let env = StudioEnvironment::bake(StudioPreset::Product);
-    let (sa, ca) = 135.0_f64.to_radians().sin_cos();
-    let (se, ce) = 40.0_f64.to_radians().sin_cos();
+    // Toward the key light's centre (`STU-002`: front-left, above).
+    let [ca, sa, se] = unit([-1.2, -1.2, 1.0]);
+    let ce = 1.0;
     for d in [[ca * ce, sa * ce, se], [0.2, 0.1, -0.97], [0.0, 1.0, 0.3]] {
         let expected = env.source(d);
         let got = env.prefiltered(d, 0.0);
@@ -243,11 +245,14 @@ fn half_floats() {
 /// What the renderer draws of a look: hostile values clamped or replaced, never passed through.
 #[test]
 fn looks_are_sanitized() {
-    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6 };
+    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6, room: None };
     assert_eq!(look.sanitized(), look);
     assert_eq!(look.uniform(), [1.5, 0.6, 0.75, 1.0]);
-    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12 };
-    assert_eq!(wild.sanitized(), ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE });
+    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12, room: None };
+    assert_eq!(
+        wild.sanitized(),
+        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE, room: None }
+    );
     let odd = ProductLook { exposure: -3.0, rotation: -1.0, ..look }.sanitized();
     assert_eq!(odd.exposure, 0.0);
     assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
@@ -727,6 +732,248 @@ fn the_product_look_shaders_translate_for_webgl2() {
         assert!(out.starts_with("#version 300 es"), "{entry}");
         if entry == "fs_pbr" {
             assert!(out.contains("samplerCube"), "fs_pbr samples the studio's cube");
+        }
+    }
+}
+
+/// Each studio binds an upstream starter rig as exported: every light's centre, axes, size and
+/// calibrated radiance are `assets/render/starter/lighting/exports/rigs.json`'s (positions and
+/// sizes in the fixture's extent B = 1000 mm), and the width and height axes' cross product is the
+/// export's emitting normal.
+#[test]
+fn the_bound_rigs_are_upstreams() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/starter/lighting/exports/rigs.json");
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let export: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let items = export["items"].as_array().cloned().unwrap_or_default();
+    let vector = |v: &serde_json::Value| -> [f64; 3] { std::array::from_fn(|k| v[k].as_f64().unwrap_or(f64::NAN)) };
+    let close = |a: [f64; 3], b: [f64; 3], tolerance: f64| (0..3).all(|k| (a[k] - b[k]).abs() <= tolerance);
+    for preset in StudioPreset::ALL {
+        let rig = studio(preset);
+        assert_eq!(preset.rig_id(), rig.preset);
+        let item = items.iter().find(|i| i["preset_id"] == rig.preset).unwrap_or_else(|| panic!("{} is exported", rig.preset));
+        assert_eq!(item["state"], "authored_numeric_unbound", "{}: a complete numeric rig", rig.preset);
+        let lights = item["lights"].as_array().cloned().unwrap_or_default();
+        assert_eq!(lights.len(), rig.lights.len(), "{}: every light bound", rig.preset);
+        assert!(rig.lights.len() <= rig::MAX_LIGHTS);
+        let extent = item["fixture_extent_mm"].as_f64().unwrap_or(f64::NAN);
+        for (light, exported) in rig.lights.iter().zip(&lights) {
+            let name = format!("{} {}", rig.preset, light.id);
+            assert_eq!(exported["id"], light.id, "{name}");
+            assert_eq!(exported["type"], "rectangular_area", "{name}");
+            assert_eq!(exported["emission_sides"], "front_only", "{name}");
+            assert!(close(light.centre, vector(&exported["position_mm"]).map(|v| v / extent), 1e-12), "{name}: centre");
+            assert!(close(light.width_axis, vector(&exported["width_axis"]), 1e-12), "{name}: width axis");
+            assert!(close(light.height_axis, vector(&exported["height_axis"]), 1e-12), "{name}: height axis");
+            assert!(close(light.normal(), vector(&exported["normal"]), 1e-9), "{name}: normal {:?}", light.normal());
+            assert!((2.0 * light.half_width - exported["width_mm"].as_f64().unwrap_or(f64::NAN) / extent).abs() < 1e-12, "{name}: width");
+            assert!((2.0 * light.half_height - exported["height_mm"].as_f64().unwrap_or(f64::NAN) / extent).abs() < 1e-12, "{name}: height");
+            assert!(close(light.radiance, vector(&exported["emission"]["rgb"]), 1e-9), "{name}: radiance");
+            assert!(rig::ROOM.contains(light.centre), "{name}: inside the room");
+        }
+    }
+}
+
+/// A light's graded profile keeps its calibrated mean: the radiance falls off toward the edges and
+/// the rectangle's mean radiance is the rig's.
+#[test]
+fn graded_lights_keep_their_calibrated_mean() {
+    for preset in StudioPreset::ALL {
+        for light in studio(preset).lights {
+            let steps = 400;
+            let mut sum = 0.0;
+            for i in 0..steps {
+                for j in 0..steps {
+                    let x = -1.0 + 2.0 * (f64::from(i) + 0.5) / f64::from(steps);
+                    let y = -1.0 + 2.0 * (f64::from(j) + 0.5) / f64::from(steps);
+                    sum += light.profile(x, y);
+                }
+            }
+            let mean = sum / f64::from(steps * steps);
+            assert!((mean - 1.0).abs() < 2e-3, "{preset:?} {}: mean {mean}", light.id);
+            assert!(light.profile(0.999, 0.0) < 0.01 && light.profile(0.0, 0.0) > 1.0, "{preset:?} {}: graded", light.id);
+        }
+    }
+}
+
+/// Lambert's polygon irradiance against a direct integral over the rectangle (cos θ cos θ' / d²
+/// dA), for a light in front of the surface, one that crosses its horizon and one behind it.
+#[test]
+fn polygon_irradiance_matches_the_area_integral() {
+    let light = rig::PRODUCT.lights[0];
+    let numeric = |p: [f64; 3], n: [f64; 3]| {
+        let steps = 300;
+        let ln = light.normal();
+        let area = 4.0 * light.half_width * light.half_height;
+        let mut e = 0.0;
+        for i in 0..steps {
+            for j in 0..steps {
+                let a = -1.0 + 2.0 * (f64::from(i) + 0.5) / f64::from(steps);
+                let b = -1.0 + 2.0 * (f64::from(j) + 0.5) / f64::from(steps);
+                let x: [f64; 3] = std::array::from_fn(|k| {
+                    light.centre[k] + light.width_axis[k] * a * light.half_width + light.height_axis[k] * b * light.half_height - p[k]
+                });
+                let d2 = dot(x, x);
+                let w = unit(x);
+                let (c, cl) = (dot(n, w), -dot(ln, w));
+                if c > 0.0 && cl > 0.0 {
+                    e += c * cl / d2 * area / f64::from(steps * steps);
+                }
+            }
+        }
+        e
+    };
+    let towards = unit(light.centre);
+    for (p, n) in [
+        ([0.0; 3], towards),
+        ([0.3, -0.2, -0.4], [0.0, 0.0, 1.0]),
+        ([0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]),
+        // The light crosses this surface's horizon.
+        ([0.0, 0.0, 0.0], unit([0.0, -1.0, -0.6])),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+    ] {
+        let expected = numeric(p, n);
+        let got = rig::polygon_irradiance(p, n, &light.corners());
+        assert!((got - expected).abs() <= 0.01 * expected.max(0.01), "p={p:?} n={n:?}: {got} against {expected}");
+    }
+    assert_eq!(rig::polygon_irradiance([0.0; 3], [0.0, 0.0, -1.0], &light.corners()), 0.0, "below the horizon");
+    // From behind the light gives nothing.
+    let behind: [f64; 3] = std::array::from_fn(|k| light.centre[k] - 0.1 * light.normal()[k]);
+    assert_eq!(rig::PRODUCT.direct_irradiance(behind, unit(light.normal().map(|c| -c))), [0.0; 3]);
+}
+
+/// Box projection: a ray leaves the room where it meets the nearest wall, so points across a flat
+/// face look at different parts of the studio (a gradient, not one colour).
+#[test]
+fn reflections_are_projected_against_the_room() {
+    let room = rig::ROOM;
+    let hit = room.exit([0.5, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    assert!((hit[0] - room.half).abs() < 1e-9 && hit[1].abs() < 1e-9);
+    let up = room.exit([0.0, 0.0, 0.0], unit([0.1, 0.2, 1.0]));
+    assert!((up[2] - room.ceiling).abs() < 1e-9);
+    let down = room.exit([0.2, 0.1, 0.0], unit([0.0, 0.0, -1.0]));
+    assert!((down[2] - room.floor).abs() < 1e-9 && (down[0] - 0.2).abs() < 1e-9);
+    // A point outside the room is clamped into it first.
+    let outside = room.exit([9.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    assert!((outside[0] - room.half).abs() < 1e-9);
+    // Along a flat mirror the same reflected direction reaches the walls at different heights.
+    let r = unit([1.0, 0.0, 0.25]);
+    let near = unit(room.exit([-0.5, 0.0, 0.0], r));
+    let far = unit(room.exit([0.5, 0.0, 0.0], r));
+    assert!((near[2] - far[2]).abs() > 0.02, "{near:?} {far:?}");
+}
+
+/// The cyclorama keeps every direction lit: no texel of the sharpest level is darker than a tenth
+/// of the studio's mean radiance, so no face reflects black; the floor is darker than the horizon
+/// band, and the lights outshine everything else.
+#[test]
+fn no_direction_is_darker_than_a_tenth_of_the_mean() {
+    let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    for preset in StudioPreset::ALL {
+        let env = StudioEnvironment::bake(preset);
+        let mean = luminance(env.level_mean(0));
+        let Some(level) = env.levels.first() else { panic!("baked") };
+        let darkest = level.texels.iter().map(|t| luminance(t.map(f64::from))).fold(f64::INFINITY, f64::min);
+        assert!(darkest >= 0.1 * mean, "{preset:?}: darkest {darkest} against mean {mean}");
+        let floor = luminance(env.source([0.0, 0.0, -1.0]));
+        let band = luminance(env.source(unit([0.3, -1.0, 0.1])));
+        assert!(floor < band, "{preset:?}: floor {floor}, band {band}");
+        let key = luminance(env.source(unit(studio(preset).lights[0].centre)));
+        // The soft studio's broad panels are the dimmest lights, at about four times the band.
+        assert!(key > 3.0 * band, "{preset:?}: key {key}, band {band}");
+    }
+}
+
+/// The exposure is calibrated per studio: a white diffuse face at the studio's centre turned to the
+/// key is lit (by the rig's lights directly and the cyclorama's irradiance terms) to
+/// `WHITE_UNDER_KEY`, 0.80 on the display after PBR Neutral; and no white diffuse face, whichever
+/// way it turns, reaches the tone curve's shoulder.
+#[test]
+fn white_under_the_key_is_calibrated_per_studio() {
+    let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    for preset in StudioPreset::ALL {
+        let env = StudioEnvironment::bake(preset);
+        let rig = studio(preset);
+        let white = |n: [f64; 3]| {
+            let mut e = rig.direct_irradiance([0.0; 3], n).map(|c| c * env.calibration());
+            add(&mut e, env.irradiance_at(n), 1.0);
+            e.map(|c| c / PI)
+        };
+        let key = white(unit(rig.lights[0].centre));
+        let value = luminance(key);
+        assert!((value - rig::WHITE_UNDER_KEY).abs() < 0.03 * rig::WHITE_UNDER_KEY, "{preset:?}: {value}");
+        let shown = pbr_neutral(key.map(|c| c as f32));
+        let display = |c: f32| if c <= 0.0031308 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+        assert!((display(shown[1]) - 0.8).abs() < 0.02, "{preset:?}: display {}", display(shown[1]));
+        for i in 0..64 {
+            let (z, a) = (-1.0 + 2.0 * (f64::from(i) + 0.5) / 64.0, f64::from(i) * 2.399);
+            let n = [(1.0 - z * z).sqrt() * a.cos(), (1.0 - z * z).sqrt() * a.sin(), z];
+            let c = white(n);
+            assert!(c.iter().all(|v| *v < 0.76), "{preset:?}: a white face turned {n:?} reaches the shoulder: {c:?}");
+        }
+    }
+}
+
+/// The rooms fit to a scene's bounds and refuse nonsense; the look keeps a room only when it is
+/// valid.
+#[test]
+fn rooms_fit_the_scene() {
+    let Some(room) = StudioRoom::around([0.0, 0.0, 0.0], [80.0, 50.0, 22.0]) else { panic!("a room") };
+    assert_eq!(room.origin, [40.0, 25.0, 0.0]);
+    assert_eq!(room.extent, 80.0);
+    assert!((room.footprint[0] - (0.62 * 80.0 + 0.15 * 22.0)).abs() < 1e-4);
+    for (min, max) in [([0.0; 3], [0.0; 3]), ([0.0; 3], [f32::NAN, 1.0, 1.0]), ([1.0; 3], [0.0; 3]), ([0.0; 3], [f32::INFINITY, 1.0, 1.0])] {
+        assert!(StudioRoom::around(min, max).is_none(), "{min:?} {max:?}");
+    }
+    let look = ProductLook { room: Some(room), ..ProductLook::default() };
+    assert_eq!(look.room_uniform(), [40.0, 25.0, 0.0, 80.0, room.footprint[0], room.footprint[1], 0.0, 0.0]);
+    for wild in [
+        StudioRoom { extent: -1.0, ..room },
+        StudioRoom { extent: 1e-9, ..room },
+        StudioRoom { extent: f32::INFINITY, ..room },
+        StudioRoom { origin: [f32::NAN, 0.0, 0.0], ..room },
+        StudioRoom { origin: [1e30, 0.0, 0.0], ..room },
+        StudioRoom { footprint: [-1.0, 1.0], ..room },
+    ] {
+        let bad = ProductLook { room: Some(wild), ..ProductLook::default() };
+        assert_eq!(bad.sanitized().room, None, "{wild:?}");
+        assert_eq!(bad.room_uniform(), [0.0; 8], "{wild:?}");
+    }
+}
+
+/// The shader's direct rig lights (`pbr_rig_irradiance`) match the CPU's polygon irradiance on the
+/// baked studio's uniform: corners, emitting side, horizon clipping and the calibrated radiance.
+#[test]
+fn gpu_rig_lights_match_the_cpu() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_rig(@builtin(global_invocation_id) id: vec3<u32>) {
+    let q = probes[2u * id.x].xyz;
+    let n = probes[2u * id.x + 1u].xyz;
+    result[id.x] = vec4<f32>(pbr_rig_irradiance(q, n), 1.0);
+}
+"#;
+    let cases: Vec<([f64; 3], [f64; 3])> = vec![
+        ([0.0; 3], unit([-1.2, -1.2, 1.0])),
+        ([0.3, -0.2, -0.4], [0.0, 0.0, 1.0]),
+        ([0.0; 3], [-1.0, 0.0, 0.0]),
+        ([0.1, 0.4, 0.2], unit([0.0, -1.0, -0.6])),
+        ([0.0; 3], [0.0, 0.0, -1.0]),
+        ([-0.4, 0.0, 0.1], unit([0.2, 0.9, 0.3])),
+    ];
+    for preset in StudioPreset::ALL {
+        let env = StudioEnvironment::bake(preset);
+        let input: Vec<f32> = cases.iter().flat_map(|(q, n)| [q[0], q[1], q[2], 0.0, n[0], n[1], n[2], 0.0]).map(|x| x as f32).collect();
+        let got = run_probe(&device, &queue, probe, "probe_rig", &input, cases.len(), Some(&env));
+        assert_eq!(got.len(), cases.len());
+        for ((q, n), g) in cases.iter().zip(&got) {
+            let expected = studio(preset).direct_irradiance(*q, *n).map(|c| c * env.calibration());
+            for k in 0..3 {
+                assert!((f64::from(g[k]) - expected[k]).abs() <= 2e-3 * expected[k] + 1e-4, "{preset:?} q={q:?} n={n:?}: {g:?} against {expected:?}");
+            }
         }
     }
 }
