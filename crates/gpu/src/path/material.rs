@@ -21,8 +21,7 @@ use solidcraft_render::job::textures::RuntimeTextures;
 use solidcraft_render::job::{CancelToken, ErrorCode, JobError, Result};
 use solidcraft_render::material_graph::ir::{Ir, ShapeKey};
 
-// TEMPORARY: `crate::material::codegen` once track C1's shared core lands.
-use super::codegen_shim::{self as codegen, ImageParams, Target};
+use crate::material::codegen::{self, ImageParams, Target};
 
 /// vec4s of a record's path head (the shape, then world-to-object and object-to-world rows);
 /// `GRAPH_HEAD` in `graph.wgsl`.

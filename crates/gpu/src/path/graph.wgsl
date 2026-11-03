@@ -38,8 +38,11 @@ fn graph_context(record: u32, p: vec3<f32>, n: vec3<f32>, v: vec3<f32>) -> sc_Gr
     let to_object = transpose(mat3x3<f32>(a.xyz, b.xyz, c.xyz));
     let to_world = transpose(mat3x3<f32>(graph_vec4(record + 4u).xyz, graph_vec4(record + 5u).xyz, graph_vec4(record + 6u).xyz));
     let p_object = to_object * p + vec3<f32>(a.w, b.w, c.w);
-    let n_object = sc_proj_unit(transpose(to_world) * n, n);
-    return sc_GraphCtx(record + GRAPH_HEAD, v, n, n_object, p + graph_vec4(0u).xyz, p_object, 0.0, 0.0, sc_ObjectFrame(to_object, to_world));
+    let n_object = sc_unit(transpose(to_world) * n);
+    // The geometric tangent sticks to the object: its default tangent carried into world space.
+    let carried = to_world * sc_default_tangent(n_object);
+    let tangent = sc_unit(carried - n * dot(carried, n));
+    return sc_GraphCtx(record + GRAPH_HEAD, v, n, tangent, abs(dot(n, v)), n_object, p + graph_vec4(0u).xyz, p_object, 0.0, sc_ObjectFrame(to_object, to_world));
 }
 
 // A texel index under a wrap mode (0 repeat, 1 clamp to edge, 2 mirrored repeat).

@@ -21,7 +21,6 @@ use std::{
 use wgpu::util::DeviceExt;
 
 mod adaptive;
-mod codegen_shim;
 mod denoise;
 mod dispatch;
 mod material;
@@ -47,8 +46,6 @@ macro_rules! path_source {
             include_str!("volume.wgsl"),
             "\n",
             include_str!("aging.wgsl"),
-            "\n",
-            include_str!("graph_shim.wgsl"),
             "\n",
             include_str!("graph.wgsl")
         )

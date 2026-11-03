@@ -159,13 +159,16 @@ fn triangles_name_their_records_in_the_texture_buffer() {
     let mut second = scene.meshes[0].clone();
     second.name = "second".into();
     scene.meshes.push(second);
+    let mut stage = scene.meshes[0].clone();
+    stage.name = "__render_stage__/floor".into();
+    scene.meshes.push(stage);
     let graphs = GraphMaterials::new(
         vec![material(&copper), material(&coated)],
         vec![binding(0), GraphBinding { body_index: 1, body_name: "second".into(), ..binding(1) }],
     )
     .unwrap();
     let cancel = CancelToken::default();
-    let (texture, records) = super::super::textures::flatten_with_graphs(None, Some(&graphs), 2, Vec3::ZERO, &cancel).unwrap();
+    let (texture, records) = super::super::textures::flatten_with_graphs(None, Some(&graphs), 3, Vec3::ZERO, &cancel).unwrap();
     let word = |i: usize| u32::from_le_bytes(texture[4 * i..4 * i + 4].try_into().unwrap());
     let table = word(1) as usize;
     assert!(table > 0 && table.is_multiple_of(4));
@@ -182,11 +185,21 @@ fn triangles_name_their_records_in_the_texture_buffer() {
     let geometry = |i: usize| u32::from_le_bytes(upload.geometry[4 * i..4 * i + 4].try_into().unwrap());
     let (count, materials) = (geometry(0) as usize, geometry(2) as usize);
     let mut seen = std::collections::BTreeSet::new();
+    let mut stage_triangles = 0;
     for t in 0..count {
-        let z = f32::from_bits(geometry(materials + t * 20 + 18));
-        assert!(z < 0.0, "every triangle of a graph-bound body names its record");
-        seen.insert(z.to_bits());
+        let interior = materials + t * 20 + 16;
+        let z = f32::from_bits(geometry(interior + 2));
+        // The body is the medium identity in optics.w (body index + 1).
+        let body = f32::from_bits(geometry(materials + t * 20 + 11)) as usize - 1;
+        if body == 2 {
+            assert_eq!(z, 1.0, "a stage body keeps its flag, so aging still skips it");
+            stage_triangles += 1;
+        } else {
+            assert!(z < 0.0, "every triangle of a graph-bound body names its record");
+            seen.insert(z.to_bits());
+        }
     }
+    assert!(stage_triangles > 0);
     assert_eq!(seen.len(), 2, "two bodies with two materials have two records");
 }
 
@@ -216,7 +229,8 @@ fn admission_checks_graph_bindings() {
 fn the_generated_module_validates() {
     let (copper, _) = graph(COPPER);
     let (coated, _) = graph(COATED);
-    let graphs = GraphMaterials::new(vec![material(&copper), material(&coated)], vec![binding(0)]).unwrap();
+    let (epoxy, _) = graph(FIXTURES[0].1);
+    let graphs = GraphMaterials::new(vec![material(&copper), material(&coated), material(&epoxy)], vec![binding(0)]).unwrap();
     let source = format!("{PATH_SOURCE}\n{}", super::source(&graphs).unwrap());
     let module = match naga::front::wgsl::parse_str(&source) {
         Ok(m) => m,
@@ -224,8 +238,8 @@ fn the_generated_module_validates() {
     };
     let validated = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default()).validate(&module);
     assert!(validated.is_ok(), "{validated:?}");
-    // Constant graphs share one shape whatever their values: one evaluator.
-    assert_eq!(graphs.shapes().len(), 1);
+    // Constant graphs share one shape whatever their values: one evaluator for them, one for epoxy.
+    assert_eq!(graphs.shapes().len(), 2);
     assert_eq!(source.matches("fn graph_eval_").count(), graphs.shapes().len());
 }
 
@@ -249,14 +263,40 @@ fn a_graph_job_completes() {
 /// One shading point of a probe: rebased world position, unit normal, unit direction to the viewer.
 type ProbePoint = ([f32; 3], [f32; 3], [f32; 3]);
 
-/// The 37 floats (WGSL `Surface` order) the job's evaluator of material 0 returns at each point,
-/// read back from the GPU: what both back ends compare against the test-only reference.
-fn probe(executor: &Executor, graphs: GraphMaterials, points: &[ProbePoint]) -> Vec<[f32; 37]> {
-    assert!(points.len() <= 51);
-    let shape = graphs.shapes().binary_search(&graphs.materials()[0].ir().shape).unwrap();
+/// A body placement `[M | t]`, rows of `world = M·object + t`.
+type Placement = Option<[[f64; 4]; 3]>;
+
+/// The 37 floats (WGSL `Surface` order) each material's evaluator returns at each point, read
+/// back from the GPU: what both back ends compare against the test-only reference. Material `i`
+/// shades its own body, placed by its placement; one compiled job holds them all.
+fn probe(executor: &Executor, materials: Vec<(GraphMaterial, Placement)>, points: &[ProbePoint]) -> Vec<Vec<[f32; 37]>> {
+    let (count, n) = (materials.len(), points.len());
+    assert!(count * n <= 204, "the probe's readback holds 204 surfaces");
+    let mut scene = sphere(white());
+    let body = scene.meshes[0].clone();
+    scene.meshes = (0..count).map(|i| ProductMesh { name: format!("graph sphere {i}"), ..body.clone() }).collect();
+    let bindings = materials
+        .iter()
+        .enumerate()
+        .map(|(i, (_, object_to_world))| GraphBinding {
+            body_index: i,
+            body_name: format!("graph sphere {i}"),
+            face: None,
+            material: i,
+            object_to_world: *object_to_world,
+        })
+        .collect();
+    let graphs = GraphMaterials::new(materials.into_iter().map(|(m, _)| m).collect(), bindings).unwrap();
+    // The records the job writes, laid out as the job lays them out (origin: the camera target 0).
+    let (_, records) = super::super::textures::flatten_with_graphs(None, Some(&graphs), count, Vec3::ZERO, &CancelToken::default()).unwrap();
+    let mut cases = String::new();
+    for (i, m) in graphs.materials().iter().enumerate() {
+        let shape = graphs.shapes().binary_search(&m.ir().shape).unwrap();
+        let record = (-records.interior(i, 0)) as u32 - 1;
+        cases.push_str(&format!("        case {i}u: {{ s = graph_eval_{shape}(graph_probe_ctx({record}u, ps[i], ns[i], vs[i])); }}\n"));
+    }
     let v3 = |v: [f32; 3]| format!("vec3<f32>({:?}, {:?}, {:?})", v[0], v[1], v[2]);
     let list = |k: usize| points.iter().map(|p| v3([p.0, p.1, p.2][k])).collect::<Vec<_>>().join(", ");
-    let n = points.len();
     let fields = [
         "s.base_color.x",
         "s.base_color.y",
@@ -300,14 +340,24 @@ fn probe(executor: &Executor, graphs: GraphMaterials, points: &[ProbePoint]) -> 
         "0.0",
     ];
     let entry = format!(
-        "@compute @workgroup_size(64)
+        "// The probe's context: the job's, with |n·v| exactly as the reference's point gives it (1:
+// the viewer looks along the normal), so discontinuities at facing 1 compare like for like.
+fn graph_probe_ctx(record: u32, p: vec3<f32>, n: vec3<f32>, v: vec3<f32>) -> sc_GraphCtx {{
+    var c = graph_context(record, p, n, v);
+    c.facing = 1.0;
+    return c;
+}}
+@compute @workgroup_size(64)
 fn graph_probe(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    if gid.x >= {n}u {{ return; }}
+    if gid.x >= {total}u {{ return; }}
     var ps = array<vec3<f32>, {n}>({});
     var ns = array<vec3<f32>, {n}>({});
     var vs = array<vec3<f32>, {n}>({});
-    let r = graph_record(triangle(0u)) - 1u;
-    let s = graph_eval_{shape}(graph_context(r, ps[gid.x], ns[gid.x], vs[gid.x]));
+    let i = gid.x % {n}u;
+    var s: sc_Surface;
+    switch gid.x / {n}u {{
+{cases}        default: {{ return; }}
+    }}
     var f = array<f32, 40>({});
     // Each float as an exact non-negative pair, which the checked readback accepts.
     for (var k = 0u; k < 20u; k += 1u) {{
@@ -319,7 +369,8 @@ fn graph_probe(@builtin(global_invocation_id) gid: vec3<u32>) {{
         list(0),
         list(1),
         list(2),
-        fields.join(", ")
+        fields.join(", "),
+        total = count * n,
     );
     let shader = format!("{PATH_SOURCE}\n{}\n{entry}", super::source(&graphs).unwrap());
     let context = &executor.context;
@@ -332,27 +383,31 @@ fn graph_probe(@builtin(global_invocation_id) gid: vec3<u32>) {{
         compilation_options: Default::default(),
         cache: None,
     });
-    let mut r = request(32);
+    let mut r = request(64);
     r.graphs = Some(Arc::new(graphs));
-    let mut task = Task::new(context.clone(), sphere(white()), r, JobOptions::default(), CancelToken::default()).unwrap();
+    let mut task = Task::new(context.clone(), scene, r, JobOptions::default(), CancelToken::default()).unwrap();
     let mut encoder = context.device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &task.bind, &[]);
-        pass.dispatch_workgroups(1, 1, 1);
+        pass.dispatch_workgroups(((count * n) as u32).div_ceil(64), 1, 1);
     }
     context.queue.submit([encoder.finish()]);
     task.sample = 1;
     let raw = task.read_linear().unwrap();
-    (0..n)
-        .map(|i| {
-            let mut out = [0f32; 37];
-            for (k, x) in out.iter_mut().enumerate() {
-                let pair = raw[i * 20 + k / 2];
-                *x = if k % 2 == 0 { pair[0] - pair[1] } else { pair[2] - pair[3] };
-            }
-            out
+    (0..count)
+        .map(|m| {
+            (0..n)
+                .map(|i| {
+                    let mut out = [0f32; 37];
+                    for (k, x) in out.iter_mut().enumerate() {
+                        let pair = raw[(m * n + i) * 20 + k / 2];
+                        *x = if k % 2 == 0 { pair[0] - pair[1] } else { pair[2] - pair[3] };
+                    }
+                    out
+                })
+                .collect()
         })
         .collect()
 }
@@ -365,13 +420,162 @@ fn the_path_evaluator_reads_its_record_at_fixed_points() {
     let (ir, _) = graph(COATED);
     let s = 1.0 / 3f32.sqrt();
     let points = [([0.3, 0.6, 1.0], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), ([-0.5, 0.1, 0.8], [s, s, s], [0.0, 0.0, 1.0])];
-    let graphs = GraphMaterials::new(vec![material(&ir)], vec![binding(0)]).unwrap();
-    for (point, got) in points.iter().zip(probe(&executor, graphs, &points)) {
+    for (point, got) in points.iter().zip(&probe(&executor, vec![(material(&ir), None)], &points)[0]) {
         let want: [f32; 21] = [
             0.05, 0.2, 0.1, 0.0, 0.6, 1.5, 1.0, 0.08, 1.5, point.1[0], point.1[1], point.1[2], point.1[0], point.1[1], point.1[2], 1.0, 1.0, 1.0,
             1.0, 0.0, 0.0,
         ];
         assert_eq!(got[..21], want, "{got:?}");
         assert_eq!(got[24..], [1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    }
+}
+
+const FIXTURES: [(&str, &str); 6] = [
+    ("black-epoxy-clear-coat", include_str!("../../../render/tests/fixtures/material_graph/black-epoxy-clear-coat.json")),
+    ("brushed-nickel-silver", include_str!("../../../render/tests/fixtures/material_graph/brushed-nickel-silver.json")),
+    ("electrolytic-sleeve", include_str!("../../../render/tests/fixtures/material_graph/electrolytic-sleeve.json")),
+    ("laser-etched-nickel-silver", include_str!("../../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json")),
+    ("pbr-copper", include_str!("../../../render/tests/fixtures/material_graph/pbr-copper.json")),
+    ("solder-mask-over-copper", include_str!("../../../render/tests/fixtures/material_graph/solder-mask-over-copper.json")),
+];
+
+/// The worst difference between the path evaluator and the test-only reference for each graph
+/// `text` at the reference's fixed points, every graph on a body placed by `placement`.
+fn worst_against_reference(
+    executor: &Executor,
+    texts: &[String],
+    placement: Option<([[f64; 3]; 3], [f64; 3])>,
+) -> Vec<Result<(String, f64), String>> {
+    use solidcraft_render::material_graph::reference::{self, ReferenceSurface};
+    let Ok(points) = reference::sample_points()
+        .into_iter()
+        .map(|p| match placement {
+            Some((m, t)) => p.placed(m, t),
+            None => Ok(p),
+        })
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return vec![Err("a singular placement".to_owned()); texts.len()];
+    };
+    let object_to_world = placement.map(|(m, t)| [0, 1, 2].map(|i| [m[i][0], m[i][1], m[i][2], t[i]]));
+    let prepared: Vec<_> =
+        texts.iter().map(|text| reference::prepare_json(text, &BTreeMap::new()).map(|(ir, words)| (Arc::new(ir), words))).collect();
+    let materials: Vec<_> = prepared.iter().flatten().map(|(ir, _)| (material(ir), object_to_world)).collect();
+    let f32s = |v: [f64; 3]| v.map(|x| x as f32);
+    // Facing 1: the viewer looks along the normal, as the reference's points do.
+    let probes: Vec<ProbePoint> = points.iter().map(|p| (f32s(p.world_position), f32s(p.world_normal), f32s(p.world_normal))).collect();
+    let mut surfaces = probe(executor, materials, &probes).into_iter();
+    prepared
+        .into_iter()
+        .map(|prepared| {
+            let (ir, words) = prepared.map_err(|e| e.0)?;
+            let got = surfaces.next().ok_or("missing probe")?;
+            let mut worst = (String::new(), 0.0);
+            for (i, (point, got)) in points.iter().zip(got).enumerate() {
+                let mut want = reference::evaluate(&ir, &words, &[], point).map_err(|e| e.0)?.surface;
+                let mut have = ReferenceSurface::from_floats(&got).map_err(|e| e.0)?;
+                // The tangent is zeroed at exactly zero anisotropy; f32 and f64 may land on either side.
+                if want.anisotropy.abs() < 1e-6 && have.anisotropy.abs() < 1e-6 {
+                    (want.tangent, have.tangent) = ([0.0; 3], [0.0; 3]);
+                }
+                let (field, d) = want.max_difference(&have);
+                if d > worst.1 {
+                    worst = (format!("{field} at point {i}"), d);
+                }
+            }
+            Ok(worst)
+        })
+        .collect()
+}
+
+/// Every worked example evaluates in the path tracer as the reference does, on unplaced and placed
+/// bodies. The viewport's back end checks the same reference at the same points
+/// (`material::tests`), so the two back ends agree there (§5.7).
+#[test]
+fn the_fixtures_match_the_reference_in_the_path_tracer() {
+    let Some(executor) = executor() else { return };
+    let (c, s) = (0.6f64, 0.8f64);
+    let turn = ([[2.0 * c, -2.0 * s, 0.0], [2.0 * s, 2.0 * c, 0.0], [0.0, 0.0, 2.0]], [3.0, -1.0, 2.0]);
+    let texts: Vec<String> = FIXTURES.iter().map(|(_, t)| (*t).to_owned()).collect();
+    for placement in [None, Some(turn)] {
+        for ((name, _), worst) in FIXTURES.iter().zip(worst_against_reference(&executor, &texts, placement)) {
+            let (field, d) = worst.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(d < 1e-3, "{name} (placed: {}): {field} differs by {d}", placement.is_some());
+        }
+    }
+}
+
+/// The viewport back end's generated corpus evaluates in the path tracer as the reference does.
+#[test]
+fn the_generated_corpus_matches_the_reference_in_the_path_tracer() {
+    let Some(executor) = executor() else { return };
+    let mut fuzz = crate::material::tests::Fuzz(0x9e37_79b9_7f4a_7c15);
+    let texts: Vec<(usize, String)> = (0..96)
+        .map(|i| (i, fuzz.graph().to_string()))
+        .filter(|(_, t)| solidcraft_render::material_graph::reference::prepare_json(t, &BTreeMap::new()).is_ok())
+        .collect();
+    assert!(texts.len() >= 64, "{} compared", texts.len());
+    let mut bad = Vec::new();
+    // A job compiles at most MAX_GRAPH_SHAPES shapes; batches of 16 stay well inside it.
+    for batch in texts.chunks(16) {
+        let graphs: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
+        for ((i, _), worst) in batch.iter().zip(worst_against_reference(&executor, &graphs, None)) {
+            match worst {
+                Ok((field, d)) if d >= 1e-3 => bad.push(format!("graph {i}: {field} by {d}")),
+                Ok(_) => {}
+                Err(e) => bad.push(format!("graph {i}: {e}")),
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} of {} graphs differ:\n{}", bad.len(), texts.len(), bad.join("\n"));
+}
+
+/// An original 4×4 RGBA test image, every texel distinct, as PNG.
+fn test_image() -> (Vec<u8>, Vec<u8>) {
+    let rgba: Vec<u8> = (0..16u32).flat_map(|i| [i * 16, 255 - i * 13, (i * 37) % 251, 64 + i * 11].map(|c| c as u8)).collect();
+    let image = image::RgbaImage::from_raw(4, 4, rgba.clone()).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    (rgba, png.into_inner())
+}
+
+/// `image` nodes sample the texture buffer as the reference samples the image: bilinear at the
+/// top-row-first texels, sRGB decoded before filtering, under every wrap mode and channel.
+#[test]
+fn images_sample_as_the_reference_does() {
+    use solidcraft_render::job::graphs::GraphTexture;
+    use solidcraft_render::material_graph::reference::{self, ReferenceSurface, ReferenceTexture};
+    let Some(executor) = executor() else { return };
+    let (rgba, png) = test_image();
+    let texture = ReferenceTexture::from_rgba8(4, 4, &rgba).unwrap();
+    let sha = "ab".repeat(32);
+    let mut texts = Vec::new();
+    for (space, wrap, channel) in [("srgb", "repeat", "rgb"), ("linear", "clamp", "a"), ("srgb", "mirror", "g"), ("linear", "repeat", "rgb")] {
+        let graph = serde_json::json!({"name": "image", "nodes": [
+            {"id": "tc", "kind": "texcoord.planar", "inputs": {"u": [2.5, 0.5, 0.0], "v": [-0.5, 2.5, 0.5]}, "params": {"space": "world"}},
+            {"id": "img", "kind": "image", "params": {"space": space, "wrap": wrap, "channel": channel},
+             "inputs": {"texcoord": {"from": "tc"}, "file": {"texture": sha}}},
+            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": {"from": "img.value"}}}],
+            "output": "surface"});
+        texts.push((space == "srgb", graph.to_string()));
+    }
+    let points = reference::sample_points();
+    let f32s = |v: [f64; 3]| v.map(|x| x as f32);
+    let probes: Vec<ProbePoint> = points.iter().map(|p| (f32s(p.world_position), f32s(p.world_normal), f32s(p.world_normal))).collect();
+    let mut prepared = Vec::new();
+    let mut materials = Vec::new();
+    for (srgb, text) in &texts {
+        let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).unwrap();
+        let ir = Arc::new(ir);
+        let m = GraphMaterial::new(ir.clone(), &BTreeMap::new(), vec![Some(GraphTexture::new(png.clone(), *srgb).unwrap())]).unwrap();
+        materials.push((m, None));
+        prepared.push((ir, words));
+    }
+    for ((ir, words), got) in prepared.iter().zip(probe(&executor, materials, &probes)) {
+        for (point, got) in points.iter().zip(got) {
+            let want = reference::evaluate(ir, words, &[Some(&texture)], point).unwrap().surface;
+            let (field, d) = want.max_difference(&ReferenceSurface::from_floats(&got).unwrap());
+            assert!(d < 1e-4, "{field} differs by {d} at {point:?}");
+        }
     }
 }

@@ -957,7 +957,9 @@ impl Gen<'_> {
                     if op == Operand::Absent { d } else { format!("sc_clean3({}, {}, {}, {d})", self.arg(&op, Kind::V3)?, lit(lo), lit(hi)) }
                 }
                 PortType::Normal => {
-                    if op == Operand::Absent {
+                    // The geometric normal is already unit: passed through, so a constant graph
+                    // shades bit for bit like its `pbr` look.
+                    if matches!(op, Operand::Absent | Operand::Geometry(GeometryInput::WorldNormal)) {
                         "c.n".to_owned()
                     } else {
                         format!("sc_clean_normal({}, c.n)", self.arg(&op, Kind::V3)?)

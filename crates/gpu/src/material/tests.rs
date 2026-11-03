@@ -152,7 +152,7 @@ fn no_user_string_or_value_reaches_the_shader() {
 
 /// A deterministic generator of varied valid graphs (the fuzz part of the WebGL2 corpus, §5.3):
 /// every node kind, both spaces, slopes and triplanar expansion, surface mixes.
-struct Fuzz(u64);
+pub(crate) struct Fuzz(pub(crate) u64);
 
 impl Fuzz {
     fn next(&mut self) -> u64 {
@@ -171,7 +171,7 @@ impl Fuzz {
         (self.next() % 1000) as f64 / 1000.0
     }
 
-    fn graph(&mut self) -> Value {
+    pub(crate) fn graph(&mut self) -> Value {
         let mut nodes = Vec::new();
         let mut tcs: Vec<String> = Vec::new();
         let mut floats: Vec<String> = Vec::new();
