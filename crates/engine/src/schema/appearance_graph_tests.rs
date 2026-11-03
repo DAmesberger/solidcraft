@@ -415,6 +415,17 @@ fn library_copies_carry_their_graph_and_update_from_their_library() {
     // Up to date: nothing to apply.
     let again = s.execute("appearance.graph.update_from_library", &json!({"id": "etched-library", "library": path_text})).unwrap();
     assert_eq!((again["applied"].clone(), again["changes"].clone()), (json!(false), json!([])));
+    // Exporting: v3 by default when a look names a graph; v2 explicitly refuses the graph.
+    let out = solidcraft_io::vfs::temp_dir().join(format!("solidcraft-graph-export-{}.json", std::process::id()));
+    let out_text = out.to_string_lossy().to_string();
+    let before = state(&s);
+    assert!(s.execute("library.export", &json!({"path": out_text, "format": "solidcraft-library/2"})).is_err());
+    let exported = s.execute("library.export", &json!({"path": out_text})).unwrap();
+    assert_eq!(exported["catalog"]["format"], V3_FORMAT);
+    assert!(Catalog::read(&out_text).unwrap().graphs.contains_key(&gid("etched-library")));
+    s.execute("library.export", &json!({"path": out_text, "format": V3_FORMAT, "overwrite": true})).unwrap();
+    unchanged(&s, &before, "export");
+    let _ = std::fs::remove_file(&out);
     // A graph not from this library is refused.
     s.execute("appearance.graph.create", &json!({"id": "own", "name": "Own"})).unwrap();
     assert!(s.execute("appearance.graph.update_from_library", &json!({"id": "own", "library": path_text})).is_err());

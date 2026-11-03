@@ -28,7 +28,8 @@ pub(super) const MAX_RUNTIME_TEXTURES: usize = 16;
 pub(super) const MAX_RUNTIME_TEXTURE_BYTES: usize = 16 << 20;
 
 /// One runtime override of graph interface values: for the graph `graph` wherever it is bound,
-/// or for the body `body_index`/`body_name` (as `render.scene` lists it) whatever graph it shows.
+/// or for the body `body_index`/`body_name` (as `render.scene` lists it): each of its bindings
+/// (the body's look, its faces' looks) whose graph exposes every input the override sets.
 /// Exactly one of the two. The values merge over the looks' own.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +65,18 @@ pub(crate) struct CapturedBinding {
     pub object_to_world: Option<[[f64; 4]; 3]>,
 }
 
+/// The capture of one job. Wiring it to track PT's `solidcraft_render::job::graphs` is a
+/// field-for-field conversion in `prepare_progressive` (errors through `job_error`):
+///
+/// ```text
+/// materials: GraphMaterial::new(m.ir, &m.values,
+///     m.textures.map(|t| t.map(|(bytes, srgb)| GraphTexture::new((*bytes).clone(), srgb)).transpose()))
+/// bindings:  GraphBinding { body_index, body_name, face, material, object_to_world }
+/// request:   ImageRequest { graphs: Some(Arc::new(GraphMaterials::new(materials, bindings)?)), .. }
+/// ```
+///
+/// `tests::captures_meet_the_path_back_ends_constructor_rules` holds a capture to the rules those
+/// constructors check.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CapturedGraphs {
     pub materials: Vec<CapturedMaterial>,
@@ -213,6 +226,8 @@ pub(crate) fn capture(
     let mut index: BTreeMap<(GraphId, String), usize> = BTreeMap::new();
     let mut irs: BTreeMap<GraphId, Arc<Ir>> = BTreeMap::new();
     let mut bytes = Bytes { s, runtime: runtime.clone(), decoded: BTreeMap::new() };
+    // Body overrides some binding of their body took.
+    let mut taken = std::collections::BTreeSet::new();
     let mut material = |look: &Look, body: usize, out: &mut CapturedGraphs| -> Result<Option<usize>> {
         let Some(id) = &look.graph else { return Ok(None) };
         let graph = tables.graphs.get(id).ok_or_else(|| bad(command, format!("a look names missing material graph `{}`", id.as_str())))?;
@@ -227,7 +242,14 @@ pub(crate) fn capture(
             }
         };
         let mut values = look.values.clone();
-        for o in [by_graph.get(id), by_body.get(&body)].into_iter().flatten() {
+        // A graph override always applies; a body override to each of the body's bindings whose
+        // graph exposes all its inputs (a face may show another graph).
+        let exposes = |o: &BTreeMap<String, Constant>| o.keys().all(|k| graph.interface.iter().any(|i| &i.name == k));
+        let body_override = by_body.get(&body).filter(|o| exposes(o));
+        if body_override.is_some() {
+            taken.insert(body);
+        }
+        for o in [by_graph.get(id), body_override].into_iter().flatten() {
             check_override(graph, &ir, o, &known, command)?;
             values.extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -282,6 +304,9 @@ pub(crate) fn capture(
             let face = u32::try_from(face).map_err(|_| bad(command, "render face index exceeds the mesh contract"))?;
             bind(Some(face), Some(look), &mut out)?;
         }
+    }
+    if let Some(body) = by_body.keys().find(|b| !taken.contains(*b)) {
+        return Err(bad(command, format!("no graph on body {body} exposes every input its override sets")));
     }
     if out.materials.is_empty() {
         if !overrides.is_empty() {

@@ -119,3 +119,47 @@ fn placed_copies_bind_with_their_placement() {
     let placement = captured.bindings[0].object_to_world.unwrap();
     assert_eq!(placement[0], [1.0, 0.0, 0.0, 10.0]);
 }
+
+/// What track PT's `GraphMaterial::new` and `GraphMaterials::new` check, so the adapter that
+/// hands a capture to the path tracer cannot fail on a capture this module makes.
+fn assert_path_back_end_shapes(c: &CapturedGraphs) {
+    use solidcraft_render::material_graph::limits;
+    assert!(!c.materials.is_empty() && c.materials.len() <= MAX_MATERIALS);
+    assert!(!c.bindings.is_empty() && c.bindings.len() <= 65_536);
+    for m in &c.materials {
+        let words = mg::uniform_words(&m.ir, &m.values).expect("the values make uniform words");
+        assert!(words.len() <= limits::UNIFORM_FLOATS && m.ir.textures.len() <= limits::TEXTURES_PER_GRAPH);
+        assert_eq!(m.textures.len(), m.ir.textures.len(), "one texture entry per image binding");
+        for (t, b) in m.textures.iter().zip(&m.ir.textures) {
+            if let Some((bytes, srgb)) = t {
+                assert_eq!(*srgb, b.srgb, "the colour space of its image node");
+                assert!(solidcraft_doc::canvas::image_info(bytes).is_some(), "an encoded PNG or JPEG");
+            }
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for b in &c.bindings {
+        assert!(b.body_index < 65_536 && b.material < c.materials.len());
+        assert!(!b.body_name.is_empty() && b.body_name.len() <= 1024 && !b.body_name.chars().any(char::is_control));
+        assert!(seen.insert((b.body_index, b.face)), "one binding per body or face");
+        if let Some(m) = &b.object_to_world {
+            assert!(m.iter().flatten().all(|x| x.is_finite() && x.abs() <= 1e7));
+        }
+    }
+}
+
+#[test]
+fn captures_meet_the_path_back_ends_constructor_rules() {
+    let (mut s, _) = design();
+    // A face with its own graph look beside its body's.
+    s.execute("appearance.graph.create", &json!({"id": "plain", "name": "Plain"})).unwrap();
+    s.execute("appearance.assign", &json!({"faces": [[5, 5, 2]], "body": "Label", "graph": "plain"})).unwrap();
+    let scene = crate::product_scene::extract(&s).unwrap();
+    let captured = capture(&s, &scene, &[], &[], "render.start").unwrap().unwrap();
+    assert_eq!(captured.materials.len(), 2);
+    assert!(captured.bindings.iter().any(|b| b.face.is_some()));
+    assert_path_back_end_shapes(&captured);
+    let label = ordinal(&scene, "Label");
+    let given = overrides(json!([{"body_index": label, "body_name": "Label", "values": {"tint": [0.1, 0.2, 0.3]}}]));
+    assert_path_back_end_shapes(&capture(&s, &scene, &given, &[], "render.start").unwrap().unwrap());
+}
