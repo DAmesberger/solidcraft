@@ -704,8 +704,10 @@ pub(crate) fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
 /// A studio on the GPU.
 pub(crate) struct EnvGpu {
     pub(crate) bind: wgpu::BindGroup,
+    /// Its cube and uniform, which the material-graph pipelines' group 3 binds again.
+    view: wgpu::TextureView,
     _texture: wgpu::Texture,
-    _uniform: wgpu::Buffer,
+    uniform: wgpu::Buffer,
 }
 
 fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, texture: wgpu::Texture, uniform: wgpu::Buffer) -> EnvGpu {
@@ -719,7 +721,7 @@ fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::S
             wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
         ],
     });
-    EnvGpu { bind, _texture: texture, _uniform: uniform }
+    EnvGpu { bind, view, _texture: texture, uniform }
 }
 
 fn cube(device: &wgpu::Device, size: u32, mips: u32) -> wgpu::Texture {
@@ -794,12 +796,79 @@ pub(crate) fn upload(
     bind(device, layout, sampler, texture, uniform)
 }
 
+/// Group 3 of the material-graph pipelines, "studio + material" (docs/material-graph.md §5.3):
+/// WebGL2 allows four bind groups and the viewport uses all four, so the material page and its
+/// textures join the studio. Bindings 0–2 are [`layout`]'s; 3 is the uniform page
+/// (`material::PAGE_BYTES`, WebGL2's block limit); 4–7 the material's textures (at most
+/// `limits::TEXTURES_PER_GRAPH`, so with the studio cube and the AO maps a stage samples well
+/// under WebGL2's 16 textures); 8–10 their samplers by wrap mode (repeat, clamp, mirror).
+pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let visibility = wgpu::ShaderStages::FRAGMENT;
+    let texture = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let sampler = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("sc_studio_material"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            sampler(1),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: std::num::NonZeroU64::new(crate::material::PAGE_BYTES),
+                },
+                count: None,
+            },
+            texture(4),
+            texture(5),
+            texture(6),
+            texture(7),
+            sampler(8),
+            sampler(9),
+            sampler(10),
+        ],
+    })
+}
+
 /// The renderer's studios: the stand-in and each preset uploaded so far (at most one per preset).
 pub(crate) struct Studios {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     placeholder: EnvGpu,
     baked: Vec<(StudioPreset, EnvGpu)>,
+    /// Counts installations, so binds made from an older studio are known stale.
+    generation: u64,
 }
 
 impl Studios {
@@ -807,7 +876,7 @@ impl Studios {
         let layout = layout(device, wgpu::ShaderStages::FRAGMENT);
         let sampler = sampler(device);
         let placeholder = placeholder(device, &layout, &sampler);
-        Studios { layout, sampler, placeholder, baked: Vec::new() }
+        Studios { layout, sampler, placeholder, baked: Vec::new(), generation: 0 }
     }
 
     pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
@@ -824,6 +893,45 @@ impl Studios {
         let gpu = upload(device, queue, &self.layout, &self.sampler, env);
         self.baked.retain(|(p, _)| *p != env.preset());
         self.baked.push((env.preset(), gpu));
+        self.generation += 1;
+    }
+
+    /// How many studios have been installed: binds of an older generation are stale.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// A material-graph group 3 ([`material_layout`]): the frame's studio (as [`Studios::bind`]
+    /// picks it), a uniform `page`, the material `textures` and their `samplers`.
+    pub(crate) fn material_bind(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        preset: Option<StudioPreset>,
+        page: &wgpu::Buffer,
+        textures: [&wgpu::TextureView; 4],
+        samplers: [&wgpu::Sampler; 3],
+    ) -> wgpu::BindGroup {
+        let env = preset.and_then(|preset| self.baked.iter().find(|(p, _)| *p == preset)).map_or(&self.placeholder, |(_, gpu)| gpu);
+        let [t0, t1, t2, t3] = textures;
+        let [s0, s1, s2] = samplers;
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sc_studio_material"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&env.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: env.uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(t0) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(t1) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(t2) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(t3) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(s0) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(s1) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(s2) },
+            ],
+        })
     }
 
     /// The bind group for a frame's look (the stand-in without one, or before its studio is up).

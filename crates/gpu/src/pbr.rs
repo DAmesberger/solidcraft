@@ -362,8 +362,7 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
 }
 
 /// [`SOURCE`]'s shared shading alone, for shaders that bring their own material and entries
-/// (material graphs' generated shaders, which drop the gate when they use it).
-#[cfg(test)]
+/// (material graphs' generated shaders).
 pub const SHADE: &str = shade_source!();
 
 /// The PBR shader appended to the viewport's: the shared shading, then the vertex stream.

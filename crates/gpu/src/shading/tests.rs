@@ -6,9 +6,11 @@ fn the_library_joins_the_viewport_and_translates_for_webgl2() {
     use naga::back::glsl;
     for (name, source) in super::LIBRARY {
         for line in source.lines() {
+            // Module scope is unindented; a function's own `var`s and `let`s are local.
+            let top = !line.starts_with(char::is_whitespace);
             let line = line.trim_start();
             for keyword in ["fn ", "const ", "struct ", "var ", "alias "] {
-                if let Some(rest) = line.strip_prefix(keyword) {
+                if let Some(rest) = line.strip_prefix(keyword).filter(|_| top) {
                     assert!(rest.starts_with("sc_"), "{name}: `{line}` needs an sc_ name");
                 }
             }
