@@ -977,3 +977,99 @@ fn probe_rig(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 }
+
+/// The studio term of a material graph's surface (track C2): an anisotropic base looks up its
+/// bent reflection (`sc_aniso_reflect`) and a coloured coat tints the base. White furnace: a
+/// white anisotropic metal or dielectric still reflects what it receives, exactly as the
+/// isotropic one, whatever the bend (the split-sum albedo is the isotropic one); a white coat
+/// colour is `pbr_ibl_parts`; a tinted coat reflects less than a white one, but at least its own
+/// reflection. In the baked studio the bend changes what an anisotropic metal reflects.
+#[test]
+fn anisotropic_and_tinted_studio_terms_pass_the_white_furnace() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_layers(@builtin(global_invocation_id) id: vec3<u32>) {
+    // Even invocations: the graph surface's term; odd: `pbr_ibl_parts` (isotropic, white coat).
+    let b = (id.x / 2u) * 5u;
+    let s = probes[b];
+    let q = probes[b + 1u];
+    let c = probes[b + 2u];
+    let n = probes[b + 3u].xyz;
+    let v = probes[b + 4u].xyz;
+    let parameters = vec3<f32>(s.w, q.x, q.y);
+    let coat = vec3<f32>(c.w, 0.2, 1.5);
+    var p: PbrIbl;
+    if (id.x % 2u == 0u) {
+        let t = sc_aniso_tangent(n, vec3<f32>(1.0, 0.0, 0.0), q.w);
+        p = pbr_ibl_layers(s.xyz, parameters, coat, c.xyz, n, n, v, sc_aniso_reflect(n, t, v, q.x, q.z), 0.3);
+    } else {
+        p = pbr_ibl_parts(s.xyz, parameters, coat, n, v, 0.3);
+    }
+    result[id.x] = vec4<f32>(p.specular + p.coat + p.diffuse, p.coat.x);
+}
+"#;
+    // (base, metallic, roughness, ior, anisotropy, rotation, coat colour, coat weight, normal, view)
+    type Case = (Rgb, f64, f64, f64, f64, f64, Rgb, f64, Rgb, Rgb);
+    let mut cases: Vec<Case> = Vec::new();
+    for (metallic, ior) in [(1.0, 1.5), (0.0, 1.5), (0.0, 1.0)] {
+        for roughness in [0.2, 0.6, 1.0] {
+            for anisotropy in [0.5, 1.0] {
+                for (coat, weight) in [([1.0; 3], 0.0), ([1.0; 3], 1.0), ([0.3, 0.6, 0.9], 1.0), ([0.3, 0.6, 0.9], 0.5)] {
+                    for (n, v) in [([0.0, 0.0, 1.0], unit([0.6, 0.3, 0.7])), (unit([0.2, -0.3, 0.9]), unit([-0.5, 0.4, 0.6]))] {
+                        cases.push(([1.0; 3], metallic, roughness, ior, anisotropy, 0.7, coat, weight, n, v));
+                    }
+                }
+            }
+        }
+    }
+    let mut input = Vec::new();
+    for (base, metallic, roughness, ior, anisotropy, rotation, coat, weight, n, v) in &cases {
+        input.extend(
+            [
+                base[0],
+                base[1],
+                base[2],
+                *metallic,
+                *roughness,
+                *ior,
+                *anisotropy,
+                *rotation,
+                coat[0],
+                coat[1],
+                coat[2],
+                *weight,
+                n[0],
+                n[1],
+                n[2],
+                0.0,
+                v[0],
+                v[1],
+                v[2],
+                0.0,
+            ]
+            .map(|x| x as f32),
+        );
+    }
+    let furnace = StudioEnvironment::furnace(1.0);
+    let got = run_probe(&device, &queue, probe, "probe_layers", &input, 2 * cases.len(), Some(&furnace));
+    assert_eq!(got.len(), 2 * cases.len());
+    for (k, case) in cases.iter().enumerate() {
+        let (graph, today) = (got[2 * k], got[2 * k + 1]);
+        let coat = case.6;
+        if coat == [1.0; 3] {
+            assert!((0..3).all(|c| (graph[c] - 1.0).abs() < 1e-3 && (graph[c] - today[c]).abs() < 1e-4), "{case:?}: {graph:?} against {today:?}");
+        } else {
+            assert!((0..3).all(|c| graph[c] < today[c] && graph[c] >= graph[3] - 1e-6), "{case:?}: tinted {graph:?} against white {today:?}");
+            assert!(graph[0] < graph[2], "{case:?}: red is absorbed most: {graph:?}");
+        }
+    }
+    // In the baked studio the bend moves an anisotropic metal's reflection.
+    let studio = StudioEnvironment::bake(StudioPreset::Product);
+    let got = run_probe(&device, &queue, probe, "probe_layers", &input, 2 * cases.len(), Some(&studio));
+    let moved = cases.iter().enumerate().filter(|(k, c)| c.1 == 1.0 && (0..3).any(|j| (got[2 * k][j] - got[2 * k + 1][j]).abs() > 1e-3)).count();
+    assert!(got.iter().all(|g| g.iter().all(|x| x.is_finite() && *x >= 0.0)), "{got:?}");
+    assert!(moved > 0, "the bend changes no anisotropic metal");
+}
