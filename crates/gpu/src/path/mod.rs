@@ -667,8 +667,19 @@ impl Task {
         if let Some(graphs) = &graphs {
             graphs.validate_scene(&scene, &cancel)?;
         }
-        let (texture_upload, graph_records) =
-            textures::flatten_with_graphs(request.textures.as_deref(), graphs.as_deref(), scene.meshes.len(), request.camera.target, &cancel)?;
+        // Graph textures are resident at what one storage binding of this device holds.
+        let resident = crate::material::textures::ResidentPolicy::path(context.device.limits().max_storage_buffer_binding_size);
+        let (texture_upload, graph_records) = textures::flatten_with_graphs(
+            request.textures.as_deref(),
+            graphs.as_deref(),
+            scene.meshes.len(),
+            request.camera.target,
+            &cancel,
+            &resident,
+        )?;
+        if texture_upload.len() as u64 > context.device.limits().max_storage_buffer_binding_size {
+            return Err(JobError::new(ErrorCode::LimitExceeded, "the job's textures exceed one storage binding of this device"));
+        }
         request.textures = None; // GPU upload owns decoded pixels; release captured source bytes.
         let pipeline = graphs.as_deref().map(|graphs| context.graph_pipeline(graphs)).transpose()?;
         drop(graphs);

@@ -12,6 +12,7 @@ use solidcraft_render::surface::OpaqueSurface;
 use solidcraft_render::{Camera, ProductMesh, ProductScene, StandardView};
 
 use super::super::{Executor, PATH_SOURCE, Task, admission, open_headless};
+use crate::material::textures::ResidentPolicy;
 
 const COPPER: &str = include_str!("../../../render/tests/fixtures/material_graph/pbr-copper.json");
 /// A constant coated dielectric (an original fixture for this test).
@@ -168,7 +169,8 @@ fn triangles_name_their_records_in_the_texture_buffer() {
     )
     .unwrap();
     let cancel = CancelToken::default();
-    let (texture, records) = super::super::textures::flatten_with_graphs(None, Some(&graphs), 3, Vec3::ZERO, &cancel).unwrap();
+    let (texture, records) =
+        super::super::textures::flatten_with_graphs(None, Some(&graphs), 3, Vec3::ZERO, &cancel, &ResidentPolicy::path(u64::MAX)).unwrap();
     let word = |i: usize| u32::from_le_bytes(texture[4 * i..4 * i + 4].try_into().unwrap());
     let table = word(1) as usize;
     assert!(table > 0 && table.is_multiple_of(4));
@@ -288,7 +290,9 @@ fn probe(executor: &Executor, materials: Vec<(GraphMaterial, Placement)>, points
         .collect();
     let graphs = GraphMaterials::new(materials.into_iter().map(|(m, _)| m).collect(), bindings).unwrap();
     // The records the job writes, laid out as the job lays them out (origin: the camera target 0).
-    let (_, records) = super::super::textures::flatten_with_graphs(None, Some(&graphs), count, Vec3::ZERO, &CancelToken::default()).unwrap();
+    let (_, records) =
+        super::super::textures::flatten_with_graphs(None, Some(&graphs), count, Vec3::ZERO, &CancelToken::default(), &ResidentPolicy::path(u64::MAX))
+            .unwrap();
     let mut cases = String::new();
     for (i, m) in graphs.materials().iter().enumerate() {
         let shape = graphs.shapes().binary_search(&m.ir().shape).unwrap();
@@ -577,5 +581,123 @@ fn images_sample_as_the_reference_does() {
             let (field, d) = want.max_difference(&ReferenceSurface::from_floats(&got).unwrap());
             assert!(d < 1e-4, "{field} differs by {d} at {point:?}");
         }
+    }
+}
+
+/// A session with the path tracer installed, one box and a saved gpu_path setup `Graph`.
+fn graph_design(executor: Executor, graph: serde_json::Value) -> solidcraft_engine::Session {
+    use serde_json::json;
+    let host = solidcraft_render::job::ImageHost::with_executor(Arc::new(executor)).unwrap();
+    let mut session = solidcraft_engine::Session::default();
+    session.register_render_job_host(host).unwrap();
+    session.execute("solid.box", &json!({"length": 20, "width": 15, "height": 4, "body_name": "Coupon"})).unwrap();
+    session.execute("appearance.graph.create", &json!({"id": "look", "name": "Look", "graph": graph})).unwrap();
+    session.execute("appearance.assign", &json!({"bodies": ["Coupon"], "graph": "look"})).unwrap();
+    let camera = session.execute("render.camera.fit", &json!({})).unwrap()["camera"].clone();
+    session
+        .execute(
+            "render.settings.set",
+            &json!({"name": "Graph", "set": {"width": 48, "height": 32, "camera": camera,
+                "job": {"method": "gpu_path", "options": {"samples": 4, "max_depth": 3, "seed": 20261104}}}}),
+        )
+        .unwrap();
+    session
+}
+
+fn completed(session: &mut solidcraft_engine::Session) -> (solidcraft_render::job::JobStatus, image::RgbaImage) {
+    use solidcraft_render::job::{JobId, Phase};
+    let start = session.execute("render.start", &serde_json::json!({"setup": "Graph"})).unwrap();
+    let id: JobId = serde_json::from_value(start["job"].clone()).unwrap();
+    let handle = session.render_job_handle(id).unwrap();
+    let status = handle.wait_timeout(std::time::Duration::from_secs(120)).unwrap();
+    assert_eq!(status.progress.phase, Phase::Completed, "{:?}", status.error);
+    let frame = handle.frame().unwrap().unwrap();
+    (status, image::load_from_memory(frame.png()).unwrap().to_rgba8())
+}
+
+/// A design whose look is a material graph renders through the path tracer from its saved setup:
+/// the look's checker of red and blue shows, where every other renderer draws its one base colour.
+#[test]
+fn a_design_with_a_graph_look_renders_through_the_path_tracer() {
+    use serde_json::json;
+    let Some(executor) = executor() else { return };
+    let checker = json!({"name": "Checker", "nodes": [
+        {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}, "inputs": {"u": [5.0, 0.0, 0.0], "v": [0.0, 5.0, 0.0]}},
+        {"id": "chk", "kind": "pattern.checker", "inputs": {"texcoord": {"from": "uv"}, "size_mm": [0.5, 0.5]}},
+        {"id": "paint", "kind": "mix", "inputs": {"a": [0.8, 0.05, 0.05], "b": [0.05, 0.05, 0.8], "t": {"from": "chk"}}},
+        {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "paint", "fallback": [0.5, 0.5, 0.5]}, "specular_roughness": 0.6}}],
+        "output": "surface"});
+    let mut session = graph_design(executor, checker);
+    let check = session.execute("render.preflight", &json!({"setup": "Graph"})).unwrap();
+    assert_eq!(check["resolved"]["executor"], "gpu-path");
+    assert_eq!(check["graphs"]["drawn_as"], "path_tracer", "{}", check["graphs"]);
+    assert_eq!(check["request"]["graphs"]["materials"], 1);
+    assert_eq!(check["graphs"]["approximations"], json!([]), "a checker of base colours is exact in the path tracer");
+    let (status, image) = completed(&mut session);
+    assert_eq!(status.graphs.as_ref().map(|g| g.bindings), Some(1), "the job result carries the graph summary");
+    let red = image.pixels().filter(|p| p.0[0] > p.0[2].saturating_add(30)).count();
+    let blue = image.pixels().filter(|p| p.0[2] > p.0[0].saturating_add(30)).count();
+    assert!(red > 20 && blue > 20, "both checker colours show: {red} red, {blue} blue pixels");
+}
+
+/// A see-through graph look gives its body glass in the path tracer, which refracts only through
+/// captured transmission.
+#[test]
+fn a_see_through_graph_look_renders_as_glass() {
+    use serde_json::json;
+    let Some(executor) = executor() else { return };
+    let glass = json!({"name": "Glass", "nodes": [{"id": "surface", "kind": "standard_surface", "inputs": {
+        "base_color": [0.9, 0.9, 0.9], "specular_roughness": 0.05, "transmission_weight": 1.0,
+        "transmission_color": [0.6, 0.8, 0.9], "transmission_depth_mm": 10.0}}], "output": "surface"});
+    let mut session = graph_design(executor, glass);
+    let check = session.execute("render.preflight", &json!({"setup": "Graph"})).unwrap();
+    assert_eq!(check["refraction"], true, "{check}");
+    assert_eq!(check["graphs"]["approximations"], json!([]), "weight 1 is the path tracer's glass, exactly");
+    completed(&mut session);
+}
+
+/// Graph textures are resident at the device's size (`ResidentPolicy::path`), the viewport's
+/// power-of-two filter, and 16-bit grey height keeps its 16 bits in every colour channel.
+#[test]
+fn graph_textures_are_resident_sized_and_keep_height_precision() {
+    use solidcraft_render::job::graphs::GraphTexture;
+    let image_graph = |srgb: bool| {
+        let space = if srgb { "srgb" } else { "linear" };
+        let text = serde_json::json!({"name": "image", "nodes": [
+            {"id": "tc", "kind": "texcoord.planar"},
+            {"id": "img", "kind": "image", "params": {"space": space}, "inputs": {"texcoord": {"from": "tc"}, "file": {"texture": "cd".repeat(32)}}},
+            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}}}], "output": "surface"});
+        graph(&text.to_string()).0
+    };
+    let encode = |image: image::DynamicImage| {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        png.into_inner()
+    };
+    let words = |bytes: &[u8], i: usize| f32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
+    // 64 × 64 colour on a device whose binding holds 16 × 16 texels.
+    let big =
+        encode(image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 64, |x, y| image::Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]))));
+    let ir = image_graph(true);
+    let m = GraphMaterial::new(ir, &BTreeMap::new(), vec![Some(GraphTexture::new(big, true).unwrap())]).unwrap();
+    let graphs = GraphMaterials::new(vec![m], vec![binding(0)]).unwrap();
+    let cancel = CancelToken::default();
+    let small = ResidentPolicy::path(16 * 16 * 16);
+    assert_eq!(small.max_edge, 16);
+    let (texture, _) = super::super::textures::flatten_with_graphs(None, Some(&graphs), 1, Vec3::ZERO, &cancel, &small).unwrap();
+    let (full, _) =
+        super::super::textures::flatten_with_graphs(None, Some(&graphs), 1, Vec3::ZERO, &cancel, &ResidentPolicy::path(u64::MAX)).unwrap();
+    assert_eq!(full.len() - texture.len(), (64 * 64 - 16 * 16) * 16, "two levels dropped");
+    // 16-bit grey height: values between 8-bit steps survive.
+    let height = encode(image::DynamicImage::ImageLuma16(image::ImageBuffer::from_fn(2, 2, |x, y| image::Luma([1 + 300 * (x + 2 * y) as u16]))));
+    let m = GraphMaterial::new(image_graph(false), &BTreeMap::new(), vec![Some(GraphTexture::new(height, false).unwrap())]).unwrap();
+    let graphs = GraphMaterials::new(vec![m], vec![binding(0)]).unwrap();
+    let (texture, _) =
+        super::super::textures::flatten_with_graphs(None, Some(&graphs), 1, Vec3::ZERO, &cancel, &ResidentPolicy::path(u64::MAX)).unwrap();
+    // The 16-word header and lookup (one body), then the pixels.
+    let first = 16 / 4;
+    for (texel, raw) in [1u16, 301, 601, 901].into_iter().enumerate() {
+        let v = f32::from(raw) / 65535.0;
+        assert_eq!([0, 1, 2, 3].map(|k| words(&texture, first + 4 * texel + k)), [v, v, v, 1.0]);
     }
 }

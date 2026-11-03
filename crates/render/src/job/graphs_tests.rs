@@ -120,3 +120,28 @@ fn material_values_are_checked() {
     assert!(GraphMaterial::new(ir.clone(), &bad, Vec::new()).is_err(), "out of the surface input's range");
     assert!(GraphMaterial::new(ir, &BTreeMap::new(), vec![None]).is_err(), "one texture entry per binding");
 }
+
+/// A constant see-through material is glass absorbing to its colour at its depth; a weight below 1
+/// is reported as full glass; an opaque one has none.
+#[test]
+fn see_through_materials_become_glass() {
+    assert!(material(ir(COPPER)).see_through().is_none());
+    let mut graph: serde_json::Value = serde_json::from_str(COPPER).unwrap();
+    let inputs = &mut graph["nodes"][0]["inputs"];
+    inputs["base_metalness"] = 0.0.into();
+    inputs["transmission_weight"] = 1.0.into();
+    inputs["transmission_color"] = serde_json::json!([0.5, 1.0, 0.25]);
+    inputs["transmission_depth_mm"] = 2.0.into();
+    let glass = material(ir(&graph.to_string()));
+    let t = glass.see_through().unwrap();
+    assert!(t.thin_wall_thickness_mm().is_none());
+    let a = t.extinction();
+    for (got, want) in [a.x, a.y, a.z].into_iter().zip([0.5f64.ln() / -2.0, 0.0, 0.25f64.ln() / -2.0]) {
+        assert!((got - want).abs() < 1e-6, "{got} vs {want}");
+    }
+    assert!(glass.approximations().is_empty(), "weight 1 is exact");
+    graph["nodes"][0]["inputs"]["transmission_weight"] = 0.5.into();
+    let half = material(ir(&graph.to_string()));
+    assert!(half.see_through().is_some());
+    assert_eq!(half.approximations(), [Approximation { input: "transmission_weight", treatment: "full_glass" }]);
+}

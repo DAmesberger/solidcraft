@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use solidcraft_render::material_graph::graph::TextureRef;
 use solidcraft_render::material_graph::reference::{self, ReferenceSurface, ReferenceTexture};
 use solidcraft_render::material_graph::{MaterialGraph, base_sample, lower, validate};
+use solidcraft_render::texture_input::MapRole;
 
 fn png(image: image::DynamicImage) -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
