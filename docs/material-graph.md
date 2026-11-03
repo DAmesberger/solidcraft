@@ -1,17 +1,17 @@
-# Photoreal view and material graphs (design note)
+# Realistic view and material graphs (design note)
 
 Status: proposal for the `DAmesberger/solidcraft` fork, to be offered upstream as **one
 package** once it is proven. The package has four parts:
 
-- the photoreal renderer (today's opt-in product look, branch `upstream-photoreal-look`:
+- the realistic renderer (today's opt-in product look, branch `upstream-photoreal-look`:
   [opaque PBR](render-opaque-pbr.md#opt-in-product-look), [clear coat](render-clear-coat.md));
 - the material node graph in the file format;
 - its editor and commands;
-- a photoreal **view mode** beside the existing shading.
+- a realistic **view mode** beside the existing shading.
 
 There is no renderer-only PR (§9). Of the new parts, nothing is implemented yet.
 
-The package is **real-time, GPU-only photorealism in the interactive viewport**, not image
+The package is **real-time, GPU-only realistic rendering in the interactive viewport**, not image
 rendering. A GPU is a hard requirement for it, as it already is for Solidcraft's viewport,
 and the feature has no CPU fallback. Upstream's GPU path tracer is a second target of the
 same material system, so materials are implemented once (§5.7). The CPU ray tracer and CPU
@@ -28,7 +28,7 @@ Three founder requirements bind the whole note:
 
 - the standard view stays the default;
 - files without material graphs open and save exactly as today;
-- material graphs are optional, needed only for photorealism.
+- material graphs are optional, needed only for realistic rendering.
 
 ## 1. Why and what
 
@@ -53,7 +53,7 @@ This note replaces that path with **one** generic, data-only material descriptio
 - It renders the same in the native and the WebGL2/wasm builds.
 - Everything is generic CAD material data. No product-specific fields, nodes or panels.
 - It is **optional**. A design without graphs is the same file as today (§4.4). Graphs
-  only show in the photoreal view mode (§6). The standard view, which stays the default
+  only show in the realistic view mode (§6). The standard view, which stays the default
   for modelling, shows each look's colour as today.
 
 What it is not: a general shading language, a MaterialX runtime, or a node editor in the
@@ -83,9 +83,9 @@ widget crate is ever considered (§7.1), its licence must be MIT/Apache/BSD, che
 | **Node** | One operation from the fixed v1 catalogue (§3). It has typed **inputs** (a constant, a connection, or an interface reference) and compile-time **params** (enums and small integers that change the generated code). |
 | **Interface** | Up to 32 named, typed inputs a graph exposes (MaterialX's nodegraph interface). A look can override them, so one "Anodised aluminium" graph serves every colour. |
 | **Look** | Today's record, plus an optional `graph` (an id) and `values` (interface overrides). The look's `color` remains the colour the standard view, exports and old consumers show. |
-| **View look** | A viewport's `standard` (default, today's renderer) or `photoreal` drawing, independent of its visual style (§6). Not saved in the design. |
+| **View look** | A viewport's `standard` (default, today's renderer) or `realistic` drawing, independent of its visual style (§6). Not saved in the design. |
 | **Shape** | Everything about a graph that changes generated code: node kinds, params, topology, which inputs are connected and which are constants, texture colour spaces. Values never belong to the shape. |
-| **Base response** | A static read of the graph's output node: constant inputs as they are, driven inputs at their declared `fallback`. It is an `OpaqueSurface` (§5.7), computed without evaluating anything. It gives the display `color`, the fallback while a shape compiles, and the Save As copy for older releases. |
+| **Base response** | A static read of the graph's output node: constant inputs as they are, driven inputs at their declared `fallback`. It is an `OpaqueSurface` (§5.7), computed without evaluating anything. It gives the display `color` and the fallback while a shape compiles. |
 
 Lengths are millimetres and angles are radians, as the render-materials catalogue's scale
 policy already requires ([materials.json](render-materials/materials.json)). Colours in
@@ -519,7 +519,7 @@ material-free designs saved during the release cycle get N+1, as every change do
 
 **`pbr` looks are not migrated.** They are already part of the released format, so
 rewriting them into graphs would force N+1 onto every file that uses them, which is exactly
-what the founder ruled out. A `pbr` look reads and writes unchanged. In photoreal it renders
+what the founder ruled out. A `pbr` look reads and writes unchanged. In the realistic view it renders
 as the equivalent one-node graph, with bit-identical pixels to today's look (the same f32
 values reach the same `pbr_shade`). `appearance.assign {pbr: …}` keeps writing `pbr`. A
 coat, pattern or texture needs a graph. The founder's rule is met: no new fixed field
@@ -544,17 +544,9 @@ finds it newer than any it knows, and refuses to open the design with its standa
 ("this design was saved by a newer SolidCraft (file format N+1 …): update SolidCraft to open
 it"). It neither opens it partly nor drops the graphs. Recovery files behave the same.
 
-For sharing with someone on the older release, `file.save_as` takes
-`"material_graphs": "base_response"`. Desktop Save As has the matching checkbox, "For older
-SolidCraft", which is never on by default. It writes a **copy** in which:
-
-- each graph look becomes its base response as a `pbr` look (opaque, with its colour), or
-  a scalar look when the graph is transmissive, with no evaluation;
-- textures are omitted;
-- the output lists every changed look.
-
-By the rule above the copy is then written in the older format. The open design is
-unchanged.
+Solidcraft is a 0.x package, so the package adds no other backwards-compatibility
+feature: material-free files staying exactly readable is enough, and there is no
+downgrading export.
 
 **Node-set versions:** the node catalogue is versioned with the design format. A new node
 kind or input arrives in its own pending file, with its own `used` predicate. An unknown
@@ -690,7 +682,7 @@ They will be measured with the existing `gpu` perf harness and recorded in
   look cannot express (orange peel now perturbs the base normal too).
 - **In the standard view mode** (§6, the default), nothing of this runs. A look draws its
   `color` exactly as today, and the existing `cpu-product` parity tests stay valid.
-  Patterns, coats and textures show only in photoreal.
+  Patterns, coats and textures show only in the realistic view.
 
 ### 5.6 Fallbacks
 
@@ -700,10 +692,10 @@ They will be measured with the existing `gpu` perf harness and recorded in
 | Texture not decoded yet or failed | The image node's `default` colour. |
 | GPU path tracer | The same IR through the path back end (§5.7); unsupported inputs approximated and reported. |
 | CPU ray tracer, CPU product host (out of scope) | Today's behaviour: the display `color` for a graph look, the `pbr` values for a `pbr` look. |
-| No GPU (the CPU viewport renderer) | Photoreal is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "photoreal needs a GPU". The standard view works as today. |
+| No GPU (the CPU viewport renderer) | The realistic view is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "the Realistic view needs a GPU". The standard view works as today. |
 | Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the base response's colour). |
 | `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. |
-| A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O11). |
+| A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O10). |
 
 ### 5.7 One material system, two GPU targets
 
@@ -732,8 +724,7 @@ the graph's output type; the graph neither replaces nor wraps it.**
 - The **base response** is a static read of the graph's output node: each constant input as
   it is, and each driven input's declared `fallback` constant (§4.1). It yields an
   `OpaqueSurface` without evaluating anything. It gives the look's display `color`, the
-  fallback while a shape compiles (§5.2), and the copy written by Save As "For older
-  SolidCraft" (§4.4).
+  fallback while a shape compiles (§5.2).
 
 **3. One WGSL library.** The two shaders duplicate each other today. Both are assembled by
 string concatenation: `path/mod.rs` uses `concat!(include_str!("path.wgsl"), …)`, and
@@ -761,7 +752,7 @@ collides with either shader:
 Each is a plain `const &str`, concatenated into both shaders exactly as today; no new
 dependency is needed. `naga_oil` (MIT OR Apache-2.0) would add real imports, but
 concatenation already works, keeps one naga parse per module, and keeps the build simple
-(decision O12).
+(decision O11).
 
 The shared modules hold only pure functions over values. They have no bindings, no
 storage, no pointers to storage and no derivatives: those stay in each shader, and the
@@ -789,7 +780,7 @@ random-number use are therefore unchanged, and graph evaluation draws no random 
 
 **What the path tracer does not gain.** Inputs it has no lobe for (anisotropy, coat colour)
 are evaluated as isotropic and untinted. Each such approximation is reported, never silent:
-`render.preflight` lists it per body, and so does the job result (decision O11). Emission
+`render.preflight` lists it per body, and so does the job result (decision O10). Emission
 maps to its existing surface emission, transmission to its existing runtime transmission,
 normals to its shading normal.
 
@@ -820,47 +811,60 @@ normals to its shading normal.
 what they show today for a look without `pbr`: its display `color`. A `pbr` look keeps its
 `pbr` values. There is no CPU graph evaluator in product code.
 
-## 6. Photoreal view mode
+## 6. Realistic view mode
 
-For modelling, photorealism mostly distracts from the shapes. The **standard** view, which
-is today's renderer, therefore stays the default. **Photoreal** is an additional way to
+For modelling, realistic rendering mostly distracts from the shapes. The **standard** view, which
+is today's renderer, therefore stays the default. **Realistic** is an additional way to
 view the same model, and it can be switched on and off at any time.
+
+**Names.** The user-facing name is **Realistic**, following common CAD usage: the
+"Realistic" visual style in Inventor and AutoCAD, SolidWorks' RealView and Blender's
+"Material Preview". Command titles, the menu row, locale strings (`assets/locales/pending/`)
+and the docs all say "Realistic". "Photoreal" and "product look" remain only as references
+to the renderer branch's history (`upstream-photoreal-look`, `Frame::product_look`).
+
+The default is called **Standard**. Solidcraft's visual-style names ("Shaded with edges",
+"Shaded", "Wireframe", "Shaded with hidden edges") describe faces and edges, not lighting.
+Their natural word, "Shaded", is already a visual style, so reusing it would be ambiguous
+("Shaded" style in "Shaded" look).
 
 ### 6.1 The switch
 
 - **Model.** A viewport has two independent settings:
   - its existing **visual style**: shaded with edges, shaded, wireframe or shaded with
     hidden edges (`view.visual_style`);
-  - its new **look**: `standard` (default) or `photoreal`.
+  - its new **look**: `standard` (default) or `realistic`.
 
   Edges follow the visual style in both looks. In Wireframe there are no faces, so the look
   has no visible effect; it stays set for when faces return.
-- **Command.** `view.look`, with input `{look?: "standard" | "photoreal", view?: "model" |
+- **Command.** `view.look`, with input `{look?: "standard" | "realistic", view?: "model" |
   "render_preview"}` and output `{look, view}`.
   - Without `look` it toggles; without `view` it acts on the active view.
   - Like `view.visual_style`, it is `noundo` and `doc_only`, has input and output schemas,
     and is the same command for the UI, the CLI and MCP.
   - The view's state query reports the look alongside the visual style.
-- **Key.** The default is **Shift+P**. It is free in today's command table and not on
+- **Key.** **Shift+R** is taken: it is `edit.repeat` ("Repeat Last Command",
+  `crates/engine/src/cmd/edit.rs`). The default is therefore **Shift+P** (P for picture).
+  It is free in today's command table and not on
   `keymap.rs`'s reserved list, and it can be rebound in Keyboard Shortcuts like any command.
-- **Where it lives.** It sits in the navigation bar's visual-style menu, as a "Photoreal"
-  check row below the four styles. When photoreal is on, the slot's icon shows a small
+- **Where it lives.** It sits in the navigation bar's visual-style menu, as a "Realistic"
+  check row below the four styles. When realistic is on, the slot's icon shows a small
   badge. It is also in the command palette. It adds no toolbar of its own.
 - **Not saved in the design.** Solidcraft's convention for view settings is the visual
   style: a viewport UI preference in the app's preferences JSON (`SolveApp::prefs`,
   `visual_style`), never in the design or its undo history. The look follows that
   convention exactly:
-  - it is stored as `view_look`, remembered between runs (decision O8), and `standard` by
+  - it is stored as `view_look`, remembered between runs (decision O7), and `standard` by
     default; Restore Defaults returns it to standard;
   - opening a design never changes it, so a file from someone else never switches a user
-    into photoreal;
+    into the realistic view;
   - one viewport serves all design tabs, as visual style does. The Render workspace preview
     is a separate view with its own look. If Solidcraft gains split views, each view carries
     its own look as it would its own visual style.
 
-### 6.2 Photoreal keeps modelling clear
+### 6.2 Realistic keeps modelling clear
 
-Photoreal changes how **faces** are lit: the studio IBL, material graphs, coat, ambient
+The realistic view changes how **faces** are lit: the studio IBL, material graphs, coat, ambient
 occlusion, PBR Neutral tone mapping and dither of the product look. Everything used to model
 is drawn as in the standard view, composited **after** tone mapping in display space with
 the theme's colour tokens, so neither exposure nor the tone curve alters it. That covers:
@@ -870,15 +874,15 @@ the theme's colour tokens, so neither exposure nor the tone curve alters it. Tha
 - sketches, constraints, dimensions, construction planes and axes, the grid, move
   arrows and gizmos, measurements, section caps and clipping;
 - faded context while editing a component in place: the context keeps its standard faded
-  drawing, and only the active component is photoreal;
+  drawing, and only the active component is realistic;
 - accessibility modes.
 
 A highlight is never a material change: selecting or hovering rebuilds no geometry and
 compiles nothing. Picking does not depend on the look.
 
-In photoreal, a **scalar look** (no `pbr` and no graph) and imported paint are lit as an
+In the realistic view, a **scalar look** (no `pbr` and no graph) and imported paint are lit as an
 implicit dielectric `standard_surface`: base `color`, roughness 0.5, IOR 1.5. A design with
-no appearances therefore looks sensible in photoreal. Without this, today's look draws
+no appearances therefore looks sensible in the realistic view. Without this, today's look draws
 non-PBR faces black when there are no product lights. Transparent scalar looks keep today's
 alpha blend.
 
@@ -887,7 +891,7 @@ The tests are pixel comparisons in both looks:
 - the selection and hover highlight colours, edge colour and sketch overlay pixels are
   identical;
 - the grid and dimensions are unchanged;
-- a face selected in photoreal shows the token colour exactly.
+- a face selected in the realistic view shows the token colour exactly.
 
 ### 6.3 The standard view is unaffected
 
@@ -895,11 +899,11 @@ The tests are pixel comparisons in both looks:
   as today, whether it has a `pbr` response, a graph or neither.
 - The standard look compiles no graph pipeline, decodes no texture, bakes no studio and
   allocates no material page. All of that starts the first time a view switches to
-  photoreal: the studio bakes off the window thread, as now, and the standard picture shows
+  realistic: the studio bakes off the window thread, as now, and the standard picture shows
   until it is ready.
 - Test: a design with graphs and the same design with the graphs removed (same colours)
   give bit-identical standard frames and equal GPU memory.
-- Switching rebuilds no geometry. Both looks draw the same tessellation. Photoreal's
+- Switching rebuilds no geometry. Both looks draw the same tessellation. The realistic view's
   vertex streams are built from it the first time, off the window thread, and kept. After
   that, a switch takes one frame. A first switch on a model of one million triangles should
   take at most 300 ms off the window thread. Both figures are targets.
@@ -910,7 +914,7 @@ The fork's opt-in, **Preferences > Graphics > Studio lighting in the Render prev
 (`render_studio_look`), is **replaced** by the view mode. The Render workspace preview gets
 its look from `view.look` with `view: "render_preview"`, still `standard` by default. The
 preference is not part of the upstream package. A fork user's saved `render_studio_look:
-true` becomes the render preview's `photoreal` once, and the key is then dropped. The
+true` becomes the render preview's `realistic` once, and the key is then dropped. The
 embedding API `Frame::product_look` remains the mechanism underneath: the view mode sets
 it, and programs that embed `solidcraft-gpu` keep using it directly.
 
@@ -1009,7 +1013,7 @@ Pcbcraft's cited table (`pcbcraft-core::materials`, 29 `MaterialId`s) stays in P
 
 ## 9. Upstream plan
 
-The package is **one proposal**: "Photoreal view and material graphs". There is no
+The package is **one proposal**: "Realistic view and material graphs". There is no
 renderer-only PR. The branch `upstream-photoreal-look` becomes the first commits of the
 package, not a submission of its own, so the agent preparing it must not open it separately.
 
@@ -1030,11 +1034,11 @@ commit. The steps are:
 
 | # | Commit (group) | Contents |
 |---|---|---|
-| 1 | Photoreal renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. **Without** the `SurfacePattern` enum, `pbr_tri_with` detail vertices and the `render_studio_look` preference. `fs_pbr` is split into `material_eval` + `pbr_shade`. |
+| 1 | Realistic renderer | The content of `upstream-photoreal-look`: studio IBL (split-sum, SH irradiance), coat, AO, PBR Neutral, dither, softbox widening. **Without** the `SurfacePattern` enum, `pbr_tri_with` detail vertices and the `render_studio_look` preference. `fs_pbr` is split into `material_eval` + `pbr_shade`. |
 | 2 | Shared shading library | `crates/gpu/src/shading/` (BSDF, noise, projection), used by both `viewport.wgsl`/`pbr.rs` and `path.wgsl`. No output change: path tests unchanged, viewport frames within parity. |
-| 3 | Photoreal view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy photoreal resources, GPU requirement, the Render-preview look (§6) |
+| 3 | Realistic view mode | `view.look`, its key and navigation-bar row, overlays after tone mapping, scalar looks lit, lazy realistic resources, GPU requirement, the Render-preview look (§6) |
 | 4 | Graph model | Types, validation, IR, cost model, base response, `SurfaceSample` around `OpaqueSurface` (`solidcraft-render`); the test-only reference |
-| 5 | Format and compatibility | The pending file, `appearances.graphs`/`textures`, texture blobs, the oldest-sufficient-format rule, Save As "For older SolidCraft" (§4.4) |
+| 5 | Format and compatibility | The pending file, `appearances.graphs`/`textures`, texture blobs, the oldest-sufficient-format rule (§4.4) |
 | 6 | Commands | `appearance.graph.*`, `appearance.texture.*`, `assign` extension, runtime overrides; schemas |
 | 7 | GPU graphs, viewport | The raster back end: code generation, shape cache, uniform pages, group-3 layout, pattern/projection/image nodes, GPU mips, anisotropy, `coat_color`, emission; the GLSL ES corpus test |
 | 8 | GPU graphs, path tracer | The path back end: the material table, the `graph_surface` hook, the shape switch, approximation reports in preflight (§5.7) |
@@ -1069,11 +1073,11 @@ All later tracks build against those signatures.
 | C0 | Contract (above) | – | 7 |
 | R | Renderer integration: bring `upstream-photoreal-look` into the package branch, remove `SurfacePattern`/detail vertices and `render_studio_look` from it, split `fs_pbr` into `material_eval` + `pbr_shade` with bit-identical frames | C0 | 6 |
 | S | Shared shading library: extract BSDF, coat, noise and projection into `crates/gpu/src/shading/` from `path.wgsl`'s versions; port `pbr.rs` and `path.wgsl` onto it; path tests unchanged, viewport parity, GLSL ES translation | R | 8 |
-| V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in photoreal, lazy photoreal resources, shared tessellation, the no-GPU refusal; pixel tests in both looks | R | 12 |
+| V | View mode: `view.look` and schema, Shift+P, navigation-bar row, prefs (and the fork prefs migration), Render-preview look, overlays after tone mapping, scalar looks lit in the realistic view, lazy realistic resources, shared tessellation, the no-GPU refusal; pixel tests in both looks | R | 12 |
 | A | Validation, IR, cost model, `SurfaceSample`, base response; hostile-input tests (`hostile_params_never_panic` style, random graphs) | C0 | 10 |
 | T | Test-only reference: an f64 interpreter of the IR under `#[cfg(test)]`/dev-dependencies, never in product code; it checks both back ends' frames | A | 6 |
 | B | Format: tables, `Look.graph/values` (with `pbr` unchanged), connection fallbacks, texture blobs and base64, save GC, catalog v3 container | C0 | 10 |
-| K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice, Save As "For older SolidCraft" from the base response | B | 8 |
+| K | Compatibility: `Part::used` and the oldest-sufficient writer in `format.rs`, corpus byte-identity tests, the v2/v3 catalog choice | B | 5 |
 | C1 | Raster back end: code generator over the shared modules, shape key, pipeline cache with budget and base-response fallback, uniform pages, new vertex layouts, group-3 layout | A (IR), S at integration | 14 |
 | C2 | Shared BSDF additions for the viewport: anisotropic GGX direct + studio, `coat_color` (oracle in tests), emission, transmission fallback; furnace tests | S | 9 |
 | C3 | Textures on the GPU: decode worker, mips by render passes (the sRGB render-target check on WebGL2), bind groups, `image` node sampling | C1, B (assets) | 7 |
@@ -1085,8 +1089,8 @@ All later tracks build against those signatures.
 | P | Package assembly: the commit series, the proposal text, PR body, screenshots and a recording | all | 4 |
 | H | Pcbcraft (outside the package): table → catalog v3 generator, `models::look` → graphs, provenance mapping, parity renders against today's generated models | B, D, C1 | 10 |
 
-- **Total:** about **158 agent-hours** for the upstream package, plus **10** for Pcbcraft:
-  **168** in all.
+- **Total:** about **155 agent-hours** for the upstream package, plus **10** for Pcbcraft:
+  **165** in all.
 - **Critical path:** C0 (7) → A's IR (6 of its 10) → C1 (14) → integrating C2, C3 and S
   (6) → I (11) → P (4) = about **48 agent-hours**.
 
@@ -1096,7 +1100,7 @@ The other chains fit inside it:
 - R → V finishes by hour 25.
 - D is done by hour 29, and E's joining to it by hour 33.
 
-Changes since the previous estimate (140 + 10):
+Changes since the previous estimate (140 + 10); the Save As export (3 hours of K) is removed:
 
 - **Removed:** CPU consumers (old track F, 6) and the CPU evaluator and flattening in
   product code (4 from A).
@@ -1130,11 +1134,11 @@ figures.
    bits, or change its random-number use. *Mitigation:* the shared functions are extracted
    from `path.wgsl`'s exact expressions, the path tests must pass unchanged, and graph
    evaluation consumes no random numbers.
-6. **Overlay compositing in photoreal:** drawing highlights, edges and sketches after tone
+6. **Overlay compositing in the realistic view:** drawing highlights, edges and sketches after tone
    mapping needs a clean pass order with the AO, supersample and cached-still paths.
    *Mitigation:* pixel tests for each overlay in both looks (track V).
 7. **Path and viewport disagree** for inputs the path tracer approximates (anisotropy, coat
-   colour). *Mitigation:* the approximation reports (O11); no new path lobes in this package.
+   colour). *Mitigation:* the approximation reports (O10); no new path lobes in this package.
 8. **Parameter-blend `surface.mix`** shows artefacts at soft metal/dielectric edges.
    *Mitigation:* keep masks sharp in the examples; the closure mix comes later.
 9. **The node set freezes on release.** Every addition is then a format change.
@@ -1157,8 +1161,7 @@ figures.
 | O7 | Is the view look remembered between runs? | **Yes, like visual style** (the existing convention), defaulting to standard and reset by Restore Defaults. Opening a design never changes it. |
 | O8 | Written format number for material-free designs | **Opt-in "oldest sufficient format"** (`Part::used`, §4.4): generic, conservative, no change for existing parts. If upstream declines it, the fallback is today's build-wide bump for the release cycle. |
 | O9 | `pbr` → graph migration | **None, on open or on save.** A `pbr` look stays `pbr`. A graph is created only by an explicit edit that needs one (a coat, a pattern, "Convert to material graph"), so only designs that use graphs get the new format. |
-| O10 | Save As "For older SolidCraft" (the base response into a copy) | **Include** it (about 3 of track K's hours). It makes sharing with the last release explicit, never a silent loss, and involves no evaluation. |
-| O11 | Path tracer and inputs it has no lobe for (anisotropy, coat colour) | **Approximate** (isotropic, untinted) and **report** each one in `render.preflight` and the job result. No new path features. The alternative, refusing such jobs, would block every brushed-metal render. |
-| O12 | Composing the shared WGSL modules | **Concatenation** of `sc_`-prefixed modules, the mechanism both shaders already use. `naga_oil` (MIT OR Apache-2.0) only if module count grows. |
-| O13 | Test oracle | **Keep a test-only f64 IR interpreter** (track T) beside analytic checks and golden GPU frames. Patterns have no closed form, and an independent reference catches back-end drift. It never ships in product code. |
-| O14 | The view-mode key | **Shift+P**, which is free and rebindable. Founder or maintainers may prefer another; nothing else depends on it. |
+| O10 | Path tracer and inputs it has no lobe for (anisotropy, coat colour) | **Approximate** (isotropic, untinted) and **report** each one in `render.preflight` and the job result. No new path features. The alternative, refusing such jobs, would block every brushed-metal render. |
+| O11 | Composing the shared WGSL modules | **Concatenation** of `sc_`-prefixed modules, the mechanism both shaders already use. `naga_oil` (MIT OR Apache-2.0) only if module count grows. |
+| O12 | Test oracle | **Keep a test-only f64 IR interpreter** (track T) beside analytic checks and golden GPU frames. Patterns have no closed form, and an independent reference catches back-end drift. It never ships in product code. |
+| O13 | The view-mode key | **Shift+P**, which is free and rebindable; Shift+R is `edit.repeat`. Founder or maintainers may prefer another; nothing else depends on it. |
