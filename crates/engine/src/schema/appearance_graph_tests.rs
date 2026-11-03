@@ -43,7 +43,8 @@ fn unbuilt_commands_refuse_and_change_nothing() {
     }
     assert_eq!(s.doc.to_json(), before);
     assert!(s.execute("appearance.graph.edit", &json!({"id": "a", "ops": [{"op": "paint"}]})).is_err());
-    let error = s.execute("appearance.graph.validate", &json!({"graph": {"name": "x", "nodes": [], "output": "s"}})).unwrap_err().to_string();
-    assert!(error.contains("not built yet"), "{error}");
+    // Validation is built (track A): an empty graph is reported invalid, not refused.
+    let report = s.execute("appearance.graph.validate", &json!({"graph": {"name": "x", "nodes": [], "output": "s"}})).unwrap();
+    assert_eq!((report["ok"].clone(), report["errors"][0]["code"].clone()), (json!(false), json!("node_count")), "{report}");
     assert!(s.execute("appearance.graph.validate", &json!({"graph": {"name": "x", "nodes": [], "output": "s", "wgsl": "fn f() {}"}})).is_err());
 }
