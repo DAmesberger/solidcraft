@@ -154,3 +154,25 @@ fn switching_the_look_uploads_nothing() {
         assert_eq!(r.uploads(), uploaded, "{look:?}: nothing uploaded again");
     }
 }
+
+/// The opaque faces' entry points, which read the studio in the Realistic look, translate to
+/// WebGL2's GLSL ES 3.00 (naga's GL backend, as wgpu's on the web), the studio's cube map
+/// included: Realistic exists on WebGL2 too, within its four bind groups.
+#[test]
+fn the_realistic_face_shaders_translate_for_webgl2() {
+    use naga::back::glsl;
+    let source = format!("{}\n{}", super::SHADER, crate::pbr::SOURCE);
+    let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::default())
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
+    for entry in ["fs_solid", "fs_solid_cut", "fs_solid_touch", "fs_solid_flat", "fs_solid_cut_flat", "fs_solid_touch_flat"] {
+        let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: entry.into(), multiview: None };
+        let mut out = String::new();
+        let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
+            .and_then(|mut w| w.write().map(|_| ()));
+        assert!(written.is_ok(), "{entry}: {written:?}");
+        assert!(out.starts_with("#version 300 es") && out.contains("samplerCube"), "{entry} samples the studio's cube");
+    }
+}
