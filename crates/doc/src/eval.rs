@@ -4832,10 +4832,15 @@ fn centered_extrude(
     let one_curve = |s: &solidcore_record::Seg2, t: &solidcore_record::Seg2| {
         curves.as_ref().is_some_and(|c| c.find_free_form(s).is_some_and(|id| c.find_free_form(t).is_some_and(|other| other == id)))
     };
-    let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start, end, &one_curve)?;
-    if *plane == Plane::XY {
+    // A plane that is XY raised along Z (an offset sketch plane, a box's top face) extrudes in
+    // place: the very body built on XY and moved up, without rebuilding every face and its
+    // history to move it (seconds for a plate of thousands of holes).
+    if plane.x == Plane::XY.x && plane.y == Plane::XY.y && plane.origin.x == 0.0 && plane.origin.y == 0.0 {
+        let z = plane.origin.z;
+        let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start + z, end + z, &one_curve)?;
         return Ok(bodies.into_iter().map(|body| roles.tool(body, None)).collect());
     }
+    let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start, end, &one_curve)?;
     let n = plane.normal();
     let m = [
         [plane.x.x, plane.x.y, plane.x.z, 0.0],
@@ -8260,10 +8265,13 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
         return Ok(st.clone());
     }
     let mut placed_now = PlacedBodies::default();
-    // Looked up once: every sketch, construction and tap asked the timeline, and every placement
-    // went through all bodies, each time searching (a large assembly paid this every command).
+    // Looked up once, not by a walk through the timeline or the occurrences for each placement.
     let feature_components: std::collections::HashMap<u64, u64> = doc.features.iter().rev().map(|f| (f.id, f.component)).collect();
     let comp_of_feature = |id: u64| feature_components.get(&id).copied().unwrap_or(0);
+    let mut first_occurrence: std::collections::HashMap<u64, &crate::Occurrence> = std::collections::HashMap::new();
+    for o in &doc.occurrences {
+        first_occurrence.entry(o.component).or_insert(o);
+    }
     let first_path = |comp: u64| -> Vec<u64> {
         let mut path = Vec::new();
         let mut c = comp;
@@ -8271,7 +8279,7 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             if c == 0 {
                 break;
             }
-            let Some(o) = doc.occurrence_of(c) else { break };
+            let Some(o) = first_occurrence.get(&c) else { break };
             path.insert(0, o.id);
             c = o.parent;
         }
@@ -8304,6 +8312,14 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             None => (comp_of_feature(t.feature), None),
         })
         .collect();
+    let mut sketches_of: std::collections::HashMap<u64, Vec<&Arc<SolvedSketch>>> = std::collections::HashMap::new();
+    for sk in &st.sketches {
+        sketches_of.entry(comp_of_feature(sk.feature)).or_default().push(sk);
+    }
+    let mut constructs_of: std::collections::HashMap<u64, Vec<&crate::construct::Construct>> = std::collections::HashMap::new();
+    for c in &st.construct {
+        constructs_of.entry(comp_of_feature(c.feature)).or_default().push(c);
+    }
     for (comp, path, m) in &placements {
         for b in bodies_of(*comp) {
             let bm = body_matrix(b, m);
@@ -8357,7 +8373,7 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             out.bodies.push(placed);
         }
         if primary {
-            for s in st.sketches.iter().filter(|s| comp_of_feature(s.feature) == comp) {
+            for &s in sketches_of.get(&comp).into_iter().flatten() {
                 if ident {
                     // In place: shared as it is.
                     out.sketches.push(s.clone());
@@ -8375,7 +8391,7 @@ pub fn world_state_reusing(doc: &Document, st: &ModelState, placed_before: &mut 
             // The component's construction planes, axes and points where it is placed: once the
             // design has a component the root's constructions are built in this state
             // (`construction_state`), and one built on another finds it here by name.
-            for c in st.construct.iter().filter(|c| comp_of_feature(c.feature) == comp) {
+            for &c in constructs_of.get(&comp).into_iter().flatten() {
                 let geom = if ident { c.geom.clone() } else { c.geom.placed(&m) };
                 out.construct.push(crate::construct::Construct { geom, ..c.clone() });
             }

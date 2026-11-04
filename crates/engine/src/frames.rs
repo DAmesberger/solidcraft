@@ -407,6 +407,11 @@ impl Drop for LocalGeometry {
 pub struct Nested;
 
 impl Nested {
+    /// Whether no command is running on this thread (the next one entered is the outermost).
+    pub fn idle() -> bool {
+        DEPTH.with(|d| d.get() == 0)
+    }
+
     /// Enter command `id`; true when it is the outermost one.
     pub fn enter(id: &str) -> (Nested, bool) {
         let outer = DEPTH.with(|d| {

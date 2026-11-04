@@ -4296,12 +4296,13 @@ impl Document {
         if self.features.iter().any(|f| f.param_names.iter().any(|n| n == name)) {
             return Err(DocError::Invalid(format!("`{name}` is a feature's parameter")));
         }
-        let mut next = self.clone();
+        // The parameters as they would be, checked without copying the rest of the design.
+        let mut params = self.params.clone();
         let inferred = match unit {
             Some(u) => u.trim().to_string(),
-            None => next.infer_unit(expr_s),
+            None => self.infer_unit(expr_s),
         };
-        match next.params.iter_mut().find(|p| p.name == name) {
+        match params.iter_mut().find(|p| p.name == name) {
             Some(p) => {
                 p.expr = expr_s.trim().to_string();
                 if let Some(u) = unit {
@@ -4312,10 +4313,10 @@ impl Document {
                 }
             }
             None => {
-                if next.params.len() >= MAX_PARAMS {
+                if params.len() >= MAX_PARAMS {
                     return Err(DocError::Invalid("too many parameters".into()));
                 }
-                next.params.push(Param {
+                params.push(Param {
                     name: name.into(),
                     expr: expr_s.trim().into(),
                     unit: inferred,
@@ -4324,11 +4325,11 @@ impl Document {
                 })
             }
         }
-        let (_, errors) = next.param_values();
+        let (_, errors) = expr::eval_params(&self.param_defs_with(&params), crate::params::doc_len(&self.units));
         if let Some(e) = errors.get(name) {
             return Err(DocError::Expr(e.clone()));
         }
-        *self = next;
+        self.params = params;
         Ok(())
     }
 
@@ -4344,9 +4345,17 @@ impl Document {
         // The parameters are evaluated only when the expression names one: most expressions an
         // agent sends are plain values, and evaluating every parameter of a large design for
         // each of them made every new feature cost more than the last.
+        // Only the parameters it names, and theirs: every named feature input is a parameter,
+        // so evaluating all of them made each new feature of a large design cost more again.
         let vals: std::cell::OnceCell<std::collections::BTreeMap<String, expr::Value>> = std::cell::OnceCell::new();
         expr::eval_with(e, &|n| {
-            vals.get_or_init(|| self.param_values().0).get(n).copied().ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`")))
+            vals.get_or_init(|| {
+                let lookup = |name: &str| self.param_def(name).map(std::borrow::Cow::Owned);
+                expr::eval_params_for(&lookup, &expr::references(e), crate::params::doc_len(&self.units))
+            })
+            .get(n)
+            .copied()
+            .ok_or_else(|| DocError::Expr(format!("unknown parameter `{n}`")))
         })?
         .to_kind(kind)
     }

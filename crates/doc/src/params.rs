@@ -663,7 +663,7 @@ impl ParamUser {
 }
 
 /// Length unit of the document in mm (bare numbers of unit-less parameters next to lengths).
-fn doc_len(units: &str) -> f64 {
+pub(crate) fn doc_len(units: &str) -> f64 {
     match expr::unit_info(units) {
         Some((Kind::Length, s)) => s,
         _ => 1.0,
@@ -674,25 +674,46 @@ impl Document {
     /// Every parameter with its unit, for evaluation: stored parameters and named feature
     /// inputs (mm / deg / none by their kind).
     pub fn param_defs(&self) -> Vec<ParamDef> {
-        let mut v: Vec<ParamDef> =
-            self.params.iter().map(|p| ParamDef { name: p.name.clone(), expr: p.expr.clone(), unit: p.unit.clone() }).collect();
+        self.param_defs_with(&self.params)
+    }
+
+    /// [`Document::param_defs`] were the user parameters `params`.
+    pub(crate) fn param_defs_with(&self, params: &[crate::Param]) -> Vec<ParamDef> {
+        let mut v: Vec<ParamDef> = params.iter().map(|p| ParamDef { name: p.name.clone(), expr: p.expr.clone(), unit: p.unit.clone() }).collect();
         for f in &self.features {
             for (name, (_, e, k)) in f.param_names.iter().zip(f.kind.inputs()) {
                 if !name.is_empty() {
-                    // A bare number stored in an input is mm (the design's units are written in
-                    // when it is typed); anything else that comes out unit-less (a unit-less
-                    // parameter used as a length) is in the design's units.
-                    let unit = match k {
-                        Kind::Length if !expr::is_literal(&e) && expr::unit_info(self.units.trim()).is_some_and(|(k, _)| k == Kind::Length) => {
-                            self.units.trim().to_string()
-                        }
-                        _ => unit_of(k).to_string(),
-                    };
-                    v.push(ParamDef { name: name.clone(), expr: e, unit });
+                    v.push(self.input_def(name, e, k));
                 }
             }
         }
         v
+    }
+
+    /// A named feature input as a parameter definition.
+    fn input_def(&self, name: &str, e: String, k: Kind) -> ParamDef {
+        // A bare number stored in an input is mm (the design's units are written in when it is
+        // typed); anything else that comes out unit-less (a unit-less parameter used as a
+        // length) is in the design's units.
+        let unit = match k {
+            Kind::Length if !expr::is_literal(&e) && expr::unit_info(self.units.trim()).is_some_and(|(k, _)| k == Kind::Length) => {
+                self.units.trim().to_string()
+            }
+            _ => unit_of(k).to_string(),
+        };
+        ParamDef { name: name.to_string(), expr: e, unit }
+    }
+
+    /// The definition [`Document::param_defs`] gives `name` (the last of that name, as its
+    /// evaluation takes it), found without making the others.
+    pub(crate) fn param_def(&self, name: &str) -> Option<ParamDef> {
+        for f in self.features.iter().rev() {
+            let Some(k) = f.param_names.iter().rposition(|n| n == name) else { continue };
+            if let Some((_, e, kind)) = f.kind.inputs().into_iter().nth(k) {
+                return Some(self.input_def(name, e, kind));
+            }
+        }
+        self.params.iter().rev().find(|p| p.name == name).map(|p| ParamDef { name: p.name.clone(), expr: p.expr.clone(), unit: p.unit.clone() })
     }
 
     /// Evaluate all parameters: values (mm / rad / unit-less) and errors by name. Errors name
