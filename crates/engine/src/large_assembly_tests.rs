@@ -144,3 +144,79 @@ fn names_only_lists_every_world_body_without_measuring() {
     assert_eq!(one["body_count"], 1);
     assert!(s.execute("inspect.measure", &json!({"names_only": true, "bodies": ["no such body"]})).is_err());
 }
+
+/// From an empty session to a saved plate of `SOLIDCRAFT_BENCH_HOLES` round through holes (a
+/// comma-separated list, default 1000,3000,10000), as a program builds it in one batch: timings of
+/// each phase, one line of JSON per size. Every hole is checked to be there.
+/// `cargo test --release -p solidcraft-engine bench_drilled_plate -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark: run with --release --ignored --nocapture"]
+fn bench_drilled_plate() {
+    let sizes = std::env::var("SOLIDCRAFT_BENCH_HOLES").unwrap_or_else(|_| "1000,3000,10000".into());
+    let dir = std::env::temp_dir().join(format!("solidcraft-bench-plate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for holes in sizes.split(',').map(|n| n.trim().parse::<usize>().unwrap()) {
+        let columns = (holes as f64).sqrt().ceil() as usize;
+        let rows = holes.div_ceil(columns);
+        let (pitch, radius, thickness) = (1.27, 0.15, 1.6);
+        let (w, h) = ((columns + 1) as f64 * pitch, (rows + 1) as f64 * pitch);
+        let mut dxf = String::from("0\nSECTION\n2\nENTITIES\n");
+        for [a, b] in [[[0.0, 0.0], [w, 0.0]], [[w, 0.0], [w, h]], [[w, h], [0.0, h]], [[0.0, h], [0.0, 0.0]]] {
+            dxf += &format!("0\nLINE\n8\n0\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n", a[0], a[1], b[0], b[1]);
+        }
+        for k in 0..holes {
+            let (x, y) = ((k % columns + 1) as f64 * pitch, (k / columns + 1) as f64 * pitch);
+            dxf += &format!("0\nCIRCLE\n8\n0\n10\n{x}\n20\n{y}\n40\n{radius}\n");
+        }
+        dxf += "0\nENDSEC\n0\nEOF\n";
+        let ms = |t: std::time::Instant| (t.elapsed().as_secs_f64() * 1000.0).round();
+        let started = std::time::Instant::now();
+        let mut s = Session::default();
+        s.defer_evaluation().unwrap();
+        let t = std::time::Instant::now();
+        let sketch = s.execute("sketch.create", &json!({"plane": "XY", "name": "Holes"})).unwrap()["sketch"].clone();
+        s.execute("sketch.insert_dxf", &json!({"text": dxf, "tolerance": 1e-6})).unwrap();
+        let drawn = ms(t);
+        let t = std::time::Instant::now();
+        s.execute("sketch.finish", &json!({})).unwrap();
+        let finish = ms(t);
+        let t = std::time::Instant::now();
+        s.execute("solid.extrude", &json!({"sketch": sketch, "distance": thickness, "operation": "new", "name": "Plate", "body_name": "Plate"}))
+            .unwrap();
+        let extrude = ms(t);
+        let t = std::time::Instant::now();
+        s.evaluate_deferred().unwrap();
+        let evaluate = ms(t);
+        let built = ms(started);
+        let t = std::time::Instant::now();
+        let st = s.model.state();
+        let plate = st.body("Plate").unwrap();
+        let triangles = plate.mesh().triangles.len();
+        let mesh = ms(t);
+        let t = std::time::Instant::now();
+        let plan = plate.display_plan().map_or(0, |p| p.faces.len());
+        let plan_ms = ms(t);
+        let faces = plate.body.face_count();
+        let t = std::time::Instant::now();
+        let path = dir.join(format!("plate-{holes}.sc"));
+        s.execute("file.save_as", &json!({"path": path.to_string_lossy()})).unwrap();
+        let save = ms(t);
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let t = std::time::Instant::now();
+        let volume = s.execute("inspect.measure", &json!({})).unwrap()["total"]["volume_mm3"].as_f64().unwrap();
+        let measure = ms(t);
+        let want = (w * h - holes as f64 * std::f64::consts::PI * radius * radius) * thickness;
+        assert!((volume - want).abs() < 1e-3 * want, "{volume} against {want}");
+        let t = std::time::Instant::now();
+        let mut opened = Session::default();
+        opened.execute("doc.open", &json!({"path": path.to_string_lossy()})).unwrap();
+        let open = ms(t);
+        println!(
+            "{}",
+            json!({"holes": holes, "faces": faces, "triangles": triangles, "draw_ms": drawn, "finish_ms": finish, "extrude_ms": extrude,
+                   "evaluate_ms": evaluate, "built_ms": built, "mesh_ms": mesh, "plan_ms": plan_ms, "plan_faces": plan, "save_ms": save, "file_bytes": bytes,
+                   "measure_ms": measure, "open_ms": open})
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
