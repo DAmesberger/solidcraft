@@ -1356,6 +1356,10 @@ fork too.
 - `material-graph-on-via2` is a local backup of the note's history on the old base; it is
   deleted once this layout is accepted.
 
+### Follow-ups (outside the package)
+
+- **Standard view, sRGB targets:** `to_linear` in `assets/shaders/viewport.wgsl` skips sRGB's straight segment, so on sRGB targets colours 1–10/255 show up to about 56/255 (`out_color`, and the product-light base colours at lines 745/747). It is proposed upstream as a separate small fix, because the package keeps Standard byte-identical. The Realistic view already uses the exact `srgb_decode`.
+
 ## 10. Work breakdown
 
 The contract comes first. **C0** fixes the following before any track starts:
