@@ -1,7 +1,8 @@
 //! One read-only storage buffer: body lookup, planar records and linear RGBA pixels, then the
 //! job's material-graph table (`material.rs`), whose images share these pixels by identity.
 //! Word 1 of the header is the graph table's first word (0: none).
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
+use solidcraft_geom::prelude::*;
 
 use crate::material::textures::ResidentPolicy;
 use solidcraft_render::job::{

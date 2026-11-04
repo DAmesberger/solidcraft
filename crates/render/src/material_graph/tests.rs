@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 
 use super::catalogue::{InputDefault, ParamKind, PortType};
 use super::graph::{Constant, InputValue, ParamValue};

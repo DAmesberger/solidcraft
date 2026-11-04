@@ -24,7 +24,7 @@ fn replaced_body_name_uses_evaluated_owner_in_browser_and_component_actions() {
     assert_eq!(cache.root.folders[0].as_ref().unwrap().entries().map(|entry| entry.key.as_str()).collect::<Vec<_>>(), ["Block"]);
     let occurrence = h.app.session.doc.occurrence_of(owner).unwrap().id;
     assert!(cache.occurrences.get([occurrence].as_slice()).unwrap().folders[0].as_ref().unwrap().entries().next().is_none());
-    let bounds = h.app.session.world_state().body("Block").unwrap().mesh().bounds();
+    let bounds = h.app.session.world_state().unwrap().body("Block").unwrap().mesh().bounds();
     assert!((bounds.min.x - 30.0).abs() < 1e-9);
     assert!((bounds.max.x - 35.0).abs() < 1e-9);
 }
@@ -233,20 +233,19 @@ fn occurrence_move_dialog_keeps_other_pending_moves_and_reuses_initial_baseline(
     let movement = items.iter().find(|i| i.id == "ui.moveOccurrence").unwrap();
     context_menu::run_item(&mut h.app, movement, egui::Pos2::ZERO);
     let mut m = h.app.tree.occurrence_move.clone().unwrap();
-    m.pivot =
-        Some(solidcraft_engine::doc::apply_point(&h.app.session.occurrence_placement(&[second]).unwrap().world, solidcraft_engine::geom::Vec3::ZERO));
+    m.pivot = Some(solidcraft_engine::doc::apply_point(&h.app.session.occurrence_placement(&[second]).unwrap().world, solidcore_record::Vec3::ZERO));
     m.translate = [10.0, 0.0, 0.0];
     crate::browser::apply_occurrence_move(&mut h.app, &m);
     let at = h.app.session.occurrence_placement(&[second]).unwrap();
-    assert!((solidcraft_engine::doc::apply_point(&at.world, solidcraft_engine::geom::Vec3::ZERO).x - 65.0).abs() < 1e-8);
+    assert!((solidcraft_engine::doc::apply_point(&at.world, solidcore_record::Vec3::ZERO).x - 65.0).abs() < 1e-8);
     m.translate = [3.0, 0.0, 0.0];
     crate::browser::apply_occurrence_move(&mut h.app, &m);
     let at = h.app.session.occurrence_placement(&[second]).unwrap();
-    assert!((solidcraft_engine::doc::apply_point(&at.world, solidcraft_engine::geom::Vec3::ZERO).x - 58.0).abs() < 1e-8);
+    assert!((solidcraft_engine::doc::apply_point(&at.world, solidcore_record::Vec3::ZERO).x - 58.0).abs() < 1e-8);
     assert_eq!(h.app.session.pending_moves[&first], first_pending);
     crate::browser::revert_occurrence_dialog(&mut h.app, &m);
     let restored = h.app.session.occurrence_placement(&[second]).unwrap();
-    assert!((solidcraft_engine::doc::apply_point(&restored.world, solidcraft_engine::geom::Vec3::ZERO).x - 55.0).abs() < 1e-8);
+    assert!((solidcraft_engine::doc::apply_point(&restored.world, solidcore_record::Vec3::ZERO).x - 55.0).abs() < 1e-8);
     assert_eq!(h.app.session.pending_moves[&first], first_pending);
     h.app.run("component.revert_position", json!({"occurrences":[second]})).unwrap();
     context_menu::run_item(&mut h.app, movement, egui::Pos2::ZERO);
@@ -269,7 +268,7 @@ fn occurrence_delete_targets_second_copy_even_if_first_was_selected() {
     crate::delete::confirm(&mut h.app, true);
     assert!(h.app.session.doc.occurrences.iter().any(|o| o.id == first));
     assert!(!h.app.session.doc.occurrences.iter().any(|o| o.id == second));
-    assert_eq!(h.app.session.world_state().bodies.len(), 1);
+    assert_eq!(h.app.session.world_state().unwrap().bodies.len(), 1);
 }
 
 #[test]
@@ -287,7 +286,7 @@ fn occurrence_new_component_keeps_inactive_second_parent_authoring_context() {
     h.app.run("solid.box", json!({"corner":[51,1,1],"length":2,"width":2,"height":2})).unwrap();
     let feature = h.app.session.model.state().bodies.last().unwrap().feature;
     let mut centers: Vec<f64> =
-        h.app.session.world_state().bodies.iter().filter(|b| b.feature == feature).map(|b| b.mesh().bounds().center().x).collect();
+        h.app.session.world_state().unwrap().bodies.iter().filter(|b| b.feature == feature).map(|b| b.mesh().bounds().center().x).collect();
     centers.sort_by(f64::total_cmp);
     assert_eq!(centers.len(), 2);
     assert!((centers[0] - 2.0).abs() < 1e-8 && (centers[1] - 52.0).abs() < 1e-8, "{centers:?}");
@@ -500,7 +499,10 @@ fn find_in_browser_reaches_a_folded_body() {
     let scope = super::occurrence_key(&[second]);
     h.app.tree.collapsed.extend([super::occurrence_key(&[first]), scope.clone(), format!("{scope}/bodies")]);
     h.frames(2);
-    assert!(!h.app.tree.order.contains(&format!("b:{body}")), "the body's row is closed away");
+    assert!(
+        !h.app.tree.content.owner(crate::semantic_content::ContentOwner::BROWSER).unwrap().order.contains(&format!("b:{body}")),
+        "the body's row is closed away"
+    );
     h.app.session.selection = vec![Sel::Body { name: body.clone() }];
     let find = context_menu::items(&h.app, &Target::Viewport).into_iter().find(|i| i.id == "ui.findBrowser").unwrap();
     context_menu::run_item(&mut h.app, &find, egui::Pos2::ZERO);
@@ -508,7 +510,10 @@ fn find_in_browser_reaches_a_folded_body() {
     h.frames(2);
     assert!(h.app.tree.reveal.is_none(), "revealed");
     assert!(!h.app.tree.collapsed.contains(&scope));
-    assert!(h.app.tree.order.contains(&format!("b:{body}")), "the row is drawn");
+    assert!(
+        h.app.tree.content.owner(crate::semantic_content::ContentOwner::BROWSER).unwrap().order.contains(&format!("b:{body}")),
+        "the row is drawn"
+    );
     assert!(crate::scenario::handle_at("fold:Bodies").is_none(), "with no folder row");
 }
 
@@ -613,7 +618,7 @@ fn dragging_an_occurrence_row_onto_the_top_of_a_sibling_reorders_them() {
 fn sketches_folder_moves_its_sketches_to_the_part_they_are_on() {
     let (mut h, component, occurrence) = crate::test_support::component_box();
     h.app.session.auto_project = false;
-    let world = h.app.session.world_state();
+    let world = h.app.session.world_state().unwrap();
     let body = world.bodies.iter().find(|b| h.app.session.doc.model_body_component(b) == component).unwrap().name.clone();
     let face = world.body(&body).unwrap().body.faces(0.01).unwrap().into_iter().max_by(|a, b| a.centroid.z.total_cmp(&b.centroid.z)).unwrap();
     let pick = json!({"face":[face.centroid.x,face.centroid.y,face.centroid.z],"body":body,"index":face.index,"path":[occurrence]});

@@ -191,7 +191,7 @@ impl GraphMaterial {
         let color = read("transmission_color", &[1.0, 1.0, 1.0])?;
         let depth = read("transmission_depth_mm", &[1.0])?.first().copied()?.max(1e-3);
         let a = |k: usize| -color.get(k).copied().unwrap_or(1.0).clamp(1e-4, 1.0).ln() / depth;
-        crate::transmission::Transmission::new(solidcraft_geom::Vec3::new(a(0), a(1), a(2)), None).ok()
+        crate::transmission::Transmission::new(solidcore_record::Vec3::new(a(0), a(1), a(2)), None).ok()
     }
 }
 

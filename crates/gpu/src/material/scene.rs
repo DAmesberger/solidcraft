@@ -87,7 +87,7 @@ pub fn base_record(s: &SurfaceSample) -> [f32; 4 * BASE_VEC4 as usize] {
     let (cw, cr, ci) = o.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight(), c.roughness(), c.ior()));
     let b = o.base_color();
     let f = |x: f64| x as f32;
-    let v = |c: solidcraft_geom::Vec3| [f(c.x), f(c.y), f(c.z)];
+    let v = |c: solidcore_record::Vec3| [f(c.x), f(c.y), f(c.z)];
     let [sr, sg, sb] = v(s.specular_color);
     let [cr_, cg, cb] = v(s.coat_color);
     let [er, eg, eb] = v(s.emission_color);

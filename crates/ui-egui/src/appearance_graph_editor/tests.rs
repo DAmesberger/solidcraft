@@ -477,7 +477,7 @@ fn ui_scope(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     use solidcraft_engine::render::surface::OpaqueSurface;
     let surface = OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.35, 1.5).unwrap();
     let scene = super::swatch::scene(&super::swatch::Sample::Surface(surface));
@@ -713,7 +713,7 @@ fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_swatch_draws_a_graph_with_its_coat() {
-    use solidcraft_engine::geom::Vec3;
+    use solidcore_record::Vec3;
     let epoxy = super::swatch::Material::new(&fixture("black-epoxy-clear-coat"), &Default::default()).expect("the example lowers");
     let sample = super::swatch::Sample::Graph(std::sync::Arc::new(epoxy));
     let scene = super::swatch::scene(&sample);

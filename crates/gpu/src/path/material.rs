@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_render::ProductScene;
 use solidcraft_render::job::graphs::{GraphMaterials, GraphTexture};
 use solidcraft_render::surface::srgb8_to_linear;

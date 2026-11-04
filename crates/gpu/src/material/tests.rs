@@ -1368,7 +1368,7 @@ fn brushed_metal_diagnostics() {
     let isotropic = graph_frame(&mut r, &iso, 2);
     save("diag-brushed-isotropic", &isotropic);
     let surface =
-        solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), 1.0, 0.28, 1.5).unwrap_or_else(|e| panic!("{e}"));
+        solidcraft_render::surface::OpaqueSurface::new(solidcore_record::Vec3::new(0.8, 0.77, 0.7), 1.0, 0.28, 1.5).unwrap_or_else(|e| panic!("{e}"));
     let mut scene = GpuScene::default();
     for p in corners {
         scene.pbr_tri(p, normal, surface);
@@ -1376,7 +1376,7 @@ fn brushed_metal_diagnostics() {
     let pbr = render_frame(&mut r, &device, &queue, &realistic(scene, 3, 10.0), true);
     save("diag-pbr-metal", &pbr);
     let dielectric =
-        solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), 0.0, 0.28, 1.5).unwrap_or_else(|e| panic!("{e}"));
+        solidcraft_render::surface::OpaqueSurface::new(solidcore_record::Vec3::new(0.8, 0.77, 0.7), 0.0, 0.28, 1.5).unwrap_or_else(|e| panic!("{e}"));
     let mut scene = GpuScene::default();
     for p in corners {
         scene.pbr_tri(p, normal, dielectric);
@@ -1438,7 +1438,7 @@ fn brushed_sphere_in_the_viewport() {
     let brushed = render_frame(&mut r, &device, &queue, &realistic(scene, 1, 10.0), true);
     save("diag-sphere-brushed", &brushed);
     let pbr = |r: &mut Renderer, metal: f64, rough: f64, key: u64| {
-        let surface = solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), metal, rough, 1.5)
+        let surface = solidcraft_render::surface::OpaqueSurface::new(solidcore_record::Vec3::new(0.8, 0.77, 0.7), metal, rough, 1.5)
             .unwrap_or_else(|e| panic!("{e}"));
         let mut scene = GpuScene::default();
         mesh(&mut scene, Box::new(move |s, p, n| s.pbr_tri(p, n, surface)));

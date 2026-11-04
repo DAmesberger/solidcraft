@@ -12,11 +12,12 @@
 //! `<dir>/<tag>-metrics.jsonl`. The metrics are measured on the frames, never on the CPU's own
 //! shading: luminance is Rec. 709 luma of the 8-bit display values.
 
+use solidcraft_engine::geom::prelude::*;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use solidcraft_engine::Session;
-use solidcraft_engine::geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_engine::render::{Camera, ProductScene, surface::OpaqueSurface};
 
 use super::{Frame, ProductLook, Renderer, StudioEnvironment, StudioPreset, ViewportCallback};
@@ -218,6 +219,7 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
     let none = || Arc::new(Mutex::new(None));
     let e = camera.eye().to_f32();
     let cb = ViewportCallback(Frame {
+        hatch: Default::default(),
         product_lights: shot.lights,
         product_look: Some(shot.look),
         units_per_mm: 1.0,

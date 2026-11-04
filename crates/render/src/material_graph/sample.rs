@@ -7,7 +7,7 @@
 //!
 //! [`ClearCoat`]: crate::clear_coat::ClearCoat
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 
 use crate::surface::OpaqueSurface;
 

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
-use solidcraft_engine::geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_engine::render::Camera;
 use solidcraft_engine::render::surface::OpaqueSurface;
 
@@ -196,6 +196,7 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
     let eye = camera.eye();
     let none = || Arc::new(Mutex::new(None));
     Frame {
+        hatch: Default::default(),
         product_lights: None,
         product_look: Some(ProductLook::default()),
         // The swatch's sphere is modelled in millimetres.

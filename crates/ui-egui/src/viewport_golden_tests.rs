@@ -28,11 +28,12 @@
 //! `GOLDEN_MASKS=1` also writes each mask (`…-mask.png`). `GOLDEN_STUDIO` replaces the look's studio preset and `GOLDEN_INTENSITY` its radiance scale (for
 //! the brightness comparison); the default keeps the view's own.
 
+use solidcraft_engine::geom::prelude::*;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use solidcraft_engine::Session;
-use solidcraft_engine::geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_engine::render::ProductScene;
 use solidcraft_engine::render::surface::OpaqueSurface;
 
@@ -247,6 +248,7 @@ fn frame(
 ) -> Frame {
     let none = || Arc::new(Mutex::new(None));
     Frame {
+        hatch: Default::default(),
         product_lights: lights,
         product_look: look,
         units_per_mm: 1.0,

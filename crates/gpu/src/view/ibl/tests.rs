@@ -1,5 +1,6 @@
 #![allow(clippy::needless_range_loop)] // Channels compared side by side.
 
+use solidcraft_geom::prelude::*;
 use std::f64::consts::PI;
 
 use super::reference::{dfg, shade, shade_parts, unturn};
@@ -554,7 +555,7 @@ fn run_probe(
 /// unchanged): position, normal, base colour and optical parameters, and no coat.
 #[test]
 fn pbr_vertices_are_48_bytes_without_a_coat() {
-    use solidcraft_geom::Vec3;
+    use solidcore_record::Vec3;
     use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
     assert_eq!(crate::view::PBR_SIZE, 48);
     let Ok(plain) = OpaqueSurface::new(Vec3::new(0.2, 0.4, 0.6), 0.25, 0.5, 1.45) else { panic!("valid surface") };
@@ -570,7 +571,7 @@ fn pbr_vertices_are_48_bytes_without_a_coat() {
 /// tracer's `gpu_clear_coat_brdf_matches_f64_surface_oracle` does, on any native GPU.
 #[test]
 fn gpu_viewport_clear_coat_matches_f64_surface_oracle() {
-    use solidcraft_geom::Vec3;
+    use solidcore_record::Vec3;
     use solidcraft_render::{clear_coat::ClearCoat, surface::OpaqueSurface};
     let Ok((_, device, queue)) = crate::open_headless() else { return };
     let probe = r#"
@@ -1203,7 +1204,7 @@ fn probe_stretch(@builtin(global_invocation_id) id: vec3<u32>) {
 /// the isotropic one's.
 #[test]
 fn the_anisotropic_studio_taps_match_the_oracle_lobe() {
-    use solidcraft_geom::Vec3;
+    use solidcore_record::Vec3;
     use solidcraft_render::anisotropic_surface::{AnisotropicSurface, VisualFrame};
     assert!(crate::pbr::SOURCE.contains("const PBR_STRETCH_SCALE: f32 = 1.28;"));
     assert!(crate::pbr::SOURCE.contains("const PBR_STRETCH_FLOOR: f32 = 0.36;"));

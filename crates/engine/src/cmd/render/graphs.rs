@@ -258,7 +258,7 @@ pub(crate) fn capture(
             _ => return Err(bad(command, "a graph override names `graph`, or `body_index` with `body_name`")),
         }
     }
-    let world = s.world_state();
+    let world = s.world_state()?;
     let frames = s.body_frames();
     let bodies: Vec<_> = world.bodies.iter().filter(|b| s.body_visible(&b.name)).collect();
     let mut out = CapturedGraphs::default();

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 
 use super::catalogue::{CATALOGUE, InputDefault, ParamKind, PortType};
 use super::graph::Constant;

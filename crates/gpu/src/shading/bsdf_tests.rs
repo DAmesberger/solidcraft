@@ -3,7 +3,7 @@
 //! `render::clear_coat::tinted_coat_brdf`, isotropic equivalence with today's GGX, white-furnace
 //! bounds, the see-through fallback and the tangent, and the GLSL ES 3.00 translation.
 
-use solidcraft_geom::Vec3;
+use solidcore_record::Vec3;
 use solidcraft_render::anisotropic_surface::{AnisotropicSurface, VisualFrame};
 use solidcraft_render::clear_coat::{ClearCoat, tinted_brdf, tinted_coat_brdf};
 use solidcraft_render::surface::OpaqueSurface;

@@ -17,6 +17,7 @@ raytrace-cpu = []
 test-reference = ["dep:serde_json"]
 
 [dependencies]
+solidcore-record = { workspace = true }
 solidcraft-geom = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true, features = ["jpeg"] }
