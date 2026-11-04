@@ -1,5 +1,5 @@
 //! Optional output filtering; never writes the Monte Carlo accumulation buffer.
-use super::{Context, Result, SHADER, TIMEOUT, Task, checked, placeholder_bind, scopes, warm_up};
+use super::{Context, GraphPipelines, Result, SHADER, TIMEOUT, Task, checked, placeholder_bind, scopes, warm_up};
 use wgpu::util::DeviceExt;
 
 pub(super) const BYTES_PER_PIXEL: u64 = 80; // three guide vec4s and two colour vec4s
@@ -20,24 +20,8 @@ pub(super) struct Pipelines {
 impl Pipelines {
     fn new(context: &Context) -> Result<Self> {
         let device = &context.device;
+        let guide = guide_pipeline(context, SHADER)?;
         let error_scopes = scopes(device);
-        let guide_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("denoise guides"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SHADER}\n{GUIDES}").into()),
-        });
-        let guide_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("denoise guides"),
-            bind_group_layouts: &[Some(&context.layout)],
-            immediate_size: 0,
-        });
-        let guide = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("denoise guides"),
-            layout: Some(&guide_layout),
-            module: &guide_shader,
-            entry_point: Some("denoise_guides"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
         let entries: Vec<_> = (0..4)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -67,7 +51,6 @@ impl Pipelines {
             cache: None,
         });
         checked(error_scopes)?;
-        warm_up(device, &context.queue, &guide, &placeholder_bind(device, &context.layout, 7)?, &context.healthy)?;
         warm_up(device, &context.queue, &filter, &placeholder_bind(device, &filter_layout, 4)?, &context.healthy)?;
         Ok(Self { guide, filter, filter_layout })
     }
@@ -79,6 +62,33 @@ impl Pipelines {
         let built = Self::new(context)?;
         Ok(context.denoise.get_or_init(|| built))
     }
+}
+
+/// The guide pipeline over a path shader `source` (the device's, or a graph job's with its
+/// generated evaluators), built and warmed.
+pub(super) fn guide_pipeline(context: &Context, source: &str) -> Result<wgpu::ComputePipeline> {
+    let device = &context.device;
+    let error_scopes = scopes(device);
+    let guide_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("denoise guides"),
+        source: wgpu::ShaderSource::Wgsl(format!("{source}\n{GUIDES}").into()),
+    });
+    let guide_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("denoise guides"),
+        bind_group_layouts: &[Some(&context.layout)],
+        immediate_size: 0,
+    });
+    let guide = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("denoise guides"),
+        layout: Some(&guide_layout),
+        module: &guide_shader,
+        entry_point: Some("denoise_guides"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    checked(error_scopes)?;
+    warm_up(device, &context.queue, &guide, &placeholder_bind(device, &context.layout, 7)?, &context.healthy)?;
+    Ok(guide)
 }
 
 pub(super) struct Resources {
@@ -95,6 +105,7 @@ pub(super) struct Resources {
 impl Resources {
     pub(super) fn new(
         context: &Context,
+        graphs: Option<&GraphPipelines>,
         path_uniform: &wgpu::Buffer,
         scene: [&wgpu::Buffer; 5],
         accumulation: &wgpu::Buffer,
@@ -144,7 +155,10 @@ impl Resources {
             .collect();
         checked(error_scopes)?;
         Ok(Self {
-            guide_pipeline: pipelines.guide.clone(),
+            guide_pipeline: match graphs {
+                Some(graphs) => graphs.guide(context)?.clone(),
+                None => pipelines.guide.clone(),
+            },
             guide_bind,
             filter_pipeline: pipelines.filter.clone(),
             filter_uniform,

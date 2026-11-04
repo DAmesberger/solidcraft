@@ -415,10 +415,17 @@ fn library_copies_carry_their_graph_and_update_from_their_library() {
     // Up to date: nothing to apply.
     let again = s.execute("appearance.graph.update_from_library", &json!({"id": "etched-library", "library": path_text})).unwrap();
     assert_eq!((again["applied"].clone(), again["changes"].clone()), (json!(false), json!([])));
-    // Exporting: v3 by default when a look names a graph; v2 explicitly refuses the graph.
-    let out = solidcraft_io::vfs::temp_dir().join(format!("solidcraft-graph-export-{}.json", std::process::id()));
+    // Exporting: v3 by default when a look names a graph; v2 explicitly refuses the graph. The
+    // look's texture makes the library a container, so its file is `.sclib`: `.json` refuses
+    // and names the extension to use.
+    let json_out = solidcraft_io::vfs::temp_dir().join(format!("solidcraft-graph-export-{}.json", std::process::id()));
+    let json_text = json_out.to_string_lossy().to_string();
+    let out = json_out.with_extension(solidcraft_io::catalog::CONTAINER_EXT);
     let out_text = out.to_string_lossy().to_string();
     let before = state(&s);
+    let refused = s.execute("library.export", &json!({"path": json_text})).unwrap_err().to_string();
+    assert!(refused.contains(".sclib"), "{refused}");
+    assert!(!json_out.exists(), "a refused export writes nothing");
     assert!(s.execute("library.export", &json!({"path": out_text, "format": "solidcraft-library/2"})).is_err());
     let exported = s.execute("library.export", &json!({"path": out_text})).unwrap();
     assert_eq!(exported["catalog"]["format"], V3_FORMAT);
@@ -521,6 +528,15 @@ fn library_recipes_apply_as_graphs() {
     );
     assert!(s.execute("render.library.appearance.apply", &json!({"id": "SELENE-AP-001", "variant": "graph", "bodies": ["Nope"]})).is_err());
     unchanged(&s, &before, "refused library applies");
+    // A directional Selene entry gets the binding table's anisotropy (an estimate) and a
+    // tangent from a projection it would otherwise not need.
+    let brushed = s.execute("render.library.appearance.apply", &json!({"id": "SELENE-AP-007", "variant": "graph", "bodies": ["Can"]})).unwrap();
+    assert_eq!((brushed["anisotropy"]["value"].clone(), brushed["anisotropy"]["basis"].clone()), (json!(0.6), json!("authored_estimate")));
+    let graph = &s.doc.appearances.tables.graphs[&gid("selene-ap-007")];
+    let surface = graph.nodes.iter().find(|n| n.id == "surface").unwrap();
+    assert_eq!(serde_json::to_value(&surface.inputs["geometry_tangent"]).unwrap(), json!({"from": "uv.tangent"}));
+    assert!(graph.nodes.iter().any(|n| n.id == "uv" && n.kind == "texcoord.triplanar"));
+    assert_eq!(selene["anisotropy"]["basis"], "isotropic", "an entry the table does not list is isotropic");
     let surf = s.execute("render.library.appearance.apply", &json!({"id": "SURF-001", "variant": "graph", "bodies": ["Can"]}));
     if !cfg!(feature = "bundled-render-library") {
         assert!(surf.is_err());
@@ -528,7 +544,10 @@ fn library_recipes_apply_as_graphs() {
     }
     let surf = surf.unwrap();
     assert_eq!(surf["maps"], json!(["base_color", "normal_open_gl"]));
-    assert!(surf["omitted"].as_array().unwrap().contains(&json!("height_displacement")));
+    assert_eq!(surf["omitted"], json!(["height_displacement", "roughness_metallic_maps_under_triplanar"]));
+    assert_eq!(surf["anisotropy"]["value"], 0.6, "brushed: the table's estimate");
+    let surface = s.doc.appearances.tables.graphs[&gid("surf-001")].nodes.iter().find(|n| n.id == "surface").unwrap().clone();
+    assert_eq!(serde_json::to_value(&surface.inputs["geometry_tangent"]).unwrap(), json!({"from": "uv.tangent"}));
     assert_eq!(s.doc.appearances.tables.textures.len(), 2);
     let planar = s
         .execute(
@@ -560,6 +579,10 @@ fn a_material_free_design_exports_as_v2_by_default() {
     let path = out.to_string_lossy().to_string();
     let exported = s.execute("library.export", &json!({"path": path})).unwrap();
     assert_eq!(exported["catalog"]["format"], FORMAT);
+    // A library without textures is plain JSON, so a container name refuses and names `.json`.
+    let sclib = out.with_extension(solidcraft_io::catalog::CONTAINER_EXT);
+    let refused = s.execute("library.export", &json!({"path": sclib.to_string_lossy()})).unwrap_err().to_string();
+    assert!(refused.contains(".json") && !sclib.exists(), "{refused}");
     let read = Catalog::read(&path).unwrap();
     assert_eq!(read.format, FORMAT);
     assert!(read.graphs.is_empty() && read.textures.is_empty());
@@ -567,4 +590,75 @@ fn a_material_free_design_exports_as_v2_by_default() {
     let v3 = s.execute("library.export", &json!({"path": path, "format": V3_FORMAT, "overwrite": true})).unwrap();
     assert_eq!(v3["catalog"]["format"], V3_FORMAT);
     let _ = std::fs::remove_file(&out);
+}
+
+/// The built-in material library (`builtin:materials`): every graph is valid within the budget,
+/// applies through `library.apply` with its provenance, and gives exactly the colour the library
+/// lists; `update_from_library` finds the copy current.
+#[test]
+fn the_built_in_material_library_applies_every_graph() {
+    use solidcraft_io::catalog::{BUILTIN_ID, BUILTIN_PATH, V3_FORMAT};
+    let mut s = with_body();
+    let inspected = s.execute("library.inspect", &json!({"path": BUILTIN_PATH})).unwrap();
+    let catalog = &inspected["catalog"];
+    assert_eq!((catalog["format"].as_str(), catalog["id"].as_str()), (Some(V3_FORMAT), Some(BUILTIN_ID)));
+    let entries = catalog["entries"].as_array().unwrap().clone();
+    assert_eq!(entries.len(), 9);
+    let mut wrong = Vec::new();
+    for entry in &entries {
+        let look = &entry["definition"]["value"];
+        let id = look["graph"].as_str().unwrap();
+        let graph = &catalog["graphs"][id];
+        let report = s.execute("appearance.graph.validate", &json!({"graph": graph})).unwrap();
+        assert_eq!(report["ok"], true, "{id}: {report}");
+        assert!(report["cost"].as_u64().unwrap() <= 2000, "{id}: {report}");
+        let apply = json!({"path": BUILTIN_PATH, "entry": entry["id"], "revision": entry["revision"], "targets": {"bodies": ["Can"]}});
+        s.execute("library.apply", &apply).unwrap();
+        let held = &s.doc.appearances.bodies["Can"];
+        assert_eq!(held.graph, Some(gid(id)));
+        if serde_json::to_value(held.color).unwrap() != look["color"] {
+            wrong.push(format!("{id}: {:?}", held.color));
+        }
+        let source = s.doc.appearances.tables.graphs[&gid(id)].source.clone().unwrap();
+        assert_eq!((source.library.as_str(), source.entry.as_str()), (BUILTIN_ID, id));
+        let update = s.execute("appearance.graph.update_from_library", &json!({"id": id, "library": BUILTIN_PATH, "preview": true})).unwrap();
+        assert_eq!((update["applied"].clone(), update["changes"].clone()), (json!(false), json!([])), "{id}");
+    }
+    assert!(wrong.is_empty(), "library colours differ from the base responses: {wrong:?}");
+    // The library is read-only: export cannot write to its name.
+    assert!(s.execute("library.export", &json!({"path": BUILTIN_PATH})).is_err());
+}
+
+/// `examples/material-graphs.json` runs as it is: every command succeeds, every part ends with
+/// a material graph, and the graphs came from the built-in library (or the Selene pack). A
+/// changed built-in graph changes its entry's id and revision; the message lists the current
+/// ones to put in the script.
+#[test]
+fn the_material_graphs_example_builds() {
+    use solidcraft_io::catalog::{BUILTIN_ID, Catalog};
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/material-graphs.json")).unwrap();
+    let mut s = strict();
+    for command in script["commands"].as_array().unwrap() {
+        let id = command["command"].as_str().unwrap();
+        if let Err(e) = s.execute(id, &command["params"]) {
+            let current: Vec<String> = Catalog::builtin()
+                .unwrap()
+                .entries
+                .iter()
+                .map(|e| format!("{:?} {} {}", e.definition.look().and_then(|l| l.graph.clone()), e.id, e.revision))
+                .collect();
+            panic!("{id} failed: {e}\ncurrent built-in entries:\n{}", current.join("\n"));
+        }
+    }
+    let looks = &s.doc.appearances.bodies;
+    assert_eq!(looks.len(), 9);
+    for (body, look) in looks {
+        let graph = look.graph.as_ref().unwrap_or_else(|| panic!("{body} has no graph"));
+        let source = s.doc.appearances.tables.graphs[graph].source.clone().unwrap();
+        assert!(source.library == BUILTIN_ID || source.library == "solidcraft-selene", "{body}: {source:?}");
+    }
+    assert_eq!(looks["Painted panel"].color, [236, 196, 40], "an interface colour sets the standard-view colour");
+    // The design reopens as it was saved.
+    let text = s.doc.to_json();
+    assert_eq!(solidcraft_doc::Document::from_json(&text).unwrap().appearances, s.doc.appearances);
 }

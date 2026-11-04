@@ -40,6 +40,7 @@ fn request(mode: ReflectionMode) -> ImageRequest {
     let mut camera = crate::Camera { distance: 50.0, ..Default::default() };
     camera.set_view(crate::StandardView::Top);
     ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,

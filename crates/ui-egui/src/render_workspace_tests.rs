@@ -1164,6 +1164,7 @@ fn opaque_pbr_product_gpu_and_cpu_share_color_and_material_semantics() {
         let mut task = ImageTask::new(
             scene,
             ImageRequest {
+                graphs: None,
                 studio_weights: None,
                 environment: None,
                 textures: None,
@@ -3707,6 +3708,7 @@ fn cpu_resource_profile_edits_preserve_resolution_samples_and_saved_intent() {
 fn large_image_display_uses_captured_profile_and_keeps_export_pixels_unchanged() {
     use solidcraft_engine::render::job::{CpuBudget, ImageRequest, RaytraceOptions};
     let request = ImageRequest {
+        graphs: None,
         studio_weights: None,
         integrator: Integrator::Raytrace,
         raytrace: Some(RaytraceOptions { budget: CpuBudget::Studio, ..Default::default() }),

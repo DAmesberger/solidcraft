@@ -171,6 +171,7 @@ mod light_union_lease_tests {
             strip.append_to(&mut options, 64)?;
         }
         Ok(ImageRequest {
+            graphs: None,
             studio_weights: None,
             environment: None,
             textures: None,
@@ -349,6 +350,9 @@ pub struct JobStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewInfo>,
     pub textures: Option<super::textures::TextureSummary>,
+    /// The job's material graphs, with every input the path tracer approximates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<super::graphs::GraphSummary>,
     pub options: JobOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<JobEnvironmentInfo>,
@@ -374,6 +378,7 @@ struct Record {
     started: web_time::Instant,
     presentation: Option<Arc<RetainedPresentation>>,
     textures: Option<super::textures::TextureSummary>,
+    graphs: Option<super::graphs::GraphSummary>,
     options: JobOptions,
     environment: Option<JobEnvironmentInfo>,
     _request_reservation: Option<Reservation>,
@@ -414,6 +419,7 @@ impl JobHandle {
             linear_master: data.frame.as_ref().and_then(|frame| frame.linear_master_info().cloned()),
             preview: data.preview.as_ref().map(|preview| preview.info.clone()),
             textures: self.0.textures.clone(),
+            graphs: self.0.graphs.clone(),
             options: self.0.options,
             environment: self.0.environment.clone(),
             job: self.0.id,
@@ -1262,6 +1268,7 @@ impl ImageHost {
             .map(|e| JobEnvironmentInfo::Cpu(e.metadata()))
             .or_else(|| request.environment.as_ref().map(|source| JobEnvironmentInfo::Gpu(source.info().clone())));
         let textures = request.textures.as_ref().map(|source| source.summary());
+        let graphs = request.graphs.as_ref().map(|source| source.summary());
         let metadata_bytes =
             if environment.is_some() { std::mem::size_of::<crate::lighting::environment_input::EnvironmentInfo>() as u64 } else { 0 }
                 + request.retained_resource_metadata_bytes();
@@ -1320,7 +1327,7 @@ impl ImageHost {
         // Preserve the original CPU option capacities in the retained request and its lease.
         // Registered executors instead move resource Arcs into work and keep a small public copy.
         let (public_request, work_request) = if self.0.executor.is_some() {
-            (ImageRequest { environment: None, textures: None, ..request.clone() }, Some(request))
+            (ImageRequest { environment: None, textures: None, graphs: None, ..request.clone() }, Some(request))
         } else {
             (request, None)
         };
@@ -1328,6 +1335,7 @@ impl ImageHost {
             started: web_time::Instant::now(),
             presentation: None,
             textures,
+            graphs,
             options,
             environment: environment_info,
             _request_reservation: request_reservation,
@@ -1414,6 +1422,7 @@ impl ImageHost {
         )
         .map_err(|e| JobError::new(ErrorCode::InvalidRequest, e.to_string()))?;
         let request = ImageRequest {
+            graphs: None,
             studio_weights: None,
             width: frame.info.width,
             height: frame.info.height,
@@ -1447,6 +1456,7 @@ impl ImageHost {
             started: web_time::Instant::now(),
             presentation: Some(origin),
             textures: None,
+            graphs: None,
             options,
             environment: None,
             _request_reservation: None,
@@ -1640,6 +1650,7 @@ mod retained_request_tests {
         let mut lights = Vec::with_capacity(8);
         lights.push(super::super::DirectionalLightOptions { direction: [0.0, 0.0, 1.0], color: [1.0; 3], intensity: 1.0 });
         ImageRequest {
+            graphs: None,
             studio_weights: None,
             environment: None,
             textures: None,
@@ -1710,6 +1721,7 @@ mod environment_metadata_lease_tests {
         let mut host = CpuHost::for_platform().unwrap();
         let budget = host.0.shared.budget.clone();
         let request = ImageRequest {
+            graphs: None,
             studio_weights: None,
             environment: None,
             textures: None,
@@ -1823,6 +1835,7 @@ mod surface_request_metadata_tests {
 
     fn request() -> ImageRequest {
         ImageRequest {
+            graphs: None,
             studio_weights: None,
             environment: None,
             textures: None,

@@ -1,0 +1,15 @@
+{
+ "name": "Printed sleeve with stripe",
+ "interface": [{"name": "sleeve", "type": "color3", "default": [0.02, 0.045, 0.16]}, {"name": "print", "type": "texture"}],
+ "nodes": [
+  {"id": "cyl", "kind": "texcoord.cylindrical", "params": {"space": "object", "unwrap": "angle"}, "inputs": {"origin": [0, 0, 0], "axis": [0, 0, 1], "reference": [1, 0, 0], "radius_mm": 4}},
+  {"id": "ang", "kind": "separate3", "inputs": {"in": {"from": "cyl.uv"}}},
+  {"id": "stripe", "kind": "smoothstep", "inputs": {"edge0": 2.6, "edge1": 2.62, "in": {"from": "ang.x"}}},
+  {"id": "text", "kind": "image", "params": {"space": "linear", "wrap": "repeat", "channel": "a"}, "inputs": {"texcoord": {"from": "cyl"}, "file": {"interface": "print"}}},
+  {"id": "ink", "kind": "max", "inputs": {"a": {"from": "stripe"}, "b": {"from": "text.value"}}},
+  {"id": "pvc", "kind": "standard_surface", "inputs": {"base_color": {"interface": "sleeve"}, "specular_roughness": 0.35, "specular_ior": 1.54}},
+  {"id": "printed", "kind": "standard_surface", "inputs": {"base_color": [0.8, 0.8, 0.78], "specular_roughness": 0.45, "specular_ior": 1.5}},
+  {"id": "surface", "kind": "surface.mix", "inputs": {"fg": {"from": "printed"}, "bg": {"from": "pvc"}, "mix": {"from": "ink"}}}
+ ],
+ "output": "surface"
+}

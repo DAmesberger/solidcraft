@@ -1,7 +1,12 @@
-//! One read-only storage buffer: body lookup, planar records and linear RGBA pixels.
+//! One read-only storage buffer: body lookup, planar records and linear RGBA pixels, then the
+//! job's material-graph table (`material.rs`), whose images share these pixels by identity.
+//! Word 1 of the header is the graph table's first word (0: none).
 use solidcraft_geom::Vec3;
+
+use crate::material::textures::ResidentPolicy;
 use solidcraft_render::job::{
     CancelToken, ErrorCode, JobError, Result,
+    graphs::GraphMaterials,
     textures::{BaseColorMode, RuntimeTextures, TextureMap},
 };
 
@@ -15,7 +20,7 @@ fn write_word(bytes: &mut [u8], word: usize, value: u32) -> Result<()> {
         .copy_from_slice(&value.to_le_bytes());
     Ok(())
 }
-fn pixels(
+pub(super) fn pixels(
     bytes: &mut Vec<u8>,
     map: Option<&TextureMap>,
     cancel: &CancelToken,
@@ -40,16 +45,43 @@ fn pixels(
     shared.insert(map.identity(), record);
     Ok(record)
 }
+#[cfg(test)]
 pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, origin: Vec3, cancel: &CancelToken) -> Result<Vec<u8>> {
-    let Some(resources) = resources else {
-        return Ok(vec![0; 16]);
+    flatten_with_graphs(resources, None, body_count, origin, cancel, &ResidentPolicy::path(u64::MAX)).map(|(bytes, _)| bytes)
+}
+/// The texture buffer with the job's graph table after the runtime maps, and where each graph
+/// binding's record starts.
+pub(super) fn flatten_with_graphs(
+    resources: Option<&RuntimeTextures>,
+    graphs: Option<&GraphMaterials>,
+    body_count: usize,
+    origin: Vec3,
+    cancel: &CancelToken,
+    policy: &ResidentPolicy,
+) -> Result<(Vec<u8>, super::material::Records)> {
+    let mut shared = std::collections::BTreeMap::new();
+    let mut bytes = match resources {
+        Some(resources) => runtime(resources, body_count, origin, cancel, &mut shared)?,
+        None => vec![0; 16],
     };
+    let records = match graphs {
+        Some(graphs) => super::material::append(&mut bytes, graphs, origin, cancel, &mut shared, policy)?,
+        None => Default::default(),
+    };
+    Ok((bytes, records))
+}
+fn runtime(
+    resources: &RuntimeTextures,
+    body_count: usize,
+    origin: Vec3,
+    cancel: &CancelToken,
+    shared: &mut std::collections::BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
+) -> Result<Vec<u8>> {
     let header = 4 + body_count + 1;
     let record_words = resources.bindings().len() * 24;
     let mut bytes = super::scene::reserved((header + record_words) * 4 + resources.summary().linear_pixel_bytes as usize)?;
     bytes.resize((header + record_words) * 4, 0);
     write_word(&mut bytes, 0, (body_count + 1) as u32)?;
-    let mut shared = std::collections::BTreeMap::new();
     for (index, binding) in resources.bindings().iter().enumerate() {
         cancel.check()?;
         let record = header + index * 24;
@@ -65,10 +97,10 @@ pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, or
                 write_word(&mut bytes, record + offset + k, (c as f32).to_bits())?;
             }
         }
-        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, &mut shared)?;
-        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, &mut shared)?;
-        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, &mut shared)?;
-        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, &mut shared)?;
+        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, shared)?;
+        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, shared)?;
+        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, shared)?;
+        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, shared)?;
         let flags = u32::from(binding.flip_v) | (u32::from(binding.base_color_mode == BaseColorMode::Replace) << 1);
         for (offset, value) in [
             (3, base),
