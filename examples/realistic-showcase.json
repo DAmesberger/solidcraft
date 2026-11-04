@@ -601,8 +601,8 @@
         "in": {
          "from": "lines"
         },
-        "out_min": 0.26,
-        "out_max": 0.36
+        "out_min": 0.22,
+        "out_max": 0.3
        }
       },
       {
@@ -645,7 +645,7 @@
         "base_metalness": 1,
         "specular_roughness": {
          "from": "rough",
-         "fallback": 0.31
+         "fallback": 0.26
         },
         "specular_roughness_anisotropy": 0.7,
         "geometry_tangent": {
