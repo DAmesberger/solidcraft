@@ -936,9 +936,21 @@ random-number use are therefore unchanged, and graph evaluation draws no random 
 
 **What the path tracer does not gain.** Inputs it has no lobe for (anisotropy, coat colour)
 are evaluated as isotropic and untinted. Each such approximation is reported, never silent:
-`render.preflight` lists it per body, and so does the job result (decision O10). Emission
-maps to its existing surface emission, transmission to its existing runtime transmission,
-normals to its shading normal.
+`render.preflight` lists it per body, and so does the job result (decision O10). The
+reported treatments are:
+
+| Input | Path tracer |
+|---|---|
+| `specular_roughness_anisotropy` | `isotropic` |
+| `coat_color` | `untinted` |
+| `specular_weight`, `specular_color` | `ignored` |
+| `geometry_coat_normal` | `base_normal` (one shading normal) |
+| `emission_luminance` > 0 | `not_emitted`: the GPU path tracer has no surface emitters (`SurfaceEmission` is a CPU ray-tracer option), so a graph's emission is not drawn there |
+| `transmission_weight` | a constant weight > 0 makes the body or face closed glass absorbing to `transmission_color` at `transmission_depth_mm` (exact at 1, `full_glass` below); a driven weight is `captured_transmission` |
+| `geometry_opacity` < 1 | `opaque` |
+
+Normals map to its shading normal, and image heights reach it through one-texel slopes, as
+in the viewport.
 
 **Path-tracer parity for looks without graphs.**
 
