@@ -83,6 +83,9 @@ commands:
                   write the web build's service worker (sw.js: offline use, updates); run by
                   Trunk after release builds of apps/solidcraft-web, or on a built site in DIR
   web-api-test [--site DIR]  Test the command API in a real browser build (default: dist/web)
+  web-frame --design FILE --out PNG [--site DIR] [--look standard|realistic] [--view NAME]
+            [--size WxH] [--settle SECONDS] [--webgpu]
+                  one browser frame of a saved design in a web build (WebGL2 unless --webgpu)
   web-offline-test [--site DIR]
                   check in headless Chrome that the web app works offline and updates to a new
                   build (a stand-in app, or the web build in DIR such as dist/web)
@@ -127,6 +130,24 @@ fn main() -> ExitCode {
         Some("web-api-test") => {
             let site = rest.iter().position(|a| *a == "--site").and_then(|i| rest.get(i + 1)).copied().unwrap_or("dist/web");
             web_offline_test::run_api(site)
+        }
+        Some("web-frame") => {
+            let arg = |name: &str| rest.iter().position(|a| *a == name).and_then(|i| rest.get(i + 1)).copied();
+            let size =
+                arg("--size").and_then(|s| s.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((1600, 1000));
+            match (arg("--design"), arg("--out")) {
+                (Some(design), Some(out)) => web_offline_test::run_frame(&web_offline_test::FrameRequest {
+                    site: arg("--site").unwrap_or("dist/web"),
+                    design,
+                    out,
+                    look: arg("--look").unwrap_or("realistic"),
+                    view: arg("--view"),
+                    size,
+                    settle: arg("--settle").and_then(|s| s.parse().ok()).unwrap_or(15),
+                    webgpu: rest.contains(&"--webgpu"),
+                }),
+                _ => Err(format!("web-frame: --design and --out are required\n\n{USAGE}")),
+            }
         }
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");

@@ -123,6 +123,96 @@ pub fn run_api(site: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `cargo xtask web-frame`: one real browser frame of a saved design in a web build (evidence for
+/// the WebGL2 path, not a check). The design is served next to the site and opened with `?open=`;
+/// `?webgl` forces WebGL2 unless `webgpu` is asked for. After the optional saved `view` and the
+/// `look`, it waits `settle` seconds for the studio bake and the material shapes, then writes a
+/// screenshot of the page and prints the adapter and the viewport's rectangle.
+pub struct FrameRequest<'a> {
+    pub site: &'a str,
+    pub design: &'a str,
+    pub out: &'a str,
+    pub look: &'a str,
+    pub view: Option<&'a str>,
+    pub size: (u32, u32),
+    pub settle: u64,
+    pub webgpu: bool,
+}
+
+pub fn run_frame(r: &FrameRequest) -> Result<(), String> {
+    let site = std::fs::canonicalize(r.site).map_err(|e| format!("{}: {e}; build apps/solidcraft-web first", r.site))?;
+    if !site.join("index.html").is_file() {
+        return Err(format!("{}: index.html missing", site.display()));
+    }
+    let chrome = find_chrome().ok_or("web-frame: Chrome not found (set CHROME to its executable)")?;
+    let work = TempDir::new()?;
+    let served = work.0.join("site");
+    copy_dir(&site, &served)?;
+    let ext = Path::new(r.design).extension().and_then(|e| e.to_str()).unwrap_or("solidcraft");
+    let name = format!("design.{ext}");
+    std::fs::copy(r.design, served.join(&name)).map_err(|e| format!("{}: {e}", r.design))?;
+    let server = Server::start(served.clone())?;
+    server.set(Mode::Serve(served));
+    let browser = Chrome::launch(&chrome, &work.0.join("profile"))?;
+    let mut cdp = browser.connect()?;
+    let (w, h) = r.size;
+    cdp.call("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 1, "mobile": false}))?;
+    let backend = if r.webgpu { "webgpu" } else { "webgl" };
+    let url = format!("http://127.0.0.1:{}{PREFIX}?{backend}&open={PREFIX}{name}", server.port);
+    cdp.call("Page.navigate", json!({"url": url}))?;
+    wait_for(&mut cdp, "!!window.solidcraft && !document.getElementById('solidcraft_loading')", "the browser API is ready", |v| v == true)?;
+    wait_for(
+        &mut cdp,
+        "(async () => { const i = await window.solidcraft.inspect(); const u = await window.solidcraft.request('ui.inspect'); return i.bodies.length > 0 && !u.file_busy; })()",
+        "the design is open",
+        |v| v == true,
+    )?;
+    let quote = |v: &str| serde_json::to_string(v).unwrap_or_default();
+    if let Some(view) = r.view {
+        let v = cdp.eval(&format!("window.solidcraft.execute('view.apply', {{view: {}}})", quote(view)))?;
+        println!("web-frame: view.apply {v}");
+    }
+    let v = cdp.eval(&format!("window.solidcraft.execute('view.look', {{look: {}, view: 'model'}})", quote(r.look)))?;
+    println!("web-frame: view.look {v}");
+    std::thread::sleep(Duration::from_secs(r.settle));
+    let ui = cdp.eval("window.solidcraft.request('ui.inspect')")?;
+    println!(
+        "web-frame: adapter {} renderer {} viewport {} frame_ms {} draw {}",
+        ui["adapter"], ui["renderer"], ui["viewport"], ui["frame_ms"], ui["draw"]
+    );
+    if let Some(status) = ui.get("status").filter(|s| !s.is_null()) {
+        println!("web-frame: status {status}");
+    }
+    let shot = cdp.call("Page.captureScreenshot", json!({"format": "png"}))?;
+    let png = base64_decode(shot["data"].as_str().ok_or("web-frame: no screenshot data")?)?;
+    std::fs::write(r.out, &png).map_err(|e| format!("{}: {e}", r.out))?;
+    println!("web-frame: wrote {} ({} bytes)", r.out, png.len());
+    Ok(())
+}
+
+fn base64_decode(text: &str) -> Result<Vec<u8>, String> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
+        acc = (acc << 6) | u32::from(value(c).ok_or("web-frame: bad base64")?);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Ok(out)
+}
+
 /// The browser's own tab switching keys reach it while the app has the keyboard (#5227): their
 /// default action isn't cancelled, while Tab's is (the app moves between its fields with it).
 const KEYS_TEST: &str = r#"(async () => {
