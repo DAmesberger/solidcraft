@@ -76,6 +76,8 @@ pub struct ViewportState {
     /// The sketches' box in the world of one world state (held, as `pick_bounds` is). Every
     /// `projection` reads it, several times a frame, and each sketch's box samples its curves.
     sketch_bounds: std::sync::Mutex<Option<(std::sync::Arc<solidcraft_engine::doc::ModelState>, solidcraft_engine::geom::Aabb3)>>,
+    /// Material-graph looks lowered for the model scene's material stream (Realistic view).
+    pub(crate) graph_looks: std::sync::Mutex<crate::viewport_graphs::GraphLooks>,
     /// The model scene's blocks of bodies by key, from the last scene built.
     pub(crate) blocks: std::sync::Mutex<std::collections::HashMap<u64, CachedBlock>>,
     /// The triangles of each mesh the last scene drew as instances, by the mesh's address (the
@@ -565,6 +567,8 @@ fn scene_key(app: &SolveApp) -> u64 {
     app.session.colored_components.hash(&mut h);
     (std::sync::Arc::as_ptr(&crate::open_meshing::shown_world(app)) as usize).hash(&mut h);
     app.ui.visual_style.hash(&mut h);
+    // The Realistic view adds the graph looks' material stream.
+    crate::viewport_graphs::active(app).hash(&mut h);
     app.preferences.vertex_markers.hash(&mut h);
     app.ui.ground_shadow.hash(&mut h);
     solidcraft_engine::doc::display_quality::current().hash(&mut h);
@@ -966,6 +970,8 @@ fn hash_look(look: Option<&solidcraft_engine::doc::appearance::Look>, h: &mut im
                 }
                 None => 0u8.hash(h),
             }
+            l.graph.as_ref().map(|g| g.as_str()).hash(h);
+            serde_json::to_string(&l.values).ok().hash(h);
         }
         None => 0u8.hash(h),
     }
@@ -1479,6 +1485,9 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
     // the CPU.
     let mut instances = Instances::new(app, &shown, shaded);
     let mut thread_budget = solidcraft_engine::cosmetic_threads::Budget::default();
+    // Graph looks in the Realistic view (`viewport_graphs`), unless components are coloured.
+    let graph_looks = crate::viewport_graphs::active(app) && !colored;
+    let mut looks = app.viewport.graph_looks.lock().unwrap_or_else(|e| e.into_inner());
     for (b, slots) in shown.into_iter().zip(slots) {
         let faded = body_faded(app, b, &active_bodies);
         let identity = match appearance.keys.get(&b.name).copied() {
@@ -1525,12 +1534,18 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         let faces = b.body.face_count();
         let mut face_colors = Vec::with_capacity(faces);
         let mut face_classes = Vec::with_capacity(faces);
+        // See-through graph faces: the material stream draws them blended, so here they are
+        // glass that shows nothing (and writes no depth).
+        let graph_see_through =
+            if graph_looks && !faded { crate::viewport_graphs::see_through_faces(&s.doc, b, face_looks) } else { vec![false; faces] };
         for f in 0..faces {
             let look = face_looks.get(&f);
             let color = look.map_or(base, |l| Color32::from_rgb(l.color[0], l.color[1], l.color[2]));
             let opacity = look.map_or(opacity, |l| l.opacity);
             let (rgba, class) = if faded {
                 (c4(color.gamma_multiply(0.35)), crate::gpu::TriClass::Faded)
+            } else if graph_see_through.get(f).copied().unwrap_or(false) {
+                ([0; 4], crate::gpu::TriClass::Glass)
             } else if opacity < 0.999 {
                 let mut rgba = c4(color);
                 rgba[3] = (opacity.clamp(0.05, 1.0) * 255.0).round() as u8;
@@ -1543,6 +1558,10 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
             face_colors.push(slot);
             face_classes.push(class);
         }
+        if graph_looks && !faded {
+            let drawn = |f: usize| face_classes.get(f) == Some(&crate::gpu::TriClass::Opaque) || graph_see_through.get(f).copied().unwrap_or(false);
+            crate::viewport_graphs::add_body(&mut sc, &mut looks, &s.doc, b, face_looks, &drawn_mesh(app, b), drawn);
+        }
         let class = plan_class(app, &face_classes);
         let planned = class.and_then(|class| drawn_plan(app, b, true).map(|plan| (plan, class)));
         let on_gpu = planned.is_some();
@@ -1551,15 +1570,17 @@ pub(crate) fn build_scene(app: &SolveApp) -> GpuScene {
         }
         // Opaque, faded and see-through bodies alike, in one colour (faces of their own colour
         // are built as before).
+        let body_see_through = face_looks.is_empty() && !graph_see_through.is_empty() && graph_see_through.iter().all(|x| *x);
         let look = if faded {
             crate::gpu::InstanceLook::Faded
-        } else if opacity < 0.999 {
+        } else if opacity < 0.999 || body_see_through {
             crate::gpu::InstanceLook::Glass
         } else {
             crate::gpu::InstanceLook::Opaque
         };
         let alpha = match look {
             crate::gpu::InstanceLook::Faded => col[3],
+            crate::gpu::InstanceLook::Glass if body_see_through => 0,
             crate::gpu::InstanceLook::Glass => (opacity.clamp(0.05, 1.0) * 255.0).round() as u8,
             crate::gpu::InstanceLook::Opaque => 255,
         };

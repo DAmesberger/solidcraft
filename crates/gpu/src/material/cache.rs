@@ -50,6 +50,21 @@ pub(crate) fn vertex_entry(object: bool) -> &'static str {
     if object { "vs_mat_object" } else { "vs_mat" }
 }
 
+/// How a draw is made: over opaque faces, or blended (see-through: premultiplied over, far
+/// sides first, then near sides, as the viewport's glass is).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum Variant {
+    Opaque,
+    Far,
+    Near,
+}
+
+impl Variant {
+    fn of(blended: bool) -> &'static [Variant] {
+        if blended { &[Variant::Far, Variant::Near] } else { &[Variant::Opaque] }
+    }
+}
+
 enum Pipeline {
     Ready { pipeline: wgpu::RenderPipeline, used: u64 },
 }
@@ -61,11 +76,11 @@ pub(crate) struct Materials {
     format: wgpu::TextureFormat,
     samples: u32,
     depth: Option<wgpu::DepthStencilState>,
-    shapes: HashMap<ShapeKey, Pipeline>,
+    shapes: HashMap<(ShapeKey, Variant), Pipeline>,
     failed: HashSet<ShapeKey>,
     /// The constant-graph pipelines (plain and object vertices), made when a scene first has
     /// material surfaces.
-    fallback: Option<[wgpu::RenderPipeline; 2]>,
+    fallback: HashMap<(bool, Variant), wgpu::RenderPipeline>,
     frame: u64,
     stats: MaterialStats,
     /// Draws this frame that used the fallback (counted while drawing, which borrows `self`).
@@ -76,6 +91,10 @@ pub(crate) struct Materials {
     samplers: [wgpu::Sampler; 3],
     /// The resident material textures (`textures`).
     pub(crate) textures: ResidentTextures,
+    /// Decodes the textures a scene gives bytes for, on a worker (made on first use).
+    decoder: Option<std::sync::Mutex<super::TextureDecoder>>,
+    /// Textures still decoding, as of the last frame.
+    decoding: u32,
     /// Shapes kept and new pipelines a frame ([`CACHE_SHAPES`], [`COMPILES_PER_FRAME`]); tests
     /// lower them.
     pub(crate) capacity: usize,
@@ -126,7 +145,7 @@ impl Materials {
             depth,
             shapes: HashMap::new(),
             failed: HashSet::new(),
-            fallback: None,
+            fallback: HashMap::new(),
             frame: 0,
             stats: MaterialStats::default(),
             fallback_draws: std::sync::atomic::AtomicU32::new(0),
@@ -135,6 +154,8 @@ impl Materials {
             compiles_per_frame: COMPILES_PER_FRAME,
             samplers,
             textures: ResidentTextures::new(device),
+            decoder: None,
+            decoding: 0,
             #[cfg(test)]
             no_time_budget: false,
         }
@@ -146,10 +167,15 @@ impl Materials {
 
     /// Shapes of the last frame's scene are still compiling: a frame drawn now would differ.
     pub(crate) fn wants_redraw(&self) -> bool {
-        self.stats.pending > 0
+        self.stats.pending > 0 || self.decoding > 0
     }
 
-    fn pipeline(&self, device: &wgpu::Device, label: &str, source: String, object: bool) -> wgpu::RenderPipeline {
+    fn pipeline(&self, device: &wgpu::Device, label: &str, source: String, object: bool, variant: Variant) -> wgpu::RenderPipeline {
+        let (cull, blend) = match variant {
+            Variant::Opaque => (None, None),
+            Variant::Far => (Some(wgpu::Face::Front), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
+            Variant::Near => (Some(wgpu::Face::Back), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
+        };
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -161,13 +187,13 @@ impl Materials {
                 buffers: &[Some(vertex_layout(object))],
                 compilation_options: Default::default(),
             },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: cull, ..Default::default() },
             depth_stencil: self.depth.clone(),
             multisample: wgpu::MultisampleState { count: self.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_mat"),
-                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,
@@ -176,7 +202,7 @@ impl Materials {
     }
 
     /// Generate, validate and build a shape's pipeline; `None` (logged once) when it fails.
-    fn compile(&self, device: &wgpu::Device, ir: &Ir) -> Option<wgpu::RenderPipeline> {
+    fn compile(&self, device: &wgpu::Device, ir: &Ir, variant: Variant) -> Option<wgpu::RenderPipeline> {
         let source = match super::shape_source(ir).and_then(|s| super::validate(&s).map(|_| s)) {
             Ok(s) => s,
             Err(e) => {
@@ -184,7 +210,7 @@ impl Materials {
                 return None;
             }
         };
-        Some(self.pipeline(device, "sc_material_shape", source, ir.object_space))
+        Some(self.pipeline(device, "sc_material_shape", source, ir.object_space, variant))
     }
 
     /// Ready this frame's pipelines for `scene`: the fallback when it first has material surfaces,
@@ -200,6 +226,7 @@ impl Materials {
             }
         }
         self.stats = MaterialStats { failed: u32::try_from(self.failed.len()).unwrap_or(u32::MAX), ..MaterialStats::default() };
+        self.decode(device, queue, scene);
         if scene.draws.is_empty() {
             self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
             return;
@@ -223,20 +250,31 @@ impl Materials {
             );
             self.blank = Some(texture.create_view(&Default::default()));
         }
-        if self.fallback.is_none() {
-            let source = super::fallback_source();
-            self.fallback = Some([false, true].map(|object| self.pipeline(device, "sc_material_base", source.clone(), object)));
-        }
-        let mut wanted: Vec<(&ShapeKey, &Arc<Ir>)> = Vec::new();
+        // The constant-graph pipelines a draw may fall back to, made the first time one is needed.
         for draw in &scene.draws {
-            match self.shapes.get_mut(&draw.shape) {
-                Some(Pipeline::Ready { used, .. }) => *used = frame,
-                None if !self.failed.contains(&draw.shape) && !wanted.iter().any(|(k, _)| **k == draw.shape) => wanted.push((&draw.shape, &draw.ir)),
-                None => {}
+            for variant in Variant::of(draw.blended) {
+                if !self.fallback.contains_key(&(draw.object, *variant)) {
+                    let pipeline = self.pipeline(device, "sc_material_base", super::fallback_source(), draw.object, *variant);
+                    self.fallback.insert((draw.object, *variant), pipeline);
+                }
+            }
+        }
+        let mut wanted: Vec<((ShapeKey, Variant), &Arc<Ir>)> = Vec::new();
+        for draw in &scene.draws {
+            for variant in Variant::of(draw.blended) {
+                let key = (draw.shape, *variant);
+                match self.shapes.get_mut(&key) {
+                    Some(Pipeline::Ready { used, .. }) => *used = frame,
+                    None if !self.failed.contains(&draw.shape) && !wanted.iter().any(|(k, _)| *k == key) => wanted.push((key, &draw.ir)),
+                    None => {}
+                }
             }
         }
         let mut pending = 0u32;
         for (key, ir) in wanted {
+            if self.failed.contains(&key.0) {
+                continue;
+            }
             let over_time = {
                 #[cfg(test)]
                 let skip = self.no_time_budget;
@@ -248,15 +286,15 @@ impl Materials {
                 pending += 1;
                 continue;
             }
-            match self.compile(device, ir) {
+            match self.compile(device, ir, key.1) {
                 Some(pipeline) => {
-                    self.shapes.insert(*key, Pipeline::Ready { pipeline, used: frame });
+                    self.shapes.insert(key, Pipeline::Ready { pipeline, used: frame });
                 }
                 None => {
                     if self.failed.len() >= FAILED_SHAPES {
                         self.failed.clear();
                     }
-                    self.failed.insert(*key);
+                    self.failed.insert(key.0);
                 }
             }
             self.stats.compiled += 1;
@@ -264,6 +302,42 @@ impl Materials {
         self.stats.pending = pending;
         self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
         self.stats.failed = u32::try_from(self.failed.len()).unwrap_or(u32::MAX);
+    }
+
+    /// Ask the decoder for the scene's textures that are neither resident nor decoding, and make
+    /// resident what it has finished. A texture that fails to decode stays its `image` nodes'
+    /// `default` (logged once; the decoder does not try it again).
+    fn decode(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphBatches) {
+        let wanted: Vec<_> = scene.sources.iter().filter(|(key, _)| self.textures.view(key).is_none()).collect();
+        if wanted.is_empty() && self.decoder.as_mut().is_none_or(|d| d.get_mut().map_or(0, |d| d.pending()) == 0) {
+            self.decoding = 0;
+            return;
+        }
+        let (policy, caps) = (self.textures.policy, self.textures.caps);
+        let slot = self.decoder.get_or_insert_with(|| std::sync::Mutex::new(super::TextureDecoder::new(policy, caps)));
+        let decoder = match slot.get_mut() {
+            Ok(d) => d,
+            Err(e) => e.into_inner(),
+        };
+        for (key, bytes) in wanted {
+            if !decoder.is_pending(key)
+                && let Err(e) = decoder.request(key.clone(), bytes.as_ref().clone())
+            {
+                log::warn!("material texture {}: drawn as its default colour: {e}", key.sha256.get(..12).unwrap_or(""));
+            }
+        }
+        let finished = decoder.poll();
+        self.decoding = u32::try_from(decoder.pending()).unwrap_or(u32::MAX);
+        for done in finished {
+            match done {
+                Ok(texture) => {
+                    if let Err(e) = self.textures.install(device, queue, texture) {
+                        log::warn!("material texture not made resident: {e}");
+                    }
+                }
+                Err((key, e)) => log::warn!("material texture {}: drawn as its default colour: {e}", key.sha256.get(..12).unwrap_or("")),
+            }
+        }
     }
 
     /// Free a cache slot if one is needed, dropping the least recently drawn shape not drawn this
@@ -283,17 +357,17 @@ impl Materials {
     }
 
     /// The pipeline a draw of `shape` uses now: its own, else the fallback.
-    fn for_draw(&self, shape: &ShapeKey, object: bool) -> Option<(&wgpu::RenderPipeline, bool)> {
-        match self.shapes.get(shape) {
+    fn for_draw(&self, shape: &ShapeKey, object: bool, variant: Variant) -> Option<(&wgpu::RenderPipeline, bool)> {
+        match self.shapes.get(&(*shape, variant)) {
             Some(Pipeline::Ready { pipeline, .. }) => Some((pipeline, false)),
-            None => self.fallback.as_ref().map(|f| (if object { &f[1] } else { &f[0] }, true)),
+            None => self.fallback.get(&(object, variant)).map(|f| (f, true)),
         }
     }
 
     /// Whether `shape` has its own pipeline.
     #[cfg(test)]
     pub(crate) fn is_ready(&self, shape: &ShapeKey) -> bool {
-        self.shapes.contains_key(shape)
+        self.shapes.keys().any(|(k, _)| k == shape)
     }
 }
 
@@ -304,6 +378,10 @@ struct PageGpu {
 
 struct DrawGpu {
     shape: ShapeKey,
+    /// See-through: drawn blended, after the opaque draws.
+    blended: bool,
+    /// What its vertices hash to: an unchanged draw keeps its buffer.
+    hash: u64,
     ir: Arc<Ir>,
     object: bool,
     page: usize,
@@ -320,6 +398,8 @@ pub(crate) struct GraphBatches {
     draws: Vec<DrawGpu>,
     /// The scene's texture sets (index 0 binds none).
     sets: Vec<TextureSet>,
+    /// The latest scene's texture bytes, by key.
+    sources: HashMap<super::TextureKey, Arc<Vec<u8>>>,
     /// Group-3 binds by (page, texture set).
     binds: HashMap<(usize, u32), wgpu::BindGroup>,
     /// The studio (preset, installation), pages and texture generation the binds were made for.
@@ -327,9 +407,10 @@ pub(crate) struct GraphBatches {
 }
 
 impl GraphBatches {
-    /// Upload `scene`: pages whose words changed are rewritten, the others kept; the vertices are
-    /// uploaded anew. Returns the bytes written.
-    pub(crate) fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphScene) -> u64 {
+    /// Upload `scene`: pages whose words changed are rewritten, the others kept, and only draws
+    /// whose vertices changed are uploaded (a value edit writes pages alone). Returns the page and
+    /// vertex bytes written.
+    pub(crate) fn take(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphScene) -> (u64, u64) {
         let mut written = 0u64;
         let mut pages = std::mem::take(&mut self.pages);
         pages.truncate(scene.pages().len());
@@ -359,17 +440,31 @@ impl GraphBatches {
         if rebind {
             self.bound = None;
         }
+        self.sources.clone_from(scene.texture_sources());
         let sets: Vec<TextureSet> = (0..=scene.draws().iter().map(|d| d.textures).max().unwrap_or(0)).map(|i| scene.texture_set(i)).collect();
         if sets != self.sets {
             self.sets = sets;
             self.bound = None;
         }
-        self.draws.clear();
+        let pages_written = written;
+        written = 0;
+        let mut old: HashMap<(ShapeKey, usize, u32, u64), DrawGpu> =
+            std::mem::take(&mut self.draws).into_iter().map(|d| ((d.shape, d.page, d.set, d.hash), d)).collect();
         for draw in scene.draws() {
             let stride = GraphScene::stride(draw.object);
             let vertices = u32::try_from(draw.vertices.len() / stride).unwrap_or(0);
             let (Some(ir), Ok(page)) = (scene.shape(&draw.shape), usize::try_from(draw.page)) else { continue };
             if vertices < 3 || draw.vertices.len() as u64 > device.limits().max_buffer_size {
+                continue;
+            }
+            let hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                draw.vertices.hash(&mut h);
+                h.finish()
+            };
+            if let Some(kept) = old.remove(&(draw.shape, page, draw.textures, hash)) {
+                self.draws.push(DrawGpu { ir: ir.clone(), object: draw.object, blended: draw.blended, ..kept });
                 continue;
             }
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -384,6 +479,8 @@ impl GraphBatches {
             written += bytes.len() as u64;
             self.draws.push(DrawGpu {
                 shape: draw.shape,
+                blended: draw.blended,
+                hash,
                 ir: ir.clone(),
                 object: draw.object,
                 page,
@@ -392,11 +489,7 @@ impl GraphBatches {
                 vertices: vertices / 3 * 3,
             });
         }
-        written
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.draws.is_empty()
+        (pages_written, written)
     }
 
     /// Texture set `i` (none past the scene's).
@@ -429,10 +522,13 @@ impl GraphBatches {
         self.bound = Some(want);
     }
 
-    /// Draw every material surface: one draw per (shape, page, texture set).
+    /// Draw every material surface: one draw per (shape, page, texture set); the opaque ones,
+    /// then the see-through ones' far sides, then their near sides.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'static>, pipelines: &Materials, tally: &crate::view::Tally) {
-        for draw in &self.draws {
-            let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&draw.shape, draw.object), self.binds.get(&(draw.page, draw.set)))
+        let order = [(false, Variant::Opaque), (true, Variant::Far), (true, Variant::Near)];
+        for (draw, variant) in order.iter().flat_map(|(blended, v)| self.draws.iter().filter(move |d| d.blended == *blended).map(move |d| (d, *v))) {
+            let (Some((pipeline, fallback)), Some(bind)) =
+                (pipelines.for_draw(&draw.shape, draw.object, variant), self.binds.get(&(draw.page, draw.set)))
             else {
                 continue;
             };
@@ -444,16 +540,6 @@ impl GraphBatches {
             if fallback {
                 pipelines.fallback_draws.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-        }
-    }
-
-    /// The surfaces' depth or occlusion term in an AO pass, with that pass's pipelines for plain
-    /// and object vertices.
-    pub(crate) fn draw_ao(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &[wgpu::RenderPipeline; 2]) {
-        for draw in &self.draws {
-            pass.set_pipeline(if draw.object { &pipelines[1] } else { &pipelines[0] });
-            pass.set_vertex_buffer(0, draw.buffer.slice(..));
-            pass.draw(0..draw.vertices, 0..1);
         }
     }
 }

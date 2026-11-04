@@ -22,7 +22,7 @@ pub mod textures;
 
 pub use cache::MaterialStats;
 pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, generate, material_eval};
-pub use scene::{GraphDraw, GraphMaterial, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record};
+pub use scene::{GraphDraw, GraphMaterial, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record, see_through};
 pub use textures::{PreparedTexture, ResidentPolicy, TextureCaps, TextureDecoder, TextureKey, TextureStats, texture_keys};
 
 use solidcraft_render::material_graph::ir::Ir;
@@ -76,3 +76,6 @@ pub fn validate(source: &str) -> Result<(naga::Module, naga::valid::ModuleInfo),
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod shade_tests;

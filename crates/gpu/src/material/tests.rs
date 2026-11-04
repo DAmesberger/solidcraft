@@ -87,21 +87,6 @@ fn every_fixture_shape_validates_and_translates_for_webgl2() {
     }
 }
 
-/// The viewport module carries the material streams (its AO passes draw them): their entries
-/// translate to WebGL2 too.
-#[test]
-fn the_viewport_module_has_the_material_streams() {
-    let source = format!("{}\n{}\n{}", crate::view::SHADER, crate::pbr::SOURCE, super::STREAM);
-    let entries = [
-        (naga::ShaderStage::Vertex, "vs_mat"),
-        (naga::ShaderStage::Vertex, "vs_mat_object"),
-        (naga::ShaderStage::Fragment, "fs_ao_depth_mat"),
-        (naga::ShaderStage::Fragment, "fs_ao_term_mat"),
-        (naga::ShaderStage::Fragment, "fs_pbr"),
-    ];
-    glsl(&source, &entries).unwrap_or_else(|e| panic!("{e}"));
-}
-
 /// Derivatives stay in uniform control flow: `fs_mat` takes all of them before anything else, and
 /// generated code never branches or takes one (§5.1).
 #[test]
@@ -111,7 +96,10 @@ fn generated_code_is_straight_line_without_derivatives() {
     let last_derivative = ["dpdx", "dpdy", "fwidth"].iter().filter_map(|d| entry.rfind(d)).max().unwrap_or(0);
     let first_call = entry.find("material_eval").unwrap_or(0);
     assert!(last_derivative < first_call, "derivatives before the material");
-    assert!(!entry.contains("if ") && !entry.contains("for ") && !entry.contains("loop"), "fs_mat does not branch");
+    // Its one branch, the section clip, comes after every derivative.
+    assert!(entry.find("if ").is_some_and(|b| b > last_derivative), "the clip follows the derivatives");
+    assert_eq!(entry.matches("if ").count(), 1, "fs_mat branches only for the section");
+    assert!(!entry.contains("for ") && !entry.contains("loop"), "fs_mat does not loop");
     for (name, text) in FIXTURES {
         let eval = super::material_eval(&fixture(text).ir).unwrap_or_default();
         for banned in ["if ", "if(", "for ", "loop", "while", "dpdx", "dpdy", "fwidth", "discard", "return"] {
@@ -307,6 +295,59 @@ impl Fuzz {
             nodes.push(json!({"id": n, "kind": op, "inputs": inputs}));
             floats.push(n);
         }
+        // Vector maths whose components reach a height: slopes carried per component.
+        if !floats.is_empty() {
+            let a = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let b = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let v = fresh();
+            nodes.push(json!({"id": v, "kind": "combine3", "inputs": {"x": {"from": a}, "y": {"from": b}, "z": 0.3}}));
+            let mut last = v;
+            for _ in 0..1 + self.below(3) {
+                let n = fresh();
+                let op = self.pick(&[
+                    "add",
+                    "subtract",
+                    "multiply",
+                    "divide",
+                    "mix",
+                    "min",
+                    "max",
+                    "abs",
+                    "sin",
+                    "power",
+                    "clamp",
+                    "smoothstep",
+                    "remap",
+                    "normalize",
+                    "sqrt",
+                ]);
+                let other = if self.below(2) == 0 {
+                    let p = fresh();
+                    nodes.push(json!({"id": p, "kind": "geometry.position", "params": {"space": space(self)}}));
+                    json!({"from": p})
+                } else {
+                    json!([0.7, 1.3, 0.4])
+                };
+                let inputs = match op {
+                    "mix" => json!({"a": {"from": last}, "b": other, "t": {"from": a}}),
+                    "abs" | "sin" | "normalize" | "sqrt" => json!({"in": {"from": last}}),
+                    "power" => json!({"a": {"from": last}, "b": 1.7}),
+                    "clamp" => json!({"in": {"from": last}, "low": 0.2, "high": other}),
+                    "smoothstep" => json!({"edge0": 0.1, "edge1": other, "in": {"from": last}}),
+                    "remap" => json!({"in": {"from": last}, "in_max": other, "out_min": 0.2, "out_max": 0.8}),
+                    _ => json!({"a": {"from": last}, "b": other}),
+                };
+                nodes.push(json!({"id": n, "kind": op, "inputs": inputs}));
+                last = n;
+            }
+            let s = fresh();
+            nodes.push(json!({"id": s, "kind": "separate3", "inputs": {"in": {"from": last}}}));
+            let h = fresh();
+            nodes.push(json!({"id": h, "kind": "add", "inputs": {"a": {"from": format!("{s}.x")}, "b": {"from": format!("{s}.y")}}}));
+            let nh = fresh();
+            nodes.push(json!({"id": nh, "kind": "normal.from_height", "inputs": {"height": {"from": h}, "relief_mm": 0.01}}));
+            normals.push(nh);
+        }
         if let Some(a) = floats.first().cloned() {
             let n = fresh();
             nodes.push(json!({"id": n, "kind": "combine3", "inputs": {"x": {"from": a}, "y": 0.2, "z": {"from": a}}}));
@@ -461,6 +502,12 @@ fn add_square(scene: &mut GpuScene, l: &Lowered, i: usize, n: usize) {
     for p in SQUARE {
         let p = [if p[0] < 0.0 { x0 } else { x1 }, p[1], p[2]];
         scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+    }
+    // The face the graph shades, as the scene draws it.
+    let face = scene.color([200, 200, 200, 255]);
+    for p in SQUARE {
+        let p = [if p[0] < 0.0 { x0 } else { x1 }, p[1], p[2]];
+        scene.tri(p, [0.0, 0.0, 1.0], face);
     }
 }
 
@@ -660,15 +707,19 @@ fn shapes_compile_within_the_frame_budget() {
         }
         let m = edited.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
         let n = shapes.len() as f32;
+        let face = edited.color([200, 200, 200, 255]);
         for p in SQUARE {
             let x = -12.0 + 24.0 * (i as f32 + if p[0] < 0.0 { 0.0 } else { 1.0 }) / n;
             edited.graphs.vertex(m, [x, p[1], p[2]], [0.0, 0.0, 1.0], [x, p[1], p[2]]);
+            edited.tri([x, p[1], p[2]], [0.0, 0.0, 1.0], face);
         }
     }
     render_frame(&mut r, &device, &queue, &realistic(edited, 4, 1.0), true);
     let s = r.material_stats();
     assert_eq!((s.compiled, s.pending, s.fallback_draws), (0, 0, 0), "a value edit compiles nothing: {s:?}");
-    assert!(r.uploads().geometry >= super::PAGE_BYTES, "the edited page is rewritten");
+    let uploads = r.uploads();
+    assert!(uploads.material_pages >= super::PAGE_BYTES, "the edited page is rewritten: {uploads:?}");
+    assert_eq!(uploads.material_vertices, 0, "and no vertex is uploaded again: {uploads:?}");
 }
 
 /// The cache keeps at most its capacity, never drops a shape drawn this frame (a shape past it
@@ -1137,4 +1188,126 @@ fn vector_slopes_match_the_reference() {
             .any(|p| reference::evaluate(&ir, &words, &[], p).is_ok_and(|e| (e.surface.normal[2] - p.world_normal[2]).abs() > 1e-4));
         assert!(tilted, "case {i}: the height tilts the normal");
     }
+}
+
+/// C2's rule for the blended class: a surface that drives transmission or opacity, or holds a
+/// transmission above 0 or an opacity below 1, in any layer.
+#[test]
+fn see_through_materials_are_the_ones_with_coverage_below_one() {
+    let surface = |inputs: Value| {
+        lowered(&graph_of(json!({"name": "s", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}},
+            {"id": "n", "kind": "pattern.noise", "inputs": {"texcoord": {"from": "uv"}}},
+            {"id": "s", "kind": "standard_surface", "inputs": inputs}], "output": "s"})))
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let words = |l: &Lowered| uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    for (inputs, want) in [
+        (json!({}), false),
+        (json!({"geometry_opacity": 1}), false),
+        (json!({"geometry_opacity": 0.4}), true),
+        (json!({"transmission_weight": 0.3}), true),
+        (json!({"transmission_weight": 0}), false),
+        (json!({"geometry_opacity": {"from": "n"}}), true),
+    ] {
+        let l = surface(inputs.clone());
+        assert_eq!(super::see_through(&l.ir, &words(&l)), want, "{inputs}");
+    }
+}
+
+/// A see-through graph surface is drawn blended over what lies behind it (premultiplied, as C2's
+/// shading returns it): a transmissive blue square over a red face shows both. (Opacity joins the
+/// same coverage when C2's shading reads `geometry_opacity`.)
+#[test]
+fn a_see_through_graph_blends_over_what_lies_behind() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let glass = |transmission: f64| {
+        lowered(&graph_of(json!({"name": "glass", "nodes": [
+            {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.05, 0.1, 0.9], "transmission_weight": transmission, "specular_roughness": 0.6}}],
+            "output": "s"})))
+        .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let mut r = renderer(&device, &queue);
+    let frame_with = |r: &mut Renderer, l: Option<&Lowered>, key: u64| {
+        let mut scene = GpuScene::default();
+        let red = scene.color([230, 20, 20, 255]);
+        for p in SQUARE {
+            scene.tri([p[0], p[1], -1.0], [0.0, 0.0, 1.0], red);
+        }
+        if let Some(l) = l {
+            let words = uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+            let m = scene.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
+            for p in SQUARE {
+                scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+            }
+        }
+        let pixels = inner_pixels(&render_frame(r, &device, &queue, &realistic(scene, key, 1.0), true));
+        let n = pixels.len().max(1) as f64;
+        [0, 1, 2].map(|k| pixels.iter().map(|p| f64::from(p[k])).sum::<f64>() / n)
+    };
+    let behind = frame_with(&mut r, None, 1);
+    let half = glass(0.6);
+    assert!(super::see_through(&half.ir, &uniform_words(&half.ir, &BTreeMap::new()).unwrap_or_default()));
+    let blended = frame_with(&mut r, Some(&half), 2);
+    let stats = r.material_stats();
+    assert_eq!(stats.fallback_draws, 0, "drawn by its own far and near pipelines: {stats:?}");
+    assert!(blended[2] > behind[2] + 15.0, "the blue surface shows: {blended:?} over {behind:?}");
+    assert!(blended[0] > 0.3 * behind[0], "and the red face shows through it: {blended:?} over {behind:?}");
+    let opaque = frame_with(&mut r, Some(&glass(0.0)), 3);
+    assert!(opaque[0] < 0.2 * behind[0], "without transmission it hides the face: {opaque:?}");
+    assert!(blended[0] > opaque[0] + 20.0, "transmission lets the face through: {blended:?} against {opaque:?}");
+}
+
+/// A texture the scene gives only as encoded bytes is decoded on the renderer's worker and made
+/// resident: until then its `image` node draws its default colour; afterwards the image itself
+/// (red on the left half of the square, blue on the right).
+#[test]
+fn scene_textures_are_decoded_and_drawn() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let key = "ab".repeat(32);
+    let graph = lowered(&graph_of(json!({"name": "label", "nodes": [
+        {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}, "inputs": {"origin": [-12, -12, 0], "u": [24, 0, 0], "v": [0, 24, 0]}},
+        {"id": "img", "kind": "image", "params": {"space": "srgb", "wrap": "clamp"}, "inputs": {"texcoord": {"from": "uv"}, "file": {"texture": key}, "default": [0.0, 0.8, 0.0]}},
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": 0.9}}], "output": "s"})))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_fn(2, 1, |x, _| if x == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) });
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&graph.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    let set = super::texture_keys(&graph.ir, &BTreeMap::new());
+    assert!(set[0].is_some(), "the constant texture is bound");
+    let scene = || {
+        let mut scene = GpuScene::default();
+        let m = scene.graphs.textured_material(&graph.ir, &words, &graph.base, &set).unwrap_or_else(|e| panic!("{e}"));
+        for k in set.iter().flatten() {
+            scene.graphs.texture_source(k.clone(), Arc::new(png.clone()));
+        }
+        let face = scene.color([200, 200, 200, 255]);
+        for p in SQUARE {
+            scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+            scene.tri(p, [0.0, 0.0, 1.0], face);
+        }
+        scene
+    };
+    let mut r = renderer(&device, &queue);
+    let side = |bytes: &[u8], x: usize| {
+        let at = (32 * SIZE as usize + x) * 4;
+        bytes.get(at..at + 3).map(|p| [p[0], p[1], p[2]]).unwrap_or_default()
+    };
+    let first = render_frame(&mut r, &device, &queue, &realistic(scene(), 1, 1.0), true);
+    let mut key_n = 2;
+    let mut last = first.clone();
+    for _ in 0..200 {
+        if !r.wants_redraw() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        last = render_frame(&mut r, &device, &queue, &realistic(scene(), key_n, 1.0), true);
+        key_n += 1;
+    }
+    assert!(!r.wants_redraw(), "the texture finished decoding");
+    let (left, right) = (side(&last, 14), side(&last, 50));
+    assert!(left[0] > left[2] + 40 && right[2] > right[0] + 40, "red left, blue right: {left:?} {right:?}");
+    let before = side(&first, 14);
+    assert!(before[1] > before[0] || first == last, "before decoding the default colour (green) shows: {before:?}");
 }

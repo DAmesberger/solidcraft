@@ -185,13 +185,70 @@ fn sc_aniso_base_brdf(base: vec3<f32>, parameters: vec3<f32>, alpha: vec2<f32>, 
         + (vec3<f32>(1.0) - sc_base_fresnel(f0, nv, parameters.x, parameters.z)) * (vec3<f32>(1.0) - sc_base_fresnel(f0, nl, parameters.x, parameters.z)) * diffuse;
 }
 
+// The base's specular tint, OpenPBR's `specular_weight` and `specular_color` packed as
+// `specular` = (weight, colour): the normal-incidence reflectance, the dielectric's scaled by the
+// colour and the metal's base colour, both scaled by the weight. (1, 1, 1, 1) is `sc_base_f0`.
+fn sc_specular_f0(base: vec3<f32>, metallic: f32, ior: f32, specular: vec4<f32>) -> vec3<f32> {
+    let ratio = (ior - 1.0) / (ior + 1.0);
+    let c = clamp(specular.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
+    return mix(vec3<f32>(ratio * ratio) * c, base, metallic) * clamp(specular.x, 0.0, 1.0);
+}
+
+// The grazing reflectance that goes with `sc_specular_f0`: the dielectric's 1 (0 for an
+// index-matched base, the IOR-1 rule) and the metal's edge tint, the specular colour, both
+// scaled by the weight. (1, 1, 1, 1) is `sc_base_fresnel`'s grazing limit.
+fn sc_specular_f90(metallic: f32, ior: f32, specular: vec4<f32>) -> vec3<f32> {
+    let c = clamp(specular.yzw, vec3<f32>(0.0), vec3<f32>(1.0));
+    return mix(vec3<f32>(select(1.0, 0.0, ior == 1.0)), c, metallic) * clamp(specular.x, 0.0, 1.0);
+}
+
+// Schlick's Fresnel from `f0` toward a grazing reflectance `f90` at cosine `c`.
+fn sc_tinted_fresnel(f0: vec3<f32>, f90: vec3<f32>, c: f32) -> vec3<f32> {
+    let x = 1.0 - clamp(c, 0.0, 1.0);
+    return f0 + (f90 - f0) * (x * x * x * x * x);
+}
+
+// The base BRDF with a specular tint (`sc_specular_f0`, `sc_specular_f90`): the same GGX lobe,
+// anisotropic along the unit tangent `t` for `alpha` = (αt, αb), or isotropic at α = `alpha.x`
+// when `t` is zero, and the diffuse layer weighted by what the tinted interface passes at entry
+// and exit. A weaker or coloured specular leaves more to the diffuse layer.
+fn sc_tinted_base_brdf(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, alpha: vec2<f32>, n: vec3<f32>, t: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
+    let nv = clamp(dot(n, v), -1.0, 1.0);
+    let nl = clamp(dot(n, l), -1.0, 1.0);
+    if (nv <= 0.0 || nl <= 0.0) { return vec3<f32>(0.0); }
+    let h = sc_unit(v + l);
+    var lobe: f32;
+    if (dot(t, t) > 0.0) {
+        let b = cross(n, t);
+        let d = sc_aniso_ggx_d(vec3<f32>(dot(t, h), dot(b, h), clamp(dot(n, h), 0.0, 1.0)), alpha);
+        lobe = d * 0.25 * sc_aniso_smith_g1(vec3<f32>(dot(t, v), dot(b, v), nv), alpha) * sc_aniso_smith_g1(vec3<f32>(dot(t, l), dot(b, l), nl), alpha);
+    } else {
+        let a2 = alpha.x * alpha.x;
+        lobe = sc_ggx_d(clamp(dot(n, h), 0.0, 1.0), a2) * 0.25 * sc_smith_g1(nv, a2) * sc_smith_g1(nl, a2);
+    }
+    let f0 = sc_specular_f0(base, parameters.x, parameters.z, specular);
+    let f90 = sc_specular_f90(parameters.x, parameters.z, specular);
+    let diffuse = base * ((1.0 - parameters.x) / sc_pi);
+    return sc_tinted_fresnel(f0, f90, dot(v, h)) * lobe
+        + (vec3<f32>(1.0) - sc_tinted_fresnel(f0, f90, nv)) * (vec3<f32>(1.0) - sc_tinted_fresnel(f0, f90, nl)) * diffuse;
+}
+
 // The viewport's whole surface BRDF: the base (anisotropic along `t` when `anisotropy` > 0 and `t`
-// is nonzero, otherwise exactly `sc_base_brdf`) about the base normal `n`, under a tinted coat
-// about the coat normal `coat_n` (`sc_coat_layer`). With anisotropy 0, a white coat and
+// is nonzero; tinted by `specular` = (weight, colour) off its default (1, 1, 1, 1); otherwise
+// exactly `sc_base_brdf`) about the base normal `n`, under a tinted coat about the coat normal
+// `coat_n` (`sc_coat_layer`). With anisotropy 0, the default specular, a white coat and
 // `coat_n` = `n` it is `sc_coated_brdf`.
-fn sc_layered_brdf(base: vec3<f32>, parameters: vec3<f32>, anisotropy: f32, t: vec3<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
+fn sc_layered_brdf(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, anisotropy: f32, t: vec3<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
     var under: vec3<f32>;
-    if (anisotropy > 0.0 && dot(t, t) > 0.0) {
+    if (any(specular != vec4<f32>(1.0))) {
+        var alpha = vec2<f32>(parameters.y * parameters.y);
+        var axis = vec3<f32>(0.0);
+        if (anisotropy > 0.0 && dot(t, t) > 0.0) {
+            alpha = sc_aniso_alpha(parameters.y, anisotropy);
+            axis = t;
+        }
+        under = sc_tinted_base_brdf(base, parameters, specular, alpha, n, axis, v, l);
+    } else if (anisotropy > 0.0 && dot(t, t) > 0.0) {
         under = sc_aniso_base_brdf(base, parameters, sc_aniso_alpha(parameters.y, anisotropy), n, t, v, l);
     } else {
         under = sc_base_brdf(base, parameters, n, v, l);
@@ -229,3 +286,14 @@ fn sc_see_through(base: vec3<f32>, weight: f32, color: vec3<f32>) -> vec4<f32> {
     let mean = (c.x + c.y + c.z) / 3.0;
     return vec4<f32>(base * (1.0 - w) + w * max(c - vec3<f32>(mean), vec3<f32>(0.0)), 1.0 - w * mean);
 }
+
+// A cut-out's coverage (`geometry_opacity`, not glass) on a shaded colour `c` that is already
+// premultiplied by its own coverage (1 when opaque, `sc_see_through`'s for glass): colour and
+// alpha both scaled by `opacity` in [0, 1], for the same premultiplied "over" blend. Opacity 1
+// (or NaN) is `c` unchanged.
+fn sc_cover(c: vec4<f32>, opacity: f32) -> vec4<f32> {
+    if (!(opacity < 1.0)) { return c; }
+    let o = max(opacity, 0.0);
+    return vec4<f32>(c.rgb * o, c.a * o);
+}
+

@@ -1011,8 +1011,8 @@ impl Gen<'_> {
                     if op == Operand::Absent { d } else { format!("sc_clean3({}, {}, {}, {d})", self.arg(&op, Kind::V3)?, lit(lo), lit(hi)) }
                 }
                 PortType::Normal => {
-                    // The geometric normal is already unit: passed through, so a constant graph
-                    // shades bit for bit like its `pbr` look.
+                    // The geometric normal is unit already: renormalising would move it an ULP, and
+                    // a constant graph would no longer equal its `pbr` look bit for bit.
                     if matches!(op, Operand::Absent | Operand::Geometry(GeometryInput::WorldNormal)) {
                         "c.n".to_owned()
                     } else {
