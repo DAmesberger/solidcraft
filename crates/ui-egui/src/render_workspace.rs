@@ -2008,6 +2008,15 @@ fn gpu_scene_with_budget(scene: &ProductScene, budget: u64) -> Result<(u64, GpuS
     Ok((hash.finish(), gpu))
 }
 
+/// The Render preview's product scene, its GPU scene and its product lights, built as
+/// [`paint_product`] builds them (without the geometry budget): for the golden frames only.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn preview_scene_for_evidence(app: &SolveApp) -> Result<(ProductScene, GpuScene, Vec<[f32; 16]>), String> {
+    let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|error| error.to_string())?;
+    let (_, gpu) = gpu_scene_with_budget(&scene, u64::MAX)?;
+    Ok((scene, gpu, light::preview(app)?))
+}
+
 fn hash_surface(surface: Option<solidcraft_engine::render::surface::OpaqueSurface>, hash: &mut impl Hasher) {
     surface.is_some().hash(hash);
     if let Some(s) = surface {

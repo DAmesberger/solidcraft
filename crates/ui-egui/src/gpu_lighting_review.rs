@@ -4,7 +4,7 @@
 //! every B-rep face's pixels. Explicit only:
 //!
 //! ```sh
-//! LIGHTING_REVIEW_OUT=<dir> LIGHTING_REVIEW_TAG=after \
+//! LIGHTING_REVIEW_OUT=<dir> LIGHTING_REVIEW_TAG=after [LIGHTING_REVIEW_STUDIO=soft|contrast] [LIGHTING_REVIEW_INTENSITY=0.75] \
 //!     cargo test -p solidcraft-ui-egui --release lighting_review -- --ignored --nocapture
 //! ```
 //!
@@ -413,7 +413,16 @@ fn lighting_review() {
     };
     eprintln!("lighting review on {:?} ({})", adapter.get_info().backend, adapter.get_info().name);
     let started = std::time::Instant::now();
-    let studio = Arc::new(StudioEnvironment::bake(StudioPreset::Product));
+    // `LIGHTING_REVIEW_STUDIO=soft|contrast` draws the set in another preset (the brightness
+    // comparison); the default studio otherwise.
+    let preset = match std::env::var("LIGHTING_REVIEW_STUDIO").as_deref() {
+        Ok("soft") => StudioPreset::Soft,
+        Ok("contrast") => StudioPreset::Contrast,
+        _ => StudioPreset::Product,
+    };
+    let studio = Arc::new(StudioEnvironment::bake(preset));
+    // `LIGHTING_REVIEW_INTENSITY=<scale>`: the studio's radiance scaled (a moodier variant).
+    let intensity = std::env::var("LIGHTING_REVIEW_INTENSITY").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
     eprintln!("studio baked in {:?}", started.elapsed());
     let mut lines = String::new();
     // Each frame's part pixels (straight RGB where the mask names a face), for the pairs.
@@ -435,7 +444,7 @@ fn lighting_review() {
                 camera.fit(&scene.bounds);
                 camera.distance *= 0.82;
                 let radius = scene.bounds.diagonal().max(10.0) + scene.bounds.center().dist(camera.target) + camera.distance;
-                let look = placed(ProductLook::default(), &scene);
+                let look = placed(ProductLook { studio: preset, intensity, ..ProductLook::default() }, &scene);
                 let beauty = draw(
                     &device,
                     &queue,

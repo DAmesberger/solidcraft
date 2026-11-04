@@ -65,6 +65,8 @@ fn viewport_frame_costs() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
     for view in ["Showcase: isometric front-left", "Showcase: low back three-quarter"] {
         app.run("view.apply", json!({"view": view})).unwrap_or_else(|e| panic!("{e}"));
+        // The window moves to the camera `view.apply` asks for on its next frame; at once here.
+        app.follow_view_request(false);
         let base_cam = app.cam;
         for ssaa in [1.0f32, 2.0] {
             for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {

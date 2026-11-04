@@ -26,6 +26,10 @@ mod appearance_tests;
 mod perf_tests;
 
 #[cfg(test)]
+#[path = "viewport_golden_tests.rs"]
+mod golden_tests;
+
+#[cfg(test)]
 #[path = "viewport_overlays_tests.rs"]
 mod overlays_tests;
 
