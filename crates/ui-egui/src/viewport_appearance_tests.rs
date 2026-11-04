@@ -749,3 +749,41 @@ fn screenshot_graph_looks_in_the_realistic_view() {
         }
     }
 }
+
+/// A saved design (`$C1_DESIGN`, e.g. the realistic showcase) in the modelling view, in both
+/// looks, drawn as the window draws it, offscreen: PNGs into `$C1_APP_SHOTS`. Evidence for
+/// review, not a check (`--ignored`).
+#[test]
+#[ignore]
+fn screenshot_a_design_in_both_looks() {
+    let (Ok(dir), Ok(design)) = (std::env::var("C1_APP_SHOTS"), std::env::var("C1_DESIGN")) else { return };
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("doc.open", json!({"path": design})).unwrap();
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    const SIZE: u32 = 1024;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    let bounds = super::shown_body_bounds(&app);
+    let center = (bounds.min + bounds.max) * 0.5;
+    let size = bounds.diagonal();
+    for (view, factor) in [(solidcraft_engine::render::StandardView::Iso, 1.3), (solidcraft_engine::render::StandardView::Front, 1.1)] {
+        let (yaw, pitch) = view.angles();
+        app.cam = crate::Camera { target: center, yaw, pitch: pitch.max(0.35), roll: 0.0, distance: size * factor, fov: 0.0, ..Default::default() };
+        for (name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
+            app.ui.view_look = look;
+            let proj = super::projection(&app, rect);
+            let e = proj.cam.eye().to_f32();
+            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            let scene = build_scene(&app).merged();
+            eprintln!("{name}: {} graph draws", scene.graphs.draws().len());
+            let Some(bytes) =
+                crate::gpu::render_realistic_offscreen(scene, proj.vp.to_f32(), proj.cam.back().to_f32(), [e[0], e[1], e[2], 0.0], SIZE, product)
+            else {
+                return;
+            };
+            if let Some(img) = image::RgbaImage::from_raw(SIZE, SIZE, bytes) {
+                let _ = img.save(format!("{dir}/showcase-{name}-{view:?}.png").to_lowercase());
+            }
+        }
+    }
+}
