@@ -1295,15 +1295,13 @@ fn scene_textures_are_decoded_and_drawn() {
         bytes.get(at..at + 3).map(|p| [p[0], p[1], p[2]]).unwrap_or_default()
     };
     let first = render_frame(&mut r, &device, &queue, &realistic(scene(), 1, 1.0), true);
-    let mut key_n = 2;
     let mut last = first.clone();
-    for _ in 0..200 {
+    for key_n in (2..).take(200) {
         if !r.wants_redraw() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
         last = render_frame(&mut r, &device, &queue, &realistic(scene(), key_n, 1.0), true);
-        key_n += 1;
     }
     assert!(!r.wants_redraw(), "the texture finished decoding");
     let (left, right) = (side(&last, 14), side(&last, 50));
