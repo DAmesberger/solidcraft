@@ -176,3 +176,64 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
         assert!(out.starts_with("#version 300 es") && out.contains("samplerCube"), "{entry} samples the studio's cube");
     }
 }
+
+/// Material draws leave their own layout bound at group 3. An instanced highlight drawn after them
+/// (a selected placement) reads the studio's there, so it must be given it again: otherwise the
+/// draw fails wgpu's validation and takes the frame down.
+#[test]
+fn an_instanced_highlight_draws_after_material_surfaces() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    use solidcraft_render::material_graph::{MaterialGraph, base_sample, lower, uniform_words, validate};
+    let graph: MaterialGraph = serde_json::from_value(serde_json::json!({
+        "name": "plain", "nodes": [{"id": "surface", "kind": "standard_surface",
+            "inputs": {"base_color": [0.2, 0.4, 0.2], "specular_roughness": 0.4}}], "output": "surface"}))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let valid = validate(&graph).unwrap_or_else(|e| panic!("{e}"));
+    let ir = Arc::new(lower(&valid).unwrap_or_else(|e| panic!("{e}")));
+    let base = base_sample(&valid).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&ir, &Default::default()).unwrap_or_else(|e| panic!("{e}"));
+    let n = [0.0, 0.0, 1.0];
+    let mut model = GpuScene::default();
+    let grey = model.color([150, 150, 156, 255]);
+    square(&mut model, [-12.0, -12.0, 12.0, 12.0], 0.0, n, grey);
+    let material = model.graphs.material(&ir, &words, &base).unwrap_or_else(|e| panic!("{e}"));
+    for [x, y] in [[-12.0, -12.0], [12.0, -12.0], [12.0, 12.0], [-12.0, -12.0], [12.0, 12.0], [-12.0, 12.0]] {
+        let p = [x, y, 0.0];
+        model.graphs.vertex(material, p, n, p);
+    }
+    // The selected placement: a square on the face's left half.
+    let mut tris = SharedTris { bounds: [[-8.0, -8.0, 0.0], [-2.0, 8.0, 0.0]], ..Default::default() };
+    for [x, y] in [[-8.0f32, -8.0f32], [-2.0, -8.0], [-2.0, 8.0], [-8.0, 8.0]] {
+        for v in [x, y, 0.0, 0.0, 0.0, 1.0] {
+            tris.vertices.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    tris.indices = vec![0, 1, 2, 0, 2, 3];
+    let mut selected =
+        InstancedMesh { key: 1, tris: Arc::new(tris), instances: Vec::new(), look: InstanceLook::Opaque, levels: Vec::new(), closed: true };
+    selected.place([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], PaletteIndex(0));
+    let highlight = GpuScene { selected_instanced: vec![selected], ..Default::default() };
+    let frame = Frame {
+        product_look: Some(ProductLook::default()),
+        hl_key: 1,
+        hl_slot: Arc::new(Mutex::new(Some(highlight))),
+        selection_tint: [0.9, 0.1, 0.1],
+        ..test_frame(model, 1.0)
+    };
+    let mut r = renderer(&device);
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+    let mut picture = render_frame(&mut r, &device, &queue, &frame, true);
+    for _ in 0..64 {
+        if r.material_stats().pending == 0 {
+            break;
+        }
+        picture = render_frame(&mut r, &device, &queue, &frame, true);
+    }
+    assert_eq!(r.material_stats().pending, 0, "the material compiled");
+    assert!(r.material_stats().fallback_draws == 0, "the material itself was drawn");
+    // Inside the placement (left of centre) it reads redder than the face beside it.
+    let red = |c: &[u8; 3]| f64::from(c[0]) - f64::from(c[1]);
+    let (inside, beside) = (at(&picture, 16, 32), at(&picture, 48, 32));
+    assert!(red(&inside) > red(&beside), "the highlight shows: {inside:?} against {beside:?}");
+}
+
