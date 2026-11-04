@@ -206,8 +206,9 @@ def graphs(label_sha):
         ],
         "output": "surface",
     }
-    # The label's planar frame: the image's top row lies along the plate's far edge, so the print
-    # reads upright from the front. One repeat spans the label (60 x 30 mm, clamped outside).
+    # The label's planar frame: v = 1 samples the image's top row, so v runs from the near edge
+    # (v = 0) to the far edge (v = 1) and the print reads upright from the front. One repeat spans
+    # the label (60 x 30 mm, clamped outside).
     lx, ly = PLATE[0] - 20, PLATE[1] + 15
     carbon = {
         "name": "Carbon-fibre twill with label",
@@ -224,7 +225,7 @@ def graphs(label_sha):
                 "geometry_normal": {"from": "bump"},
                 "coat_weight": 1, "coat_roughness": 0.05, "coat_ior": 1.5}},
             {"id": "frame", "kind": "texcoord.planar", "params": {"space": "object"},
-             "inputs": {"origin": [lx, ly, 0], "u": [60, 0, 0], "v": [0, -30, 0]}},
+             "inputs": {"origin": [lx, ly - 30, 0], "u": [60, 0, 0], "v": [0, 30, 0]}},
             {"id": "print", "kind": "image", "params": {"space": "srgb", "wrap": "clamp", "channel": "a"},
              "inputs": {"texcoord": {"from": "frame"}, "file": {"interface": "label"}}},
             {"id": "paper", "kind": "standard_surface", "inputs": {
