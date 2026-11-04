@@ -14,6 +14,7 @@
 - [Components and joints](guide/assemblies.md)
 - [Sheet metal](guide/sheet-metal.md)
 - [Plastic parts](guide/plastic.md)
+- [Materials and the Realistic view](guide/materials.md)
 - [Import and export](guide/files.md)
 - [Keyboard shortcuts](guide/shortcuts.md)
 - [Updates and privacy](guide/updates.md)

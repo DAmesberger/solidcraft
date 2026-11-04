@@ -1,0 +1,26 @@
+{
+  "commands": [
+    {"command":"file.new","params":{"name":"Material graph examples"}},
+    {"command":"document.metadata.set","params":{"values":{"license":"MIT OR Apache-2.0","author":"SolidCraft contributors","project":"Built-in material graphs on simple parts","description":"Original illustrative material previews, not measured optical data"}}},
+    {"command":"solid.cylinder","params":{"body_name":"Sleeve","base":[0,0,0],"radius":4,"height":12,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-5ba09c6ffb77b266","revision":"5ba09c6ffb77b2669ed9485c06175013f40c34f142bc3b084e97fdda48c2d3f2","targets":{"bodies":["Sleeve"]}}},
+    {"command":"solid.box","params":{"body_name":"Laminate","corner":[15,-12,0],"length":24,"width":24,"height":1.6,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-b0645458a814d06a","revision":"b0645458a814d06a04915c5d6505f8d065cd8046c8288d6495ccc51180b30ac5","targets":{"bodies":["Laminate"]}}},
+    {"command":"solid.box","params":{"body_name":"Coated laminate","corner":[45,-12,0],"length":24,"width":24,"height":1.6,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-d0af7b1e53acc3a6","revision":"d0af7b1e53acc3a66d7519a86603276223d23b849a57ef9fd3aec6677eb67c61","targets":{"bodies":["Coated laminate"]}}},
+    {"command":"appearance.assign","params":{"bodies":["Coated laminate"],"graph":"coated-woven-laminate","name":"Gloss coat over woven laminate, blue","values":{"coat_color":[0.04,0.12,0.42]}}},
+    {"command":"solid.box","params":{"body_name":"Coated copper","corner":[75,-12,0],"length":24,"width":24,"height":0.2,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-2cc3ec642520c3f0","revision":"2cc3ec642520c3f0b19d1d9aa69d3056c870c5f6a7fbad63f8e2a211b6942be8","targets":{"bodies":["Coated copper"]}}},
+    {"command":"solid.box","params":{"body_name":"Painted panel","corner":[15,20,0],"length":24,"width":24,"height":3,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-9660181587a003b3","revision":"9660181587a003b30eba58a2e84cd34d204b694c0a651fdcc6c9d299cd7dcfca","targets":{"bodies":["Painted panel"]}}},
+    {"command":"appearance.assign","params":{"bodies":["Painted panel"],"graph":"orange-peel-gloss","name":"Gloss paint, orange peel, yellow","values":{"color":{"srgb8":[236,196,40]}}}},
+    {"command":"solid.box","params":{"body_name":"Printed panel","corner":[45,20,0],"length":24,"width":24,"height":3,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-a35cd0d1e1712a88","revision":"a35cd0d1e1712a88b665fdd491efe7a0020562861640c2d4593ee7ba7f5dfe9c","targets":{"bodies":["Printed panel"]}}},
+    {"command":"solid.box","params":{"body_name":"Shield can","corner":[75,20,0],"length":24,"width":16,"height":4,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-1cc55e88fd6905a7","revision":"1cc55e88fd6905a793dfebed9ca93b41c968143b110a7ff84460a03aa2e51f3e","targets":{"bodies":["Shield can"]}}},
+    {"command":"solid.box","params":{"body_name":"Moulded body","corner":[15,50,0],"length":12,"width":8,"height":3,"operation":"new"}},
+    {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-c23113d513845143","revision":"c23113d5138451439206d9f91ba452607f9280520d81ed16c23e814cb18f271e","targets":{"bodies":["Moulded body"]}}},
+    {"command":"solid.box","params":{"body_name":"Brushed housing","corner":[45,50,0],"length":24,"width":16,"height":8,"operation":"new"}},
+    {"command":"render.library.appearance.apply","params":{"id":"SELENE-AP-007","variant":"graph","bodies":["Brushed housing"]}}
+  ]
+}

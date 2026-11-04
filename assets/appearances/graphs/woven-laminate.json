@@ -1,0 +1,23 @@
+{
+ "name": "Woven laminate",
+ "interface": [{"name": "color", "type": "color3", "default": [0.42, 0.36, 0.17]}, {"name": "strength", "type": "float", "default": 1}],
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 0.173]}},
+  {"id": "weave", "kind": "pattern.weave", "params": {"kind": "plain"}, "inputs": {"texcoord": {"from": "uv"}, "pitch_mm": [0.577, 0.819], "fibres": 7, "fibre_contrast": 0.3}},
+  {"id": "n", "kind": "geometry.normal", "params": {"space": "object"}},
+  {"id": "n_parts", "kind": "separate3", "inputs": {"in": {"from": "n"}}},
+  {"id": "n_z", "kind": "abs", "inputs": {"in": {"from": "n_parts.z"}}},
+  {"id": "face", "kind": "smoothstep", "inputs": {"edge0": 0.65, "edge1": 0.75, "in": {"from": "n_z"}}},
+  {"id": "edge_k", "kind": "mix", "inputs": {"a": 0.25, "b": 1, "t": {"from": "face"}}},
+  {"id": "k", "kind": "multiply", "inputs": {"a": {"from": "edge_k"}, "b": {"interface": "strength"}}},
+  {"id": "swing", "kind": "multiply", "inputs": {"a": {"from": "k"}, "b": 0.2}},
+  {"id": "tint_lo", "kind": "subtract", "inputs": {"a": 1, "b": {"from": "swing"}}},
+  {"id": "tint_hi", "kind": "add", "inputs": {"a": 1, "b": {"from": "swing"}}},
+  {"id": "tint", "kind": "remap", "inputs": {"in": {"from": "weave"}, "out_min": {"from": "tint_lo", "fallback": 1}, "out_max": {"from": "tint_hi", "fallback": 1}}},
+  {"id": "base", "kind": "multiply", "inputs": {"a": {"interface": "color"}, "b": {"from": "tint", "fallback": 1}}},
+  {"id": "relief_h", "kind": "multiply", "inputs": {"a": {"from": "weave"}, "b": {"from": "k"}}},
+  {"id": "relief", "kind": "normal.from_height", "inputs": {"height": {"from": "relief_h"}, "relief_mm": 0.006}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "base", "fallback": [0.42, 0.36, 0.17]}, "specular_roughness": 0.45, "specular_ior": 1.5, "geometry_normal": {"from": "relief"}}}
+ ],
+ "output": "surface"
+}

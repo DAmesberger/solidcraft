@@ -11,7 +11,8 @@ use solidcraft_io::catalog::{Catalog, FORMAT, Provenance, V1_FORMAT, V3_FORMAT};
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryInspectParams {
-    /// The library file (`solidcraft-library/1` or `/2` JSON, at most 4 MiB).
+    /// The library file (`solidcraft-library/1`–`/3` JSON, at most 4 MiB, or a `/3` container
+    /// with textures), or `builtin:materials` for the built-in material graphs.
     pub path: String,
 }
 
@@ -20,7 +21,8 @@ pub struct LibraryInspectParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryExportParams {
-    /// Where to write it: a `.json` file.
+    /// Where to write it: a `.json` file, or a `.sclib` file when the library has textures (it
+    /// is then a container, a ZIP).
     pub path: String,
     /// The library's id, which qualifies each entry's id: lowercase letters, digits, `.`, `_`
     /// and `-`, starting with a letter, at most 64.
@@ -57,7 +59,7 @@ fn default_name() -> String {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryApplyParams {
-    /// The library file.
+    /// The library file, or `builtin:materials` for the built-in material graphs.
     pub path: String,
     /// The entry's qualified id, as `library.inspect` lists it (at most 129 bytes).
     pub entry: String,

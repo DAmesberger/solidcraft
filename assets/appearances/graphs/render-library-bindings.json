@@ -1,0 +1,35 @@
+{
+ "format": "solidcraft-render-library-graph-bindings/1",
+ "about": "How render.library.appearance.apply's graph variant binds a starter surface (SURF-*) or a Selene appearance (SELENE-AP-*) that has a direction: its specular anisotropy and the rotation of its tangent from the projection's u axis. Every amount is an authored estimate from the recipe's pattern and the direction its roughness map varies least in, not a measured BRDF. Entries not listed are isotropic (0).",
+ "basis": "authored_estimate",
+ "surfaces": [
+  {"id": "SURF-001", "anisotropy": 0.6, "rotation_rad": 0, "note": "brushed: lines along u"},
+  {"id": "SURF-002", "anisotropy": 0, "rotation_rad": 0, "note": "cross-brushed: two crossing directions, which one tangent cannot express; drawn isotropic"},
+  {"id": "SURF-005", "anisotropy": 0.3, "rotation_rad": 1.5707963, "note": "face-milled arcs, mostly along v"},
+  {"id": "SURF-006", "anisotropy": 0.5, "rotation_rad": 0, "note": "turning marks along u; on a turned part they run around its axis only when a frame lays u along the circumference"},
+  {"id": "SURF-008", "anisotropy": 0.6, "rotation_rad": 0, "note": "brushed: lines along u"},
+  {"id": "SURF-009", "anisotropy": 0.6, "rotation_rad": 0, "note": "brushed: lines along u"},
+  {"id": "SURF-010", "anisotropy": 0.3, "rotation_rad": 1.5707963, "note": "milled arcs, mostly along v"},
+  {"id": "SURF-011", "anisotropy": 0.5, "rotation_rad": 0, "note": "satin brushed: lines along u"},
+  {"id": "SURF-018", "anisotropy": 0.4, "rotation_rad": 0, "note": "brushed under an anodic layer: lines along u, softened"},
+  {"id": "SURF-021", "anisotropy": 0.3, "rotation_rad": 1.5707963, "note": "milled arcs, mostly along v"},
+  {"id": "SURF-022", "anisotropy": 0.3, "rotation_rad": 1.5707963, "note": "milled arcs, mostly along v"},
+  {"id": "SURF-027", "anisotropy": 0.15, "rotation_rad": 1.5707963, "note": "wood grain along v"},
+  {"id": "SURF-028", "anisotropy": 0.15, "rotation_rad": 1.5707963, "note": "wood grain along v"},
+  {"id": "SURF-029", "anisotropy": 0.15, "rotation_rad": 1.5707963, "note": "wood grain along v"},
+  {"id": "SURF-030", "anisotropy": 0.15, "rotation_rad": 1.5707963, "note": "wood grain along v"},
+  {"id": "SURF-040", "anisotropy": 0.3, "rotation_rad": 0, "note": "printed layer lines along u"},
+  {"id": "SURF-041", "anisotropy": 0.3, "rotation_rad": -0.7853982, "note": "printed top-skin lines along the u-v diagonal"},
+  {"id": "SURF-042", "anisotropy": 0.3, "rotation_rad": 0, "note": "printed layer lines along u"},
+  {"id": "SURF-043", "anisotropy": 0.3, "rotation_rad": 0, "note": "printed layer lines along u"}
+ ],
+ "selene_appearances": [
+  {"id": "SELENE-AP-005", "anisotropy": 0, "rotation_rad": 0, "note": "concentric toolmarks need an axis, which a planar or triplanar tangent lacks; drawn isotropic"},
+  {"id": "SELENE-AP-007", "anisotropy": 0.6, "rotation_rad": 0, "note": "linear brushing along the projection's u"},
+  {"id": "SELENE-AP-009", "anisotropy": 0.3, "rotation_rad": 0, "note": "directional machining along the projection's u"},
+  {"id": "SELENE-AP-011", "anisotropy": 0, "rotation_rad": 0, "note": "concentric finish needs an axis; drawn isotropic"},
+  {"id": "SELENE-AP-013", "anisotropy": 0.3, "rotation_rad": 0, "note": "directional finish along the projection's u"},
+  {"id": "SELENE-AP-028", "anisotropy": 0.3, "rotation_rad": 0, "note": "extrusion lines along the projection's u"},
+  {"id": "SELENE-AP-032", "anisotropy": 0, "rotation_rad": 0, "note": "thread marks run around an axis; drawn isotropic"}
+ ]
+}
