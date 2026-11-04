@@ -1216,8 +1216,7 @@ fn see_through_materials_are_the_ones_with_coverage_below_one() {
 }
 
 /// A see-through graph surface is drawn blended over what lies behind it (premultiplied, as C2's
-/// shading returns it): a transmissive blue square over a red face shows both. (Opacity joins the
-/// same coverage when C2's shading reads `geometry_opacity`.)
+/// shading returns it): a transmissive, or half cut-out, blue square over a red face shows both.
 #[test]
 fn a_see_through_graph_blends_over_what_lies_behind() {
     let Some((_, device, queue)) = crate::open_headless().ok() else { return };
@@ -1256,6 +1255,13 @@ fn a_see_through_graph_blends_over_what_lies_behind() {
     let opaque = frame_with(&mut r, Some(&glass(0.0)), 3);
     assert!(opaque[0] < 0.2 * behind[0], "without transmission it hides the face: {opaque:?}");
     assert!(blended[0] > opaque[0] + 20.0, "transmission lets the face through: {blended:?} against {opaque:?}");
+    // A cut-out (opacity ½, C2's coverage) blends the same way.
+    let cut = lowered(&graph_of(json!({"name": "cut", "nodes": [
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.05, 0.1, 0.9], "geometry_opacity": 0.5, "specular_roughness": 0.6}}],
+        "output": "s"})))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let half = frame_with(&mut r, Some(&cut), 4);
+    assert!(half[0] > opaque[0] + 40.0 && half[2] > behind[2] + 15.0, "half the face, half the surface: {half:?}");
 }
 
 /// A texture the scene gives only as encoded bytes is decoded on the renderer's worker and made
@@ -1295,15 +1301,13 @@ fn scene_textures_are_decoded_and_drawn() {
         bytes.get(at..at + 3).map(|p| [p[0], p[1], p[2]]).unwrap_or_default()
     };
     let first = render_frame(&mut r, &device, &queue, &realistic(scene(), 1, 1.0), true);
-    let mut key_n = 2;
     let mut last = first.clone();
-    for _ in 0..200 {
+    for key_n in (2..).take(200) {
         if !r.wants_redraw() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
         last = render_frame(&mut r, &device, &queue, &realistic(scene(), key_n, 1.0), true);
-        key_n += 1;
     }
     assert!(!r.wants_redraw(), "the texture finished decoding");
     let (left, right) = (side(&last, 14), side(&last, 50));

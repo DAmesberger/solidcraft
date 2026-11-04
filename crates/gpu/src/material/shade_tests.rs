@@ -45,6 +45,7 @@ fn draw_tilted(graph: &MaterialGraph, key: u64, slope: f32, lights: Option<Vec<[
     let mut r = Renderer::new(&device, target, None);
     r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
     r.materials_mut().no_time_budget = true;
+    r.materials_mut().unblended = true;
     let frame = Frame { key, product_look: Some(ProductLook::default()), product_lights: lights, ..test_frame(scene, 1.0) };
     let bytes = render_frame(&mut r, &device, &queue, &frame, true);
     assert_eq!(r.material_stats().fallback_draws, 0, "drawn by its own pipeline");

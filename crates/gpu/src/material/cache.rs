@@ -101,6 +101,10 @@ pub(crate) struct Materials {
     pub(crate) compiles_per_frame: usize,
     #[cfg(test)]
     pub(crate) no_time_budget: bool,
+    /// Tests of the shading itself read `pbr_shade`'s output as it is: see-through draws are made
+    /// as opaque ones, without blending.
+    #[cfg(test)]
+    pub(crate) unblended: bool,
 }
 
 impl Materials {
@@ -158,6 +162,8 @@ impl Materials {
             decoding: 0,
             #[cfg(test)]
             no_time_budget: false,
+            #[cfg(test)]
+            unblended: false,
         }
     }
 
@@ -252,7 +258,7 @@ impl Materials {
         }
         // The constant-graph pipelines a draw may fall back to, made the first time one is needed.
         for draw in &scene.draws {
-            for variant in Variant::of(draw.blended) {
+            for variant in Variant::of(draw.blended && !self.blends_off()) {
                 if !self.fallback.contains_key(&(draw.object, *variant)) {
                     let pipeline = self.pipeline(device, "sc_material_base", super::fallback_source(), draw.object, *variant);
                     self.fallback.insert((draw.object, *variant), pipeline);
@@ -261,7 +267,7 @@ impl Materials {
         }
         let mut wanted: Vec<((ShapeKey, Variant), &Arc<Ir>)> = Vec::new();
         for draw in &scene.draws {
-            for variant in Variant::of(draw.blended) {
+            for variant in Variant::of(draw.blended && !self.blends_off()) {
                 let key = (draw.shape, *variant);
                 match self.shapes.get_mut(&key) {
                     Some(Pipeline::Ready { used, .. }) => *used = frame,
@@ -338,6 +344,13 @@ impl Materials {
                 Err((key, e)) => log::warn!("material texture {}: drawn as its default colour: {e}", key.sha256.get(..12).unwrap_or("")),
             }
         }
+    }
+
+    fn blends_off(&self) -> bool {
+        #[cfg(test)]
+        return self.unblended;
+        #[cfg(not(test))]
+        false
     }
 
     /// Free a cache slot if one is needed, dropping the least recently drawn shape not drawn this
@@ -525,8 +538,10 @@ impl GraphBatches {
     /// Draw every material surface: one draw per (shape, page, texture set); the opaque ones,
     /// then the see-through ones' far sides, then their near sides.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'static>, pipelines: &Materials, tally: &crate::view::Tally) {
+        let off = pipelines.blends_off();
         let order = [(false, Variant::Opaque), (true, Variant::Far), (true, Variant::Near)];
-        for (draw, variant) in order.iter().flat_map(|(blended, v)| self.draws.iter().filter(move |d| d.blended == *blended).map(move |d| (d, *v))) {
+        let draws = order.iter().flat_map(|(blended, v)| self.draws.iter().filter(move |d| (d.blended && !off) == *blended).map(move |d| (d, *v)));
+        for (draw, variant) in draws {
             let (Some((pipeline, fallback)), Some(bind)) =
                 (pipelines.for_draw(&draw.shape, draw.object, variant), self.binds.get(&(draw.page, draw.set)))
             else {
