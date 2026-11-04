@@ -444,7 +444,9 @@ fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
         let graph: MaterialGraph = serde_json::from_value(json!({"name": format!("{} {name}", input.id), "nodes": nodes, "output": "surface"}))
             .map_err(|e| bad(command, e.to_string()))?;
         let maps: Vec<&str> = channels.iter().map(|(c, _)| *c).collect();
-        let mut omitted = vec!["height_displacement", "true_anisotropic_brdf"];
+        // The graph draws the recipe's direction (the binding table's estimate), so only height
+        // displacement stays omitted: graphs never move geometry.
+        let mut omitted = vec!["height_displacement"];
         if !planar {
             omitted.push("roughness_metallic_maps_under_triplanar");
         }
@@ -464,6 +466,9 @@ fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
         let graph = crate::cmd::appearance_graph::look_graph(&format!("{} {name}", input.id), &look);
         (value, graph, Vec::new(), Vec::new(), value["baseline_projection"]["omitted_target_features"].clone(), "solidcraft-selene")
     };
+    let frame = input.frame.as_ref().map(|f| (f.origin, f.u, f.v));
+    let binding = super::graph_bindings::row(command, &input.id)?;
+    let anisotropy = super::graph_bindings::bind(command, &mut graph, binding, || super::graph_bindings::tangent_projection(frame))?;
     graph.name = graph.name.chars().take(256).collect();
     graph.source = Some(GraphSource { library: library.into(), entry: input.id.clone(), revision: 0 });
     crate::cmd::appearance_graph::add_graph(command, s, &graph_id, graph, textures)?;
@@ -471,7 +476,7 @@ fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
     let look = json!({"bodies": input.bodies, "graph": graph_id.as_str(),
         "name": format!("{} {}", input.id, name).chars().take(128).collect::<String>()});
     let assigned = crate::cmd::inspect::appearance(s, &look)?;
-    Ok(json!({"id": input.id, "variant": input.variant, "omitted": omitted, "graph": graph_id.as_str(), "maps": maps,
+    Ok(json!({"id": input.id, "variant": input.variant, "omitted": omitted, "graph": graph_id.as_str(), "maps": maps, "anisotropy": anisotropy,
         "appearance": assigned["appearance"], "assignment": assigned, "engineering_properties_unchanged": true}))
 }
 

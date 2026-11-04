@@ -17,6 +17,14 @@ pub const V1_FORMAT: &str = "solidcraft-library/1";
 pub const V3_FORMAT: &str = "solidcraft-library/3";
 /// `container.json`'s format for a library container.
 pub const CONTAINER_FORMAT: &str = "solidcraft-library/1";
+/// The extension of a library container: a v3 library with textures is a ZIP, not JSON. The
+/// reader tells the two apart by their bytes, so either name reads.
+pub const CONTAINER_EXT: &str = "sclib";
+/// The path that names the built-in material library ([`Catalog::builtin`]) wherever a library
+/// path is read (`library.inspect`, `library.apply`, `appearance.graph.update_from_library`).
+pub const BUILTIN_PATH: &str = "builtin:materials";
+/// The built-in material library's id, which its graphs' `source` records.
+pub const BUILTIN_ID: &str = "solidcraft-materials";
 /// The largest catalog JSON: a plain library, or `catalog.json` in a container.
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 1024;
@@ -440,6 +448,9 @@ impl Catalog {
         Ok(self)
     }
     pub fn read(path: &str) -> Result<Self> {
+        if path == BUILTIN_PATH {
+            return Self::builtin();
+        }
         // Check the VFS size first as well: its browser read clones the stored bytes. A
         // container (textures) may be as large as a design file; plain JSON stays within 4 MiB.
         let limit = crate::design::max_design().max(MAX_BYTES);
@@ -447,6 +458,27 @@ impl Catalog {
             return Err(invalid("material library exceeds the design file limit"));
         }
         Self::decode(&crate::vfs::read(path, limit).map_err(|e| invalid(e.to_string()))?)
+    }
+    /// The built-in material library (`assets/appearances/graphs/`): one look per material
+    /// graph, as catalog v3 without textures. Entry ids and revisions follow from the content,
+    /// as for any exported library.
+    pub fn builtin() -> Result<Self> {
+        let provenance = Provenance { license: "MIT OR Apache-2.0".into(), author: Some("SolidCraft contributors".into()), source_url: None };
+        let mut graphs = Graphs::new();
+        let mut entries = Vec::new();
+        for (id, color, text) in builtin_graphs::GRAPHS {
+            let id = appearance_graph::GraphId::new(id).map_err(|e| invalid(e.to_string()))?;
+            let graph: appearance_graph::MaterialGraph =
+                serde_json::from_str(text).map_err(|e| invalid(format!("built-in material graph `{}`: {e}", id.as_str())))?;
+            let look =
+                LibraryLook { name: graph.name.clone(), color: *color, opacity: 1.0, pbr: None, graph: Some(id.clone()), values: BTreeMap::new() };
+            entries.push(Entry::new(BUILTIN_ID, Definition::Appearance(look), provenance.clone())?);
+            graphs.insert(id, graph);
+        }
+        let out =
+            Self { format: V3_FORMAT.into(), id: BUILTIN_ID.into(), name: "SolidCraft materials".into(), entries, graphs, textures: Textures::new() };
+        out.validate()?;
+        Ok(out)
     }
     pub fn from_document(doc: &Document, id: &str, name: &str, provenance: Provenance) -> Result<Self> {
         if !identifier(id) || !text(name, 128) {
@@ -526,6 +558,9 @@ fn entry_encoded_bound(entry: &Entry) -> Result<usize> {
     let lines = bytes.iter().filter(|b| **b == b'\n').count().saturating_add(1);
     Ok(bytes.len().saturating_add(lines.saturating_mul(4)).saturating_add(2))
 }
+
+#[path = "../../../assets/appearances/graphs/library.rs"]
+mod builtin_graphs;
 
 #[cfg(test)]
 #[path = "catalog_tests.rs"]

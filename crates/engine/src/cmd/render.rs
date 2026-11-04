@@ -13,6 +13,7 @@ use crate::{Result, Session};
 mod clear_coat;
 mod effects;
 mod environment;
+mod graph_bindings;
 mod graphs;
 mod jobs;
 mod library;
@@ -111,7 +112,7 @@ CommandSpec::new("render.library.list", "Browse Render Library", library::list).
 CommandSpec::new("render.library.describe", "Inspect Render Library Resource", library::describe).icon("inspect").noundo().doc_only()
     .params("kind, id: exact authored resource. Returns original specification, runtime projection variants and explicit omissions. A concept is not an executable preset."),
 CommandSpec::new("render.library.appearance.apply", "Apply Library Opaque Appearance", library::apply_appearance).icon("appearance")
-    .params("id: SURF-* or SELENE-AP-*; variant: uniform_opaque | graph (required); bodies: 1..256 exact body names. uniform_opaque applies the original scalar baseline through ordinary appearance assignment in one undo, preserving physical properties; spatial maps and advanced target effects are explicitly excluded. graph (SURF-* needs the bundled-render-library build) adds the recipe as a material graph with its maps as design textures and assigns it, in one undo: base colour and normal maps, plus roughness and metallic maps with frame?: {origin?, u, v} (planar, mm, u and v span one tile; default triplanar at the tile size); graph_id? (default the lower-case id; a different graph under it refuses). A Selene entry becomes the one-node graph of its baseline. Reply lists omitted features (height displacement always: graphs never move geometry) and the maps bound."),
+    .params("id: SURF-* or SELENE-AP-*; variant: uniform_opaque | graph (required); bodies: 1..256 exact body names. uniform_opaque applies the original scalar baseline through ordinary appearance assignment in one undo, preserving physical properties; spatial maps and advanced target effects are explicitly excluded. graph (SURF-* needs the bundled-render-library build) adds the recipe as a material graph with its maps as design textures and assigns it, in one undo: base colour and normal maps, plus roughness and metallic maps with frame?: {origin?, u, v} (planar, mm, u and v span one tile; default triplanar at the tile size); graph_id? (default the lower-case id; a different graph under it refuses). A Selene entry becomes the one-node graph of its baseline. An entry with a direction (brushed, milled, grain, printed lines) gets the binding table's anisotropy and tangent rotation, authored estimates. Reply lists omitted features (height displacement always: graphs never move geometry), the maps bound and `anisotropy` {value, rotation_rad, basis, note?}."),
 CommandSpec::new("render.library.environment.apply", "Apply Built-in HDR Environment", library::apply_environment).icon("settings").doc_only()
     .params("id: HDR-*; name: saved setup; set?: typed CPU/GPU setup patch; rotation_rad?: authored rotation (native origin offset is explicit in the reply); intensity?:1; samples?:16 for CPU; replace_environment?:false. Hash-verifies and embeds original bytes, saves one atomic undo without external files or a render device. An HDR-owned sun cannot duplicate an analytic sun."),
 CommandSpec::new("render.library.surface.prepare", "Prepare Authored Surface Maps", library::prepare_surface).icon("appearance").noundo()

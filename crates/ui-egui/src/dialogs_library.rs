@@ -34,7 +34,7 @@ fn editor<'a>(app: &'a mut SolveApp, token: &Arc<()>) -> Option<&'a mut Ap> {
 /// Parameterless UI activation of the existing export command. JSON execution never picks files.
 pub(crate) fn start_export(app: &mut SolveApp) {
     let origin = app.session.doc.clone();
-    app.pick_save("my-library.solidcraft-library.json", &["json"], move |app, path| {
+    app.pick_save("my-library.solidcraft-library.json", &["json", solidcraft_engine::io::catalog::CONTAINER_EXT], move |app, path| {
         if let Some(path) = path
             && Arc::ptr_eq(&origin, &app.session.doc)
             && let Err(error) = app.run("library.export", json!({"path":path,"overwrite":false}))
@@ -46,7 +46,7 @@ pub(crate) fn start_export(app: &mut SolveApp) {
 
 fn save_library(app: &mut SolveApp, token: Arc<()>, overwrite: bool) {
     let origin = app.session.doc.clone();
-    app.pick_save("my-library.solidcraft-library.json", &["json"], move |app, path| {
+    app.pick_save("my-library.solidcraft-library.json", &["json", solidcraft_engine::io::catalog::CONTAINER_EXT], move |app, path| {
         let Some(path) = path else { return };
         if !Arc::ptr_eq(&origin, &app.session.doc) {
             app.set_status("The library export document changed while choosing its destination", true);
@@ -162,6 +162,13 @@ fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelI
     ui.horizontal(|ui| {
         if ui_kit::button(ui, crate::i18n::tr_label("Open library..."), ui_kit::Button::Normal).clicked() {
             open_library(app, k.local.token.clone());
+        }
+        // The built-in material graphs, read like any library file.
+        let builtin = ui_kit::button(ui, crate::i18n::tr_label("Built-in materials"), ui_kit::Button::Normal);
+        crate::scenario::publish_handle("library:builtin", builtin.rect.center());
+        if builtin.clicked() {
+            k.local.path = solidcraft_engine::io::catalog::BUILTIN_PATH.to_string();
+            k.note = Some(load(app, &mut k.local).unwrap_or_else(|error| error));
         }
         let load_button = ui_kit::button(ui, "Load library", ui_kit::Button::Enabled(!k.local.path.is_empty()));
         crate::scenario::publish_handle("library:load", load_button.rect.center());

@@ -293,7 +293,8 @@ pub struct GraphDeleteResult {
 #[serde(deny_unknown_fields)]
 pub struct GraphUpdateFromLibraryParams {
     pub id: String,
-    /// The library file the graph's `source.library` names.
+    /// The library file the graph's `source.library` names (`builtin:materials` for the built-in
+    /// material graphs).
     pub library: String,
     #[serde(default)]
     pub preview: bool,
