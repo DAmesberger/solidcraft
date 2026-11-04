@@ -17,7 +17,7 @@ use super::*;
 /// The graphs of the set: the worked examples (a constant `pbr` graph, a clear-coated black
 /// epoxy, brushed and etched nickel silver, solder mask over copper) and the built-in coat
 /// colour, weave and orange-peel graphs.
-const GRAPHS: [(&str, &str); 8] = [
+const GRAPHS: &[(&str, &str)] = &[
     ("pbr-copper", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../render/tests/fixtures/material_graph/pbr-copper.json"))),
     ("black-epoxy-clear-coat", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../render/tests/fixtures/material_graph/black-epoxy-clear-coat.json"))),
     ("brushed-nickel-silver", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../render/tests/fixtures/material_graph/brushed-nickel-silver.json"))),
@@ -144,7 +144,7 @@ fn realistic_parity_frames() {
                 }
             }
         }
-        for (graph_name, json) in GRAPHS {
+        for &(graph_name, json) in GRAPHS {
             for slope in [0.0f32, 0.6] {
                 let Some(scene) = graph_scene(json, slope) else { panic!("{graph_name}: the graph builds") };
                 for (look_name, look) in looks() {
