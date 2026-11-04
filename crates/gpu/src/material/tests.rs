@@ -841,13 +841,102 @@ fn gpu_surfaces(
     base: &SurfaceSample,
     points: &[Point],
 ) -> Result<Vec<Vec<f32>>, String> {
+    gpu_surfaces_with(device, queue, ir, words, base, points, None)
+}
+
+/// [`gpu_surfaces`] with the material textures bound (group 3, as the raster pipelines bind them;
+/// `None`: the 1 × 1 stand-in in every binding).
+pub(super) fn gpu_surfaces_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    ir: &Ir,
+    words: &[u32],
+    base: &SurfaceSample,
+    points: &[Point],
+    textures: Option<[&wgpu::TextureView; 4]>,
+) -> Result<Vec<Vec<f32>>, String> {
     use wgpu::util::DeviceExt;
-    let source = format!("{}\n{READBACK}\n{}", crate::shading::library(), super::material_eval(ir).map_err(|e| e.0)?);
+    let source =
+        format!("{}\n{READBACK}\n{}\n{}", crate::shading::library(), super::textures::sampling_source(), super::material_eval(ir).map_err(|e| e.0)?);
     super::validate(&source).map_err(|e| e.0)?;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let entry = |binding, ty| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None };
+    let storage = |read_only| wgpu::BindingType::Buffer {
+        ty: wgpu::BufferBindingType::Storage { read_only },
+        has_dynamic_offset: false,
+        min_binding_size: None,
+    };
+    let group0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            entry(0, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }),
+            entry(1, storage(true)),
+            entry(2, storage(false)),
+        ],
+    });
+    let texture = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+    let group3 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            entry(4, texture),
+            entry(5, texture),
+            entry(6, texture),
+            entry(7, texture),
+            entry(8, sampler),
+            entry(9, sampler),
+            entry(10, sampler),
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&group0), None, None, Some(&group3)],
+        immediate_size: 0,
+    });
+    let blank = device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[255; 4],
+        )
+        .create_view(&Default::default());
+    let views = textures.unwrap_or([&blank, &blank, &blank, &blank]);
+    let samplers = [wgpu::AddressMode::Repeat, wgpu::AddressMode::ClampToEdge, wgpu::AddressMode::MirrorRepeat].map(|mode| {
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: mode,
+            address_mode_v: mode,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        })
+    });
+    let mut entries: Vec<wgpu::BindGroupEntry> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| wgpu::BindGroupEntry { binding: 4 + i as u32, resource: wgpu::BindingResource::TextureView(v) })
+        .collect();
+    entries.extend(
+        samplers.iter().enumerate().map(|(i, s)| wgpu::BindGroupEntry { binding: 8 + i as u32, resource: wgpu::BindingResource::Sampler(s) }),
+    );
+    let textures_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &group3, entries: &entries });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
-        layout: None,
+        layout: Some(&layout),
         module: &module,
         entry_point: Some("readback"),
         compilation_options: Default::default(),
@@ -877,7 +966,7 @@ fn gpu_surfaces(
     });
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
-        layout: &pipeline.get_bind_group_layout(0),
+        layout: &group0,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: pts.as_entire_binding() },
@@ -889,6 +978,7 @@ fn gpu_surfaces(
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind, &[]);
+        pass.set_bind_group(3, &textures_bind, &[]);
         pass.dispatch_workgroups(points.len() as u32, 1, 1);
     }
     encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
@@ -1002,5 +1092,49 @@ fn debug_corpus_graph() {
                 }
             }
         }
+    }
+}
+
+/// Slopes through vector maths (a component-wise multiply, add, mix, abs, power and clamp of a
+/// vector3, and of a position) into a height: the GPU carries each component's gradient as the
+/// reference does, so the relief survives.
+#[test]
+fn vector_slopes_match_the_reference() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let graph = |op: &str, extra: Value, source: &str| {
+        json!({"name": "vector slope", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"u": [0.7, 0, 0], "v": [0, 0.9, 0]}},
+            {"id": "n", "kind": "pattern.noise", "params": {"kind": "gradient"}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.8}},
+            {"id": "w", "kind": "pattern.weave", "inputs": {"texcoord": {"from": "uv"}, "pitch_mm": [0.6, 0.8]}},
+            {"id": "v", "kind": "combine3", "inputs": {"x": {"from": "n"}, "y": {"from": "w"}, "z": {"from": "n"}}},
+            {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
+            {"id": "op", "kind": op, "inputs": extra},
+            {"id": "s", "kind": "separate3", "inputs": {"in": {"from": "op"}}},
+            {"id": "h", "kind": "add", "inputs": {"a": {"from": "s.y"}, "b": {"from": "s.z"}}},
+            {"id": "nh", "kind": "normal.from_height", "inputs": {"height": {"from": "h"}, "relief_mm": 0.02}},
+            {"id": "out", "kind": "standard_surface", "inputs": {"geometry_normal": {"from": "nh"}}}], "output": "out"})
+        .to_string()
+        .replace("SRC", source)
+    };
+    let cases = [
+        graph("multiply", json!({"a": {"from": "SRC"}, "b": [2.0, 1.5, 0.5]}), "v"),
+        graph("add", json!({"a": {"from": "SRC"}, "b": {"from": "v"}}), "v"),
+        graph("mix", json!({"a": {"from": "SRC"}, "b": [0.2, 0.9, 0.4], "t": {"from": "n"}}), "v"),
+        graph("abs", json!({"in": {"from": "SRC"}}), "v"),
+        graph("power", json!({"a": {"from": "SRC"}, "b": 2.5}), "v"),
+        graph("clamp", json!({"in": {"from": "SRC"}, "low": 0.3, "high": 0.7}), "v"),
+        graph("sin", json!({"in": {"from": "SRC"}}), "p"),
+        graph("normalize", json!({"in": {"from": "SRC"}}), "v"),
+        graph("multiply", json!({"a": {"from": "SRC"}, "b": {"from": "v"}}), "p"),
+    ];
+    for (i, text) in cases.iter().enumerate() {
+        let (field, d) = worst_against_reference(&device, &queue, text).unwrap_or_else(|e| panic!("case {i}: {e}"));
+        assert!(d < 1e-3, "case {i}: {field} differs by {d}\n{text}");
+        // The relief is there: the normal is not the geometric one everywhere.
+        let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+        let tilted = reference::sample_points()
+            .iter()
+            .any(|p| reference::evaluate(&ir, &words, &[], p).is_ok_and(|e| (e.surface.normal[2] - p.world_normal[2]).abs() > 1e-4));
+        assert!(tilted, "case {i}: the height tilts the normal");
     }
 }

@@ -73,6 +73,28 @@ impl Kind {
     }
 }
 
+/// `text` with every whole identifier `from` replaced by `to`.
+fn replace_ident(text: &str, from: &str, to: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(at) = text.get(i..).and_then(|t| t.find(from)) {
+        let start = i + at;
+        let end = start + from.len();
+        let before = text.get(..start).and_then(|t| t.chars().next_back());
+        let after = text.get(end..).and_then(|t| t.chars().next());
+        out.push_str(text.get(i..start).unwrap_or(""));
+        if before.is_some_and(word) || before == Some('.') || after.is_some_and(word) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        i = end;
+    }
+    out.push_str(text.get(i..).unwrap_or(""));
+    out
+}
+
 /// A WGSL float literal of a catalogue constant.
 fn lit(x: f64) -> String {
     let x = x as f32;
@@ -90,9 +112,9 @@ const ZERO3: &str = "vec3<f32>(0.0)";
 pub struct ImageParams {
     pub srgb: bool,
     /// 0 repeat, 1 clamp, 2 mirror.
-    pub wrap: u8,
+    pub wrap: u32,
     /// 0 rgb (`value` is the luminance), 1 r, 2 g, 3 b, 4 a.
-    pub channel: u8,
+    pub channel: u32,
 }
 
 /// What differs between the GPU targets of the one generator (§5.7): the raster back end here,
@@ -107,6 +129,12 @@ pub trait Target {
     /// `sc_Texcoord` expression: an `sc_Image` expression. `default` is the node's default colour
     /// (a `vec3<f32>` expression). Triplanar images call this per plane and blend.
     fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String;
+    /// The world gradient (per mm, a `vec3<f32>` expression) of that sample's `value`, read when
+    /// it reaches a normal (`normal.from_height`): one-texel forward differences, as the
+    /// reference takes them. A target without it gives none.
+    fn image_slope(&self, _binding: u8, _tc: &str, _params: ImageParams) -> String {
+        ZERO3.to_owned()
+    }
 }
 
 /// The viewport's target: `material_eval`, records in the uniform page `mat_page`.
@@ -119,9 +147,29 @@ impl Target for Raster {
     fn vec4(&self, index: &str) -> String {
         format!("mat_page.m[{index}]")
     }
-    fn image(&self, _binding: u8, _tc: &str, default: &str, params: ImageParams) -> String {
-        // Sampling lands with the GPU textures (track C3): until then the node's `default`.
-        format!("sc_image_default({default}, {}u)", params.channel)
+    fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String {
+        // `textures::sampling_source`: the binding's texture (group 3, 4 + binding) with the wrap
+        // mode's sampler; the node's `default` until the texture is resident.
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_image_{binding}_{wrap}({tc}, {default}, {}u)", params.channel),
+            None => format!("sc_image_default({default}, {}u)", params.channel),
+        }
+    }
+    fn image_slope(&self, binding: u8, tc: &str, params: ImageParams) -> String {
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_slope_{binding}_{wrap}({tc}, {}u)", params.channel),
+            None => ZERO3.to_owned(),
+        }
+    }
+}
+
+impl Raster {
+    /// The sampler name of a binding the raster target has (`None` past its four).
+    fn sampler(binding: u8, params: ImageParams) -> Option<&'static str> {
+        if usize::from(binding) >= super::scene::TEXTURE_SLOTS {
+            return None;
+        }
+        super::textures::WRAPS.get(usize::try_from(params.wrap).ok()?).copied()
     }
 }
 
@@ -138,6 +186,8 @@ struct Gen<'a> {
     /// Vector values (and `separate3` calls, for their input) carrying component gradients `qN`,
     /// a `mat3x3<f32>` whose columns are the gradients of x, y and z.
     mgrads: Vec<bool>,
+    /// While a vector maths node's gradient is written: `grad` gives tokens for `lane`.
+    lane_tokens: std::cell::Cell<bool>,
 }
 
 impl Gen<'_> {
@@ -225,10 +275,53 @@ impl Gen<'_> {
 
     /// The gradient of a float operand (per mm, world space), zero when it carries none.
     fn grad(&self, op: &Operand) -> String {
+        if self.lane_tokens.get() {
+            // A vector node's gradient is written once and expanded per component (`lane`).
+            return match op {
+                Operand::Value(v) => format!("@{}@", v.0),
+                Operand::Geometry(GeometryInput::WorldPosition) => "@P@".to_owned(),
+                Operand::Geometry(GeometryInput::ObjectPosition) => "@O@".to_owned(),
+                _ => ZERO3.to_owned(),
+            };
+        }
         match op {
             Operand::Value(v) if usize::try_from(v.0).ok().and_then(|i| self.grads.get(i)).copied().unwrap_or(false) => format!("g{}", v.0),
             _ => ZERO3.to_owned(),
         }
+    }
+
+    /// A vector node's gradient formula `g` (written with its own vector locals and gradient
+    /// tokens) for one component: the locals indexed by `lane`, each token replaced by that
+    /// operand's gradient of the component (a float broadcasts its own).
+    fn lane(&self, g: &str, n: u32, lane: usize, scalar_locals: &[char]) -> String {
+        let swizzle = ["x", "y", "z"].get(lane).copied().unwrap_or("x");
+        let mut out = g.to_owned();
+        for letter in ['a', 'b', 't', 'u', 'r', 'l', 'h', 'm', 'o', 'd'] {
+            if !scalar_locals.contains(&letter) {
+                out = replace_ident(&out, &format!("{letter}{n}"), &format!("{letter}{n}.{swizzle}"));
+            }
+        }
+        let mut result = String::new();
+        let mut rest = out.as_str();
+        while let Some(start) = rest.find('@') {
+            result.push_str(rest.get(..start).unwrap_or(""));
+            let after = rest.get(start + 1..).unwrap_or("");
+            let Some(end) = after.find('@') else { break };
+            let token = after.get(..end).unwrap_or("");
+            let column = match token {
+                "P" => format!("mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0))[{lane}]"),
+                "O" => format!("transpose(c.frame.to_object)[{lane}]"),
+                v => match v.parse::<usize>() {
+                    Ok(i) if self.mgrads.get(i).copied().unwrap_or(false) && self.kinds.get(i) != Some(&Kind::F) => format!("q{i}[{lane}]"),
+                    Ok(i) if self.grads.get(i).copied().unwrap_or(false) => format!("g{i}"),
+                    _ => ZERO3.to_owned(),
+                },
+            };
+            result.push_str(&column);
+            rest = after.get(end + 1..).unwrap_or("");
+        }
+        result.push_str(rest);
+        result
     }
 
     /// The component gradients of a vector operand (`mat3x3<f32>` columns), if it carries any: a
@@ -328,7 +421,14 @@ impl Gen<'_> {
                     let texcoord = Self::operand(self.instr(call)?, 0);
                     self.tangent_of(&texcoord)?
                 }
-                ("image", "value") => format!("s{c}.value"),
+                ("image", "value") => {
+                    if instr.slope {
+                        let slope = self.image_slope(self.instr(call)?)?;
+                        self.line(&format!("let g{n} = {slope};"));
+                        grad = true;
+                    }
+                    format!("s{c}.value")
+                }
                 ("image", "alpha") => format!("s{c}.alpha"),
                 ("separate3", "y" | "z") => {
                     let lane = if output == "y" { 1 } else { 2 };
@@ -465,11 +565,7 @@ impl Gen<'_> {
                     kind = Kind::F;
                 }
                 "image" => {
-                    let params = ImageParams {
-                        srgb: Self::param(&instr, 0) == 0,
-                        wrap: u8::try_from(Self::param(&instr, 1).clamp(0, 2)).unwrap_or(0),
-                        channel: u8::try_from(Self::param(&instr, 2).clamp(0, 4)).unwrap_or(0),
-                    };
+                    let params = Self::image_params(&instr);
                     let [default] = self.args_at(&instr, 2, [Kind::V3])?;
                     let binding = match Self::operand(&instr, 1) {
                         Operand::Texture(b) => Some(b),
@@ -551,6 +647,31 @@ impl Gen<'_> {
         })
     }
 
+    /// An `image` call's shape params.
+    fn image_params(instr: &Instr) -> ImageParams {
+        ImageParams {
+            srgb: Self::param(instr, 0) == 0,
+            wrap: u32::try_from(Self::param(instr, 1).clamp(0, 2)).unwrap_or(0),
+            channel: u32::try_from(Self::param(instr, 2).clamp(0, 4)).unwrap_or(0),
+        }
+    }
+
+    /// The world gradient of an `image` call's `value`: the target's per plane, blended by the
+    /// triplanar weights as the reference blends them.
+    fn image_slope(&self, image: &Instr) -> Result<String, CodegenError> {
+        let params = Self::image_params(image);
+        let Operand::Texture(binding) = Self::operand(image, 1) else { return Ok(ZERO3.to_owned()) };
+        let texcoord = Self::operand(image, 0);
+        Ok(match self.kind_of(&texcoord) {
+            Kind::Tri => {
+                let t = self.raw(&texcoord, false)?;
+                let plane = |p: &str| self.target.image_slope(binding, &format!("{t}.{p}"), params);
+                format!("({t}.w.x * {} + {t}.w.y * {} + {t}.w.z * {})", plane("x"), plane("y"), plane("z"))
+            }
+            _ => self.target.image_slope(binding, &self.arg(&texcoord, Kind::Tc)?, params),
+        })
+    }
+
     /// A normal map's frame tangent: that of the texcoord of the nearest `image` upstream of its
     /// colour, following each instruction's first value operand; else the geometric tangent.
     fn image_tangent(&self, color: &Operand) -> String {
@@ -599,6 +720,8 @@ impl Gen<'_> {
         let tiny = r.splat("1e-6");
         let den = |b: &str| format!("select(min({b}, -{tiny}), max({b}, {tiny}), {b} >= {zero})");
         let slope = instr.slope && r == Kind::F;
+        let vector_slope = instr.slope && matches!(r, Kind::V2 | Kind::V3);
+        self.lane_tokens.set(vector_slope);
         let mut g: Option<String> = None;
         let value = match op {
             "constant" => {
@@ -642,7 +765,7 @@ impl Gen<'_> {
                     _ => {
                         let base = format!("max({a}, {zero})");
                         g = Some(format!(
-                            "select({ZERO3}, {b} * pow({base}, {b} - 1.0) * {ga} + log(max({base}, 1e-20)) * pow({base}, {b}) * {gb}, {a} > 0.0)"
+                            "select({ZERO3}, {b} * pow(max({a}, 0.0), {b} - 1.0) * {ga} + log(max({a}, 1e-20)) * pow(max({a}, 0.0), {b}) * {gb}, {a} > 0.0)"
                         ));
                         format!("pow({base}, {b})")
                     }
@@ -786,6 +909,20 @@ impl Gen<'_> {
             "normalize" => {
                 let [x] = self.args(instr, [r])?;
                 g = Some(ZERO3.to_owned());
+                if instr.slope && r == Kind::V3 {
+                    self.lane_tokens.set(false);
+                    if let Some(m) = self.mgrad(&a0) {
+                        // d(v/|v|) = (dv − u (u·dv)) / |v|, per component; zero at zero.
+                        self.line(&format!("let a{n} = {x};"));
+                        self.line(&format!("let e{n} = {m};"));
+                        self.line(&format!("let l{n} = length(a{n});"));
+                        self.line(&format!("let u{n} = a{n} / max(l{n}, 1e-30);"));
+                        self.line(&format!("let w{n} = e{n} * u{n};"));
+                        let column = |k: usize| format!("select(vec3<f32>(0.0), (e{n}[{k}] - u{n}[{k}] * w{n}) / l{n}, l{n} > 0.0)");
+                        self.line(&format!("let q{n} = mat3x3<f32>({}, {}, {});", column(0), column(1), column(2)));
+                        self.set_mgrad(n);
+                    }
+                }
                 match r {
                     Kind::V3 => format!("sc_normalize3({x})"),
                     Kind::V2 => format!("sc_normalize2({x})"),
@@ -794,6 +931,7 @@ impl Gen<'_> {
             }
             "combine3" => {
                 let [x, y, z] = self.args(instr, [Kind::F, Kind::F, Kind::F])?;
+                self.lane_tokens.set(false);
                 if instr.slope {
                     self.line(&format!("let q{n} = mat3x3<f32>({}, {}, {});", self.grad(&a0), self.grad(&a1), self.grad(&a2)));
                     self.set_mgrad(n);
@@ -835,10 +973,23 @@ impl Gen<'_> {
             }
             _ => return Err(CodegenError(format!("node kind {:?} has no raster code", spec.kind))),
         };
+        self.lane_tokens.set(false);
         self.line(&format!("let v{n}: {} = {value};", r.wgsl()));
         if slope {
-            let g = g.unwrap_or_else(|| ZERO3.to_owned());
+            let g = g.clone().unwrap_or_else(|| ZERO3.to_owned());
             self.line(&format!("let g{n} = {g};"));
+        }
+        let plumbing = usize::try_from(n).ok().and_then(|i| self.mgrads.get(i)).copied().unwrap_or(false);
+        if vector_slope
+            && !plumbing
+            && let Some(g) = g
+        {
+            // `mix`'s factor is a float in every component.
+            let scalar: &[char] = if op == "mix" { &['t'] } else { &[] };
+            let lanes = if r == Kind::V2 { 2 } else { 3 };
+            let columns: Vec<String> = (0..3).map(|k| if k < lanes { self.lane(&g, n, k, scalar) } else { ZERO3.to_owned() }).collect();
+            self.line(&format!("let q{n} = mat3x3<f32>({});", columns.join(", ")));
+            self.set_mgrad(n);
         }
         Ok(slope)
     }
@@ -949,6 +1100,7 @@ pub fn generate(ir: &Ir, target: &dyn Target) -> Result<String, CodegenError> {
         grads: vec![false; ir.instrs.len()],
         slope_read,
         mgrads: vec![false; ir.instrs.len()],
+        lane_tokens: std::cell::Cell::new(false),
     };
     g.out.push_str(&format!("fn {name}(c: sc_GraphCtx) -> sc_Surface {{\n"));
     g.line(&format!("let k = c.record + {BASE_VEC4}u;"));

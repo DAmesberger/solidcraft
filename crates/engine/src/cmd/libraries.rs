@@ -16,15 +16,15 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library.inspect", "Inspect Local Library", crate::checked!("library.inspect", inspect)).icon("inspect").noundo().doc_only()
         .contract(&INSPECT_CONTRACT)
         .output(output_schema_for::<LibraryInspected>)
-        .params("path: v1/v2 library JSON; returns validated catalog and exact entry revisions, without changing the design"),
+        .params("path: v1/v2 library JSON or v3 (JSON, or a container with textures); returns validated catalog and exact entry revisions, without changing the design"),
     CommandSpec::new("library.export", "Export Design Library", crate::checked!("library.export", export)).icon("export").noundo().doc_only()
         .contract(&EXPORT_CONTRACT)
         .output(output_schema_for::<LibraryExported>)
-        .params("path: .json; id? (default user.local), name?, provenance?, overwrite? false, format? solidcraft-library/2 (default) | solidcraft-library/1 (refuses PBR/cards). Copies assigned looks and design-local physical definitions; never changes the design"),
+        .params("path: .json; id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names a material graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
     CommandSpec::new("library.apply", "Apply Local Library Entry", crate::checked!("library.apply", apply)).icon("import").enabled(super::not_in_sketch)
         .contract(&APPLY_CONTRACT)
         .output(output_schema_for::<LibraryApplied>)
-        .params("path, entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import. Copies values in one undo step; material conflicts are explicit"),
+        .params("path, entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import; graph_id?: id for the copy of a look's material graph (default the library's; a different graph under that id refuses). A look's graph and textures are copied with it. Copies values in one undo step; material conflicts are explicit"),
 ];
 
 impl LibraryTargets {
@@ -74,7 +74,10 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "library export path must end in .json"));
     }
     let catalog = Catalog::from_document(&s.doc, &request.id, &request.name, request.provenance)
-        .and_then(|catalog| catalog.in_format(&request.format))
+        .and_then(|catalog| match &request.format {
+            Some(format) => catalog.in_format(format),
+            None => Ok(catalog),
+        })
         .map_err(|e| bad(cmd, e.to_string()))?;
     let bytes = catalog.encode().map_err(|e| bad(cmd, e.to_string()))?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -106,7 +109,40 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     if entry.revision != request.revision {
         return Err(bad(cmd, "library entry changed; reload and explicitly select its new revision"));
     }
+    // A look that names a graph brings the graph (with its source) and its textures along.
+    let graph = entry.definition.look().and_then(|look| look.graph.clone());
+    let copied_graph = match &graph {
+        Some(entry_graph) => {
+            let id = match &request.graph_id {
+                Some(id) => solidcraft_doc::appearance_graph::GraphId::new(id).map_err(|e| bad(cmd, e.to_string()))?,
+                None => entry_graph.clone(),
+            };
+            let mut doc = (*s.doc).clone();
+            let keys = entry.definition.look().map(|l| solidcraft_doc::appearance_graph::look_textures(&l.to_look()).map(str::to_string).collect());
+            super::appearance_graph::copy_textures(cmd, &mut doc, &catalog, keys.unwrap_or_default())?;
+            super::appearance_graph::import_graph(cmd, &mut doc, &catalog, entry_graph, &id)?;
+            if doc != *s.doc {
+                s.set_doc(doc);
+            }
+            Some(id)
+        }
+        None if request.graph_id.is_some() => return Err(bad(cmd, "`graph_id` is only for a look that names a material graph")),
+        None => None,
+    };
     let result = match &entry.definition {
+        Definition::Appearance(look) if look.graph.is_some() => {
+            if request.name.is_some() || request.targets.empty() {
+                return Err(bad(cmd, "appearance entries need targets and do not take a material name"));
+            }
+            let mut target = serde_json::to_value(&request.targets).map_err(|e| bad(cmd, e.to_string()))?;
+            target["name"] = json!(look.name);
+            target["opacity"] = json!(look.opacity);
+            target["graph"] = json!(copied_graph.as_ref().map(|id| id.as_str()));
+            if !look.values.is_empty() {
+                target["values"] = json!(look.values);
+            }
+            nested(s, "appearance.assign", &target)?
+        }
         Definition::Appearance(look) => {
             if request.name.is_some() || request.targets.empty() {
                 return Err(bad(cmd, "appearance entries need targets and do not take a material name"));
@@ -150,6 +186,11 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
                     params["physical_card"] = json!(card);
                 }
                 nested(s, "material.create", &params)?;
+                let mut look = copy.appearance.clone();
+                if let (Some(look), Some(id)) = (look.as_mut(), &copied_graph) {
+                    look.graph = Some(id.clone());
+                    super::appearance_graph::settle_look(cmd, &s.doc, look)?;
+                }
                 // The existing colour API labels a custom look after its material.
                 // Preserve the library's exact look label inside this same transaction.
                 let imported = s
@@ -158,7 +199,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
                     .iter_mut()
                     .find(|m| m.name == name)
                     .ok_or_else(|| bad(cmd, "imported physical material is missing"))?;
-                imported.appearance = copy.appearance.clone();
+                imported.appearance = look;
                 false
             };
             if !request.targets.bodies.is_empty() {

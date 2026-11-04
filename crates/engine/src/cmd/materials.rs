@@ -16,7 +16,7 @@ use crate::{Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("material.create", "New Physical Material", create).icon("material").params(
-        "name (not a built-in material's); density_g_cm3: (0, 1000]; appearance?: library name (appearance.library) | color?: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1), pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (opaque only, needs color/appearance): the default look. A named appearance keeps its preset response when pbr is omitted; pbr: null selects scalar shading. Optical edits do not change density. physical_card?: validated SI candidate record (null/omitted means unknown); card density never changes assigned density. Assign it with material.assign",
+        "name (not a built-in material's); density_g_cm3: (0, 1000]; appearance?: library name (appearance.library) | graph?: material graph id with values? (as appearance.assign) | color?: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1), pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (opaque only, needs color/appearance): the default look. A named appearance keeps its preset response when pbr is omitted; pbr: null selects scalar shading. Optical edits do not change density. physical_card?: validated SI candidate record (null/omitted means unknown); card density never changes assigned density. Assign it with material.assign",
     ),
     CommandSpec::new("material.edit", "Edit Physical Material", edit).icon("material").enabled(has_user_materials).params(
         "material: a material defined in this design; name? (bodies and configuration cells follow); density_g_cm3?; appearance? | color?, opacity?, pbr? (as material.create; color: null clears the look). physical_card?: validated SI candidate record (omitted retains, null clears). Omitted appearance/color retains the entire current look",
@@ -63,7 +63,16 @@ fn density(cmd: &str, p: &Value) -> Result<f64> {
 
 /// The look `appearance` / `color` / `opacity` give: `None` when none is given, `Some(None)`
 /// to clear it (`color: null`).
-fn look(cmd: &str, p: &Value, material: &str) -> Result<Option<Option<Look>>> {
+fn look(cmd: &str, p: &Value, material: &str, doc: &solidcraft_doc::Document) -> Result<Option<Option<Look>>> {
+    // A look naming a material graph (`graph`, `values?`), read and settled as assignment does.
+    if p.get("graph").is_some_and(|g| !g.is_null()) {
+        let mut l = super::inspect::appearance_look(cmd, p)?.ok_or_else(|| bad(cmd, "`graph` needs a look"))?;
+        if p.get("name").is_none_or(Value::is_null) {
+            l.name = material.to_string();
+        }
+        super::appearance_graph::settle_look(cmd, doc, &mut l)?;
+        return Ok(Some(Some(l)));
+    }
     if p.get("pbr").is_some() && str_(p, "appearance").is_none() && p.get("color").is_none_or(Value::is_null) {
         return Err(bad(cmd, "`pbr` requires an appearance or color"));
     }
@@ -158,8 +167,12 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if s.doc.user_materials.len() >= MAX_USER_MATERIALS {
         return Err(bad(cmd, format!("a design defines at most {MAX_USER_MATERIALS} materials")));
     }
-    let material =
-        UserMaterial { density: density(cmd, p)?, appearance: look(cmd, p, &name)?.flatten(), name, physical_card: physical_card(cmd, p)?.flatten() };
+    let material = UserMaterial {
+        density: density(cmd, p)?,
+        appearance: look(cmd, p, &name, &s.doc)?.flatten(),
+        name,
+        physical_card: physical_card(cmd, p)?.flatten(),
+    };
     let out = material_json(&material)?;
     s.doc_mut().user_materials.push(material);
     Ok(out)
@@ -216,7 +229,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
         None => old.name.clone(),
     };
     let density = if p.get("density_g_cm3").is_some() { density(cmd, p)? } else { old.density };
-    let appearance = match look(cmd, p, &name)? {
+    let appearance = match look(cmd, p, &name, &s.doc)? {
         Some(l) => l,
         // A colour named after the material keeps following its name.
         None => old.appearance.clone().map(|mut l| {

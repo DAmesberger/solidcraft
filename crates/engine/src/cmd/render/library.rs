@@ -84,10 +84,10 @@ fn projection(kind: &str, value: &Value) -> Value {
         "native_scenes" => json!({"status":"native_composition","executor":"gpu-path","variants":["review_then_apply"],
             "preserves":["camera","materials","geometry","engineering_properties"],"requires_subject_and_explicit_replacement_consent":true}),
         "surfaces" => {
-            json!({"status":"implemented_pending_batch_validation","variants":if cfg!(feature="bundled-render-library") {vec!["uniform_opaque","gpu_planar_maps"]} else {vec!["uniform_opaque"]},
+            json!({"status":"implemented_pending_batch_validation","variants":if cfg!(feature="bundled-render-library") {vec!["uniform_opaque","gpu_planar_maps","graph"]} else {vec!["uniform_opaque"]},
             "omitted":["height_displacement","true_anisotropic_brdf","manufacturing_geometry"],"maps_portability":"version_and_digest_pinned_builtin_setup_bindings"})
         }
-        "selene_appearances" => json!({"status":"implemented_pending_batch_validation","variants":["uniform_opaque"],
+        "selene_appearances" => json!({"status":"implemented_pending_batch_validation","variants":["uniform_opaque","graph"],
             "omitted":value["baseline_projection"]["omitted_target_features"]}),
         "hdr" if !cfg!(feature = "bundled-render-library") => {
             json!({"status":"blocked","reason":"optional bundled-render-library pack is not included in this build","variants":[]})
@@ -308,6 +308,22 @@ struct Appearance {
     id: String,
     variant: String,
     bodies: Vec<String>,
+    /// `graph` only: a planar projection (`origin`, and `u`, `v` spanning one tile, mm). Default:
+    /// triplanar in object space at the recipe's tile size.
+    #[serde(default)]
+    frame: Option<Frame>,
+    /// `graph` only: the id the graph gets in the design. Default: the entry's id, lower-case.
+    #[serde(default)]
+    graph_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Frame {
+    #[serde(default)]
+    origin: [f64; 3],
+    u: [f64; 3],
+    v: [f64; 3],
 }
 
 fn triple(value: &Value, command: &str) -> Result<[f64; 3]> {
@@ -323,11 +339,17 @@ fn number(value: &Value, command: &str) -> Result<f64> {
 pub(super) fn apply_appearance(s: &mut Session, params: &Value) -> Result<Value> {
     let command = "render.library.appearance.apply";
     let input: Appearance = serde_json::from_value(params.clone()).map_err(|e| bad(command, e.to_string()))?;
-    if input.variant != "uniform_opaque" || input.bodies.is_empty() || input.bodies.len() > 256 {
-        return Err(bad(command, "explicit uniform_opaque variant and 1..256 body targets are required"));
+    if !matches!(input.variant.as_str(), "uniform_opaque" | "graph") || input.bodies.is_empty() || input.bodies.len() > 256 {
+        return Err(bad(command, "explicit uniform_opaque or graph variant and 1..256 body targets are required"));
     }
     if input.bodies.iter().any(|name| name.is_empty() || name.len() > 1024 || name.chars().any(char::is_control)) {
         return Err(bad(command, "bounded exact body names required"));
+    }
+    if input.variant == "graph" {
+        return apply_graph(s, &input);
+    }
+    if input.frame.is_some() || input.graph_id.is_some() {
+        return Err(bad(command, "`frame` and `graph_id` belong to the graph variant"));
     }
     let (value, mut look, omitted) = if input.id.starts_with("SURF-") {
         let value = item("surfaces", &input.id, command)?;
@@ -351,6 +373,106 @@ pub(super) fn apply_appearance(s: &mut Session, params: &Value) -> Result<Value>
     Ok(
         json!({"id":input.id,"variant":input.variant,"omitted":omitted,"appearance":look,"assignment":assigned,"engineering_properties_unchanged":true}),
     )
+}
+
+/// The `graph` variant (docs/material-graph.md §4.5): the recipe as a material graph in the
+/// design, assigned to the bodies. A `SURF-*` binds its maps (copied into the design's textures
+/// by their SHA-256): base colour (sRGB) and the OpenGL normal map always; roughness and metallic
+/// maps under a planar `frame`, their recipe constants under the default triplanar projection
+/// (three samples a map there, and a graph reads at most eight). A Selene entry has no maps, so
+/// its baseline becomes a one-node graph. Graphs never move geometry, so height displacement
+/// stays omitted.
+fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
+    use solidcraft_doc::appearance_graph::{GraphId, TextureAsset};
+    use solidcraft_render::material_graph::{GraphSource, MaterialGraph};
+    let command = "render.library.appearance.apply";
+    let state = s.model.state();
+    if let Some(missing) = input.bodies.iter().find(|b| state.body(b).is_none()) {
+        return Err(bad(command, format!("no body `{}`", missing.chars().take(64).collect::<String>())));
+    }
+    let graph_id = match &input.graph_id {
+        Some(id) => GraphId::new(id),
+        None => GraphId::new(&input.id.to_ascii_lowercase()),
+    }
+    .map_err(|e| bad(command, e.to_string()))?;
+    let (value, mut graph, textures, maps, omitted, library) = if input.id.starts_with("SURF-") {
+        let value = item("surfaces", &input.id, command)?;
+        let name = value["name"].as_str().ok_or_else(|| bad(command, "authored surface has no name"))?;
+        let tile = value["tile_mm"].as_array().map(|t| t.iter().filter_map(Value::as_f64).collect::<Vec<_>>()).unwrap_or_default();
+        let (Some(&tu), Some(&tv)) = (tile.first(), tile.get(1)) else { return Err(bad(command, "authored surface has no tile size")) };
+        let projection = match &input.frame {
+            Some(f) => {
+                json!({"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"origin": f.origin, "u": f.u, "v": f.v}})
+            }
+            None => json!({"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [tu, tv, tu]}}),
+        };
+        let planar = input.frame.is_some();
+        let mut channels = vec![("base_color", MapRole::BaseColor), ("normal_open_gl", MapRole::NormalOpenGl)];
+        if planar {
+            channels.extend([("roughness", MapRole::Roughness), ("metallic", MapRole::Metallic)]);
+        }
+        let mut textures = Vec::new();
+        let mut keys = BTreeMap::new();
+        for (channel, role) in &channels {
+            let bytes = texture_bytes(&format!("{}/{channel}", input.id), *role, 2 * 1024 * 1024, command)?;
+            let (key, asset) = TextureAsset::from_bytes(&format!("{} {channel}.png", input.id), &bytes).map_err(|e| bad(command, e.to_string()))?;
+            keys.insert(*channel, key.clone());
+            textures.push((key, asset));
+        }
+        let key = |c: &str| keys.get(c).cloned().unwrap_or_default();
+        let image = |id: &str, channel: &str, space: &str, pick: &str| json!({"id": id, "kind": "image", "params": {"space": space, "channel": pick}, "inputs": {"texcoord": {"from": "uv"}, "file": {"texture": key(channel)}}});
+        let lo = triple(&value["base_linear_low"], command)?;
+        let hi = triple(&value["base_linear_high"], command)?;
+        let mid: Vec<f64> = (0..3).map(|i| (lo[i] + hi[i]) * 0.5).collect();
+        let metallic = number(&value["metallic"], command)?;
+        let roughness = number(&value["roughness"], command)?;
+        let mut nodes = vec![
+            projection,
+            image("base", "base_color", "srgb", "rgb"),
+            image("normal_map", "normal_open_gl", "linear", "rgb"),
+            json!({"id": "relief", "kind": "normal.map", "params": {"convention": "opengl"}, "inputs": {"color": {"from": "normal_map.color"}}}),
+        ];
+        let mut surface = json!({"base_color": {"from": "base.color", "fallback": mid}, "geometry_normal": {"from": "relief"},
+            "base_metalness": metallic, "specular_roughness": roughness, "specular_ior": 1.5});
+        if planar {
+            nodes.push(image("rough", "roughness", "linear", "r"));
+            nodes.push(image("metal", "metallic", "linear", "r"));
+            surface["specular_roughness"] = json!({"from": "rough.value", "fallback": roughness});
+            surface["base_metalness"] = json!({"from": "metal.value", "fallback": metallic});
+        }
+        nodes.push(json!({"id": "surface", "kind": "standard_surface", "inputs": surface}));
+        let graph: MaterialGraph = serde_json::from_value(json!({"name": format!("{} {name}", input.id), "nodes": nodes, "output": "surface"}))
+            .map_err(|e| bad(command, e.to_string()))?;
+        let maps: Vec<&str> = channels.iter().map(|(c, _)| *c).collect();
+        let mut omitted = vec!["height_displacement", "true_anisotropic_brdf"];
+        if !planar {
+            omitted.push("roughness_metallic_maps_under_triplanar");
+        }
+        (value, graph, textures, maps, json!(omitted), "solidcraft-starter")
+    } else {
+        let value = item("selene_appearances", &input.id, command)?;
+        let p = &value["baseline_projection"]["runtime_parameters"];
+        let name = value["name"].as_str().ok_or_else(|| bad(command, "authored appearance has no name"))?;
+        let mut look = json!({"name": name, "color": p["color"], "opacity": p["opacity"]});
+        if !p["pbr"].is_null() {
+            look["pbr"] = p["pbr"].clone();
+        }
+        let look = crate::cmd::inspect::appearance_look(command, &look)?.ok_or_else(|| bad(command, "authored appearance has no colour"))?;
+        if look.opacity != 1.0 {
+            return Err(bad(command, "this Selene entry is see-through; the graph variant draws opaque baselines only"));
+        }
+        let graph = crate::cmd::appearance_graph::look_graph(&format!("{} {name}", input.id), &look);
+        (value, graph, Vec::new(), Vec::new(), value["baseline_projection"]["omitted_target_features"].clone(), "solidcraft-selene")
+    };
+    graph.name = graph.name.chars().take(256).collect();
+    graph.source = Some(GraphSource { library: library.into(), entry: input.id.clone(), revision: 0 });
+    crate::cmd::appearance_graph::add_graph(command, s, &graph_id, graph, textures)?;
+    let name = value["name"].as_str().unwrap_or_default();
+    let look = json!({"bodies": input.bodies, "graph": graph_id.as_str(),
+        "name": format!("{} {}", input.id, name).chars().take(128).collect::<String>()});
+    let assigned = crate::cmd::inspect::appearance(s, &look)?;
+    Ok(json!({"id": input.id, "variant": input.variant, "omitted": omitted, "graph": graph_id.as_str(), "maps": maps,
+        "appearance": assigned["appearance"], "assignment": assigned, "engineering_properties_unchanged": true}))
 }
 
 fn one() -> f64 {

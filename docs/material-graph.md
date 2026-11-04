@@ -227,7 +227,7 @@ with bounded cost, and derivatives stay valid everywhere (§5.1).
 | Texture samples after expansion | 8 | Triplanar images count three each. |
 | Distinct textures per graph | 4 | WebGL2 has 16 sampled textures per stage (§5.3). |
 | Texture assets | ≤ 16384 px a side, ≤ 256 MiB encoded, ≤ 256 per design, ≤ 1 GiB decoded per design | Safety only (§4.3); the renderer clamps the resident size. |
-| Uniform constants per graph | 256 floats (64 vec4) | Fits a 16 KiB uniform page with ≥ 16 materials. |
+| Uniform constants per graph | 256 floats (64 vec4) | With the 7-vec4 base response in front, a record is ≤ 71 vec4, so a 16 KiB uniform page holds ≥ 14 materials (§5.2). |
 | Shapes compiled per design | not limited; the GPU cache holds 64 (LRU) | §5.2 |
 
 ### 3.6 Cost model
@@ -508,8 +508,10 @@ and after.
 Decoding uses `solidcraft_render::texture_input` on a worker; this is data preparation.
 Rendering into a level of an `Rgba8UnormSrgb` texture on WebGL2 (`SRGB8_ALPHA8` is
 colour-renderable in ES 3.0) is verified in track C3. If a driver fails it, the fallback is a
-linear texture with decode in the shader, never CPU mips. Until a texture has decoded, its
-`image` node reads its `default` colour.
+linear texture with decode in the shader, never CPU mips. Until a texture has decoded (and
+whenever none is bound), its `image` node reads its `default` colour **with alpha 0**: `alpha`
+and the `a` channel's `value` are 0, so a mask read through its alpha shows no mark until its
+texture arrives (`sc_image_default`; the test-only reference does the same).
 
 ### 4.4 Compatibility and the pending format change
 
@@ -726,9 +728,12 @@ golden GPU frames and the test-only reference;
   values. Graphs that differ only in values share one pipeline; a value edit uploads
   uniforms and never recompiles.
 - **Uniform values:** one uniform page is `array<vec4<f32>, 1024>` (16 KiB, the WebGL2
-  uniform-block limit). Each material takes a contiguous run of at most 64 vec4s. A vertex
-  carries its material's vec4 offset as a flat `u32`, so **one draw covers every material
-  of one shape** on a page. Pages are rewritten only when a material's values hash changes.
+  uniform-block limit). Each material takes a contiguous **record**: its base response
+  (7 vec4: `material::base_record`), then its uniform slots (at most 64 vec4), so at most
+  71 vec4 and at least 14 materials a page. The base response comes first so that the
+  fallback pipeline reads it at the same offset while the shape compiles. A vertex carries
+  its record's vec4 offset as a flat `u32`, so **one draw covers every material of one
+  shape** on a page. Pages are rewritten only when their words change.
 - **Vertices:** a graph-drawn vertex is position, normal and material offset (28 bytes),
   plus an object-space position (40 bytes) for shapes that read object space. Instanced
   meshes are already in object space. Today's 48-byte `pbr_tri` vertices remain for
@@ -818,7 +823,7 @@ They will be measured with the existing `gpu` perf harness and recorded in
 | Situation | Behaviour |
 |---|---|
 | Shape not compiled yet / compile failed / over the cache | The base response through the constant-graph GPU pipeline; a failure logs once per shape and reports in the render diagnostics. |
-| Texture not decoded yet or failed | The image node's `default` colour. |
+| Texture not decoded yet or failed | The image node's `default` colour, with alpha 0 (§4.3). |
 | GPU path tracer | The same IR through the path back end (§5.7); unsupported inputs approximated and reported. |
 | CPU ray tracer, CPU product host (out of scope) | Today's behaviour: the display `color` for a graph look, the `pbr` values for a `pbr` look. |
 | No GPU (the CPU viewport renderer) | The realistic view is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "the Realistic view needs a GPU". The standard view works as today. |
@@ -1175,9 +1180,10 @@ command leaves the design unchanged.
 |---|---|---|
 | `appearance.graph.nodes` (read-only) | – | The node catalogue: kinds, ports, types, ranges, defaults, params, cost units, catalogue version |
 | `appearance.graph.validate` (read-only) | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node, port, code, message}]}` |
-| `appearance.graph.create` | `{id?, name, graph? \| from: "standard"}` | `{id}` |
+| `appearance.graph.create` | `{id?, name, graph? \| from?: "standard" \| saved look}` | `{id, cost}` |
+| `appearance.graph.convert` | `{look, id?, name?, scope?}` ("Convert to material graph": the look's one-node graph, and every override that is exactly that look names it) | `{id, cost, count}` |
 | `appearance.graph.set` | `{id, graph}` (full replace) | `{id, cost}` |
-| `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
+| `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" (with `fallback?`) \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
 | `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with stats / `[{id, name, uses, source}]` |
 | `appearance.graph.duplicate` | `{id, new_id?, name?}` | `{id}` |
 | `appearance.graph.delete` | `{id, replace_with?}` | `{replaced}`; refuses while referenced unless `replace_with` is given |
@@ -1185,7 +1191,9 @@ command leaves the design unchanged.
 | `appearance.texture.list` (read-only) | – | `[{texture, name, width, height, bytes, uses}]` |
 | `appearance.assign` (extended) | existing targets + `graph`, `values` (`pbr` remains shorthand) | unchanged |
 | `appearance.graph.update_from_library` | `{id, library, preview: bool}` | an impact preview (changed inputs, affected looks), or the applied update |
-| `library.export` / `library.apply` (extended) | catalog v3 | unchanged shapes, plus graph and texture counts |
+| `library.export` / `library.apply` (extended) | catalog v3; `library.apply` copies a look's graph and textures, `graph_id?` names the copy | unchanged shapes |
+
+The automation reference, with every parameter, is [material graph commands](material-graph-commands.md).
 
 Example (MCP or CLI, `solidcraft-cli run`):
 
@@ -1201,7 +1209,9 @@ Render jobs (`render.start`) and the embedding API (`solidcraft-gpu`) can overri
 graph's **interface** values for one job or frame, for example a texture bound to a
 `texture` interface input. The design, undo history and saved file do not change, the same
 contract as today's runtime `clear_coats`. Overrides are values and texture bindings, so
-they never compile anything. This generic mechanism is what lets any program bind
+they never compile anything. In `render.start` they are `raytrace.graph_values`
+(`[{graph | body_index + body_name, values}]`) with `raytrace.graph_textures` (base64 images
+the values name by SHA-256). This generic mechanism is what lets any program bind
 per-instance images (labels, markings) at render time.
 
 ## 8. Pcbcraft side

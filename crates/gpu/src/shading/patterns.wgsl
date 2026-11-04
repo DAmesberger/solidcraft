@@ -385,6 +385,13 @@ fn sc_image_default(color: vec3<f32>, channel: u32) -> sc_Image {
     return sc_Image(color, select(picked, 0.0, channel == 4u), 0.0);
 }
 
+// A sampled texel's image outputs: its colour, `channel`'s value (0 the Rec. 709 luminance, 1–3
+// r, g, b, 4 alpha) and its alpha.
+fn sc_image_of(rgba: vec4<f32>, channel: u32) -> sc_Image {
+    let picked = select(select(select(select(sc_luminance(rgba.rgb), rgba.r, channel == 1u), rgba.g, channel == 2u), rgba.b, channel == 3u), rgba.a, channel == 4u);
+    return sc_Image(rgba.rgb, picked, rgba.a);
+}
+
 // Three planar samples of a triplanar image, blended by the weights `w`.
 fn sc_image_blend(a: sc_Image, b: sc_Image, c: sc_Image, w: vec3<f32>) -> sc_Image {
     return sc_Image(w.x * a.color + w.y * b.color + w.z * c.color, w.x * a.value + w.y * b.value + w.z * c.value,

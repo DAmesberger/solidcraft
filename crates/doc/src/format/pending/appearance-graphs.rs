@@ -5,9 +5,8 @@
 //!
 //! An older design gets none: its scalar and `pbr` looks are unchanged and are never migrated
 //! (decision O9), so there is no `step`. A design without graphs is still written in the older
-//! format, byte for byte, once `Part::used` reads [`USED`] (track K, decision O8); the last
+//! format, byte for byte, because `Part::used` reads [`USED`] (decision O8); the last
 //! release refuses a design that has graphs (the newer format number).
 
 /// Whether a design's saved JSON uses this change: it has a material graph.
-#[allow(dead_code)] // read by `Part::used` once the writer picks the oldest sufficient format
 pub const USED: fn(&serde_json::Value) -> bool = crate::appearance_graph::graphs_used;
