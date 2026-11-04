@@ -81,6 +81,25 @@ fn graph_image(slot: u32, tc: sc_Texcoord, fallback: vec3<f32>, wrap: u32, chann
     return sc_image_of(mix(top, bottom, fy), channel);
 }
 
+// The world gradient (per mm) of an image sample's `value`, for a height that reaches a normal:
+// one-texel forward differences along u and v, as the reference takes them. None for an unbound
+// or one-texel image.
+fn graph_image_slope(slot: u32, tc: sc_Texcoord, wrap: u32, channel: u32) -> vec3<f32> {
+    let r = graph_words(slot);
+    if r.x == 0u || r.y * r.z <= 1u { return vec3<f32>(0.0); }
+    let size = vec2<f32>(f32(r.y), f32(r.z));
+    let h = vec2<f32>(1.0) / size;
+    let none = vec3<f32>(0.0);
+    var tu = tc;
+    tu.uv = tc.uv + vec2<f32>(h.x, 0.0);
+    var tv = tc;
+    tv.uv = tc.uv + vec2<f32>(0.0, h.y);
+    let c = graph_image(slot, tc, none, wrap, channel).value;
+    let cu = graph_image(slot, tu, none, wrap, channel).value;
+    let cv = graph_image(slot, tv, none, wrap, channel).value;
+    return (cu - c) * size.x * tc.du + (cv - c) * size.y * tc.dv;
+}
+
 // The hit's triangle as an evaluated surface shades it: base colour, metalness, roughness, IOR,
 // coat and the shading normal (in every vertex normal; `graph_normal` reads it). Glass keeps its
 // transmission and carries neither metal nor a coat. The integrator, its sampling and its random

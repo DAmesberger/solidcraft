@@ -544,7 +544,8 @@ fn test_image() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// `image` nodes sample the texture buffer as the reference samples the image: bilinear at the
-/// top-row-first texels, sRGB decoded before filtering, under every wrap mode and channel.
+/// top-row-first texels, sRGB decoded before filtering, under every wrap mode and channel; their
+/// one-texel slopes tilt a height-driven normal as the reference's do.
 #[test]
 fn images_sample_as_the_reference_does() {
     use solidcraft_render::job::graphs::GraphTexture;
@@ -559,7 +560,9 @@ fn images_sample_as_the_reference_does() {
             {"id": "tc", "kind": "texcoord.planar", "inputs": {"u": [2.5, 0.5, 0.0], "v": [-0.5, 2.5, 0.5]}, "params": {"space": "world"}},
             {"id": "img", "kind": "image", "params": {"space": space, "wrap": wrap, "channel": channel},
              "inputs": {"texcoord": {"from": "tc"}, "file": {"texture": sha}}},
-            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": {"from": "img.value"}}}],
+            {"id": "bump", "kind": "normal.from_height", "inputs": {"height": {"from": "img.value"}, "relief_mm": 0.05}},
+            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": {"from": "img.value"},
+             "geometry_normal": {"from": "bump"}}}],
             "output": "surface"});
         texts.push((space == "srgb", graph.to_string()));
     }
