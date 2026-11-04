@@ -55,14 +55,14 @@ Recorded on an Apple M5 Max (Metal) at `45427568d`:
 | Standard against upstream `21c5be2b2` (before the package and the renderer branch) | 312 of 312 frames byte-identical |
 | Realistic against `6790d434f` (the package before C2's anisotropic studio lobe) | 878 of 910 within 1 (877 identical). The 32 others are every brushed nickel silver frame, the anisotropic graph C2 changed on purpose (steps up to 14) |
 
-## Acceptance against §5.9 (recorded at `45427568d`, default studio)
+## Acceptance against §5.9 (recorded at `db8e4d420`, default studio)
 
 The bar is not met yet. In the modelling view's Realistic frames:
 
 - Clipping and crushing pass. Every part is at or under 1 % in all three views, except the
   silicone dome's 1.9 % clipped from the low back view.
 - Face medians fail:
-  - the brushed lid's top reads 247–249;
+  - the brushed lid's top reads 246–251;
   - the Sample Plate's top reads 245 in the isometric view, where the bar for the Sample Plate is
     40–220 (its side, 106, passes);
   - the black epoxy box's faces sit at 7–18.
@@ -70,7 +70,7 @@ The bar is not met yet. In the modelling view's Realistic frames:
   boss ring, and the cylinder's top from the low back view.
 
 In the Render preview's Realistic frames, graph looks draw only as their base response: there is
-no weave, label or transmission. From the low back view the epoxy box is 44 % crushed and the
-carbon plate 7 % crushed.
+no weave, label or transmission. From the low back view the epoxy box is 44 % crushed, the
+carbon plate 7 % crushed and the brushed lid 1.2 % clipped.
 
 `showcase-metrics.jsonl` holds every number: per part, and per face of at least 400 pixels.
