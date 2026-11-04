@@ -55,6 +55,10 @@ impl Target for PathTarget<'_> {
         let slot = codegen::BASE_VEC4 + slot_vec4s(self.ir) + u32::from(binding);
         format!("graph_image(c.record + {slot}u, {tc}, {default}, {}u, {}u)", params.wrap, params.channel)
     }
+    fn image_slope(&self, binding: u8, tc: &str, params: ImageParams) -> String {
+        let slot = codegen::BASE_VEC4 + slot_vec4s(self.ir) + u32::from(binding);
+        format!("graph_image_slope(c.record + {slot}u, {tc}, {}u, {}u)", params.wrap, params.channel)
+    }
 }
 
 /// vec4s of a material's uniform slots.

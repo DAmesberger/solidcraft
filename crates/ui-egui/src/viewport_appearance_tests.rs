@@ -749,3 +749,103 @@ fn screenshot_graph_looks_in_the_realistic_view() {
         }
     }
 }
+
+/// A saved design (`$C1_DESIGN`, e.g. the realistic showcase) in the modelling view, in both
+/// looks, drawn as the window draws it, offscreen: PNGs into `$C1_APP_SHOTS`. Evidence for
+/// review, not a check (`--ignored`).
+#[test]
+#[ignore]
+fn screenshot_a_design_in_both_looks() {
+    let (Ok(dir), Ok(design)) = (std::env::var("C1_APP_SHOTS"), std::env::var("C1_DESIGN")) else { return };
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("doc.open", json!({"path": design})).unwrap();
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    const SIZE: u32 = 1024;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    let bounds = super::shown_body_bounds(&app);
+    let center = (bounds.min + bounds.max) * 0.5;
+    let size = bounds.diagonal();
+    for (view, factor) in [(solidcraft_engine::render::StandardView::Iso, 1.3), (solidcraft_engine::render::StandardView::Front, 1.1)] {
+        let (yaw, pitch) = view.angles();
+        app.cam = crate::Camera { target: center, yaw, pitch: pitch.max(0.35), roll: 0.0, distance: size * factor, fov: 0.0, ..Default::default() };
+        for (name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
+            app.ui.view_look = look;
+            let proj = super::projection(&app, rect);
+            let e = proj.cam.eye().to_f32();
+            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            let scene = build_scene(&app).merged();
+            eprintln!("{name}: {} graph draws", scene.graphs.draws().len());
+            let Some(bytes) =
+                crate::gpu::render_realistic_offscreen(scene, proj.vp.to_f32(), proj.cam.back().to_f32(), [e[0], e[1], e[2], 0.0], SIZE, product)
+            else {
+                return;
+            };
+            if let Some(img) = image::RgbaImage::from_raw(SIZE, SIZE, bytes) {
+                let _ = img.save(format!("{dir}/showcase-{name}-{view:?}.png").to_lowercase());
+            }
+        }
+    }
+}
+
+/// `pbr` looks in the Realistic view go through the material stream as their one-node constant
+/// graphs (decision O9): every `pbr` look shares one shape, a metal reflects the studio unlike
+/// the same colour as a dielectric, and it draws exactly as the explicit constant graph does.
+/// The Standard view is unchanged.
+#[test]
+fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    app.run("solid.box", json!({"corner": [50, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
+    let names: Vec<String> = crate::open_meshing::shown_world(&app).bodies.iter().map(|b| b.name.clone()).collect();
+    let steel = json!({"metallic": 1.0, "roughness": 0.2, "dielectric_ior": 1.5});
+    app.run("appearance.assign", json!({"bodies": [names[0]], "color": [200, 200, 205], "pbr": steel})).unwrap();
+    app.run(
+        "appearance.assign",
+        json!({"bodies": [names[1]], "color": [180, 60, 40], "pbr": {"metallic": 0.0, "roughness": 0.6, "dielectric_ior": 1.5}}),
+    )
+    .unwrap();
+    assert!(build_scene(&app).graphs.draws().is_empty(), "the Standard view draws no graph");
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.ground_shadow = false;
+    let scene = build_scene(&app);
+    let shapes: std::collections::BTreeSet<_> = scene.graphs.draws().iter().map(|d| d.shape).collect();
+    assert_eq!(shapes.len(), 1, "every pbr look shares one shape");
+    assert_eq!(scene.graphs.pages().len(), 1, "two materials, one page");
+    // Pixels: a metal pbr face against the same colour as a dielectric, and against the explicit
+    // constant graph of the same look.
+    const SIZE: u32 = 256;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    let (yaw, pitch) = solidcraft_engine::render::StandardView::Iso.angles();
+    app.cam = crate::Camera { target: Vec3::new(20.0, 15.0, 10.0), yaw, pitch, roll: 0.0, distance: 60.0, fov: 0.0, ..Default::default() };
+    let render = |app: &SolveApp| {
+        let proj = super::projection(app, rect);
+        let e = proj.cam.eye().to_f32();
+        let look = crate::view_look::product_look_around(app, "model", &super::shown_body_bounds(app));
+        crate::gpu::render_realistic_offscreen(
+            build_scene(app).merged(),
+            proj.vp.to_f32(),
+            proj.cam.back().to_f32(),
+            [e[0], e[1], e[2], 0.0],
+            SIZE,
+            look,
+        )
+    };
+    let Some(metal) = render(&app) else { return };
+    let graph = super::super::viewport_graphs::pbr_graph([200, 200, 205], &doc::pbr_appearance::PbrParameters::new(1.0, 0.2, 1.5).unwrap()).unwrap();
+    app.run("appearance.graph.create", json!({"id": "steel", "name": "Steel", "graph": graph})).unwrap();
+    app.run("appearance.assign", json!({"bodies": [names[0]], "graph": "steel"})).unwrap();
+    let explicit = render(&app).unwrap_or_default();
+    let worst = metal.iter().zip(&explicit).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(255);
+    assert!(worst <= 1, "a pbr look draws as its constant graph (worst {worst})");
+    app.run(
+        "appearance.assign",
+        json!({"bodies": [names[0]], "color": [200, 200, 205], "pbr": {"metallic": 0.0, "roughness": 0.2, "dielectric_ior": 1.5}}),
+    )
+    .unwrap();
+    let dielectric = render(&app).unwrap_or_default();
+    let differ = metal.chunks(4).zip(dielectric.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+    assert!(differ > 500, "a metal reflects the studio unlike a dielectric ({differ} pixels differ)");
+}
