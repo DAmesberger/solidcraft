@@ -704,3 +704,23 @@ fn graph_textures_are_resident_sized_and_keep_height_precision() {
         assert_eq!([0, 1, 2, 3].map(|k| words(&texture, first + 4 * texel + k)), [v, v, v, 1.0]);
     }
 }
+
+/// What the path tracer approximates is listed by `render.preflight` and in the job result, per
+/// bound body: here a brushed look's anisotropy (isotropic) and its emission (not emitted).
+#[test]
+fn preflight_and_the_job_result_list_the_approximations() {
+    use serde_json::json;
+    let Some(executor) = executor() else { return };
+    let brushed = json!({"name": "Brushed", "nodes": [{"id": "surface", "kind": "standard_surface", "inputs": {
+        "base_color": [0.7, 0.7, 0.72], "base_metalness": 1.0, "specular_roughness": 0.3,
+        "specular_roughness_anisotropy": 0.6, "emission_luminance": 2.0}}], "output": "surface"});
+    let mut session = graph_design(executor, brushed);
+    let check = session.execute("render.preflight", &json!({"setup": "Graph"})).unwrap();
+    let want = json!([{"body_index": 0, "body_name": "Coupon", "inputs": [
+        {"input": "specular_roughness_anisotropy", "treatment": "isotropic"},
+        {"input": "emission_luminance", "treatment": "not_emitted"}]}]);
+    assert_eq!(check["graphs"]["approximations"], want, "{}", check["graphs"]);
+    assert_eq!(check["request"]["graphs"]["approximations"], want);
+    let (status, _) = completed(&mut session);
+    assert_eq!(serde_json::to_value(status.graphs.unwrap().approximations).unwrap(), want, "the job result reports them too");
+}
