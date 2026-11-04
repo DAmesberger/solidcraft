@@ -5,7 +5,7 @@
 
 use solidcraft_geom::Vec3;
 use solidcraft_render::anisotropic_surface::{AnisotropicSurface, VisualFrame};
-use solidcraft_render::clear_coat::{ClearCoat, tinted_coat_brdf};
+use solidcraft_render::clear_coat::{ClearCoat, tinted_brdf, tinted_coat_brdf};
 use solidcraft_render::surface::OpaqueSurface;
 
 use super::tests::evaluate_cases;
@@ -126,9 +126,9 @@ fn gpu_isotropic_anisotropy_is_todays_ggx() {
     let lobe = sc_aniso_base_brdf(base, parameters, sc_aniso_alpha(r, 0.0), n, t, v, l);
     let alpha = sc_aniso_alpha(r, 0.0);
     // 1: every exact path is bit-identical.
-    let exact = all(sc_layered_brdf(base, parameters, 0.0, t, coat, vec3<f32>(1.0), n, n, v, l) == sc_coated_brdf(base, parameters, coat, n, v, l))
-        && all(sc_layered_brdf(base, parameters, 0.7, vec3<f32>(0.0), coat, vec3<f32>(1.0), n, n, v, l) == sc_coated_brdf(base, parameters, coat, n, v, l))
-        && all(sc_layered_brdf(base, parameters, 0.0, t, vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(0.3), n, n, v, l) == today)
+    let exact = all(sc_layered_brdf(base, parameters, vec4<f32>(1.0), 0.0, t, coat, vec3<f32>(1.0), n, n, v, l) == sc_coated_brdf(base, parameters, coat, n, v, l))
+        && all(sc_layered_brdf(base, parameters, vec4<f32>(1.0), 0.7, vec3<f32>(0.0), coat, vec3<f32>(1.0), n, n, v, l) == sc_coated_brdf(base, parameters, coat, n, v, l))
+        && all(sc_layered_brdf(base, parameters, vec4<f32>(1.0), 0.0, t, vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(0.3), n, n, v, l) == today)
         && all(sc_aniso_reflect(n, t, v, r, 0.0) == 2.0 * max(dot(n, v), 0.0001) * n - v)
         && all(sc_aniso_reflect(n, vec3<f32>(0.0), v, r, 0.8) == 2.0 * max(dot(n, v), 0.0001) * n - v);
     let rel = abs(lobe - today) / max(abs(today), vec3<f32>(1e-30));
@@ -156,17 +156,20 @@ fn gpu_isotropic_anisotropy_is_todays_ggx() {
 /// keeps a sensible albedo.
 #[test]
 fn gpu_anisotropic_and_tinted_lobes_pass_the_white_furnace() {
-    // (roughness, anisotropy, nv, azimuth, metallic, coat (weight, roughness), coat colour)
+    // (roughness, anisotropy, nv, azimuth, metallic, specular (weight, colour), coat (weight,
+    // roughness), coat colour)
     let mut cases = Vec::new();
     for roughness in [0.045, 0.2, 0.5, 1.0] {
         for anisotropy in [0.0, 0.5, 0.9, 1.0] {
             for nv in [0.1_f64, 0.5, 1.0] {
                 for azimuth in [0.0, std::f64::consts::FRAC_PI_2] {
                     for metallic in [0.0, 1.0] {
-                        for (coat, colour) in
-                            [([0.0, 1.0], [1.0; 3]), ([1.0, 0.1], [1.0; 3]), ([1.0, 0.1], [0.3, 0.6, 0.9]), ([0.5, 0.4], [0.3, 0.6, 0.9])]
-                        {
-                            cases.push((roughness, anisotropy, nv, azimuth, metallic, coat, colour));
+                        for specular in [[1.0; 4], [0.6, 1.0, 0.5, 0.2]] {
+                            for (coat, colour) in
+                                [([0.0, 1.0], [1.0; 3]), ([1.0, 0.1], [1.0; 3]), ([1.0, 0.1], [0.3, 0.6, 0.9]), ([0.5, 0.4], [0.3, 0.6, 0.9])]
+                            {
+                                cases.push((roughness, anisotropy, nv, azimuth, metallic, specular, coat, colour));
+                            }
                         }
                     }
                 }
@@ -174,13 +177,14 @@ fn gpu_anisotropic_and_tinted_lobes_pass_the_white_furnace() {
         }
     }
     let mut inputs = Vec::new();
-    for (roughness, anisotropy, nv, azimuth, metallic, coat, colour) in &cases {
+    for (roughness, anisotropy, nv, azimuth, metallic, specular, coat, colour) in &cases {
         let s = (1.0 - nv * nv).sqrt();
         inputs.extend([
             [*roughness as f32, *anisotropy as f32, *metallic as f32, 0.0],
             [(s * azimuth.cos()) as f32, (s * azimuth.sin()) as f32, *nv as f32, 0.0],
             [coat[0] as f32, coat[1] as f32, 1.5, 0.0],
             row(*colour, 0.0),
+            specular.map(|x| x as f32),
         ]);
     }
     let body = r#"
@@ -191,6 +195,7 @@ fn gpu_anisotropic_and_tinted_lobes_pass_the_white_furnace() {
     let v = inputs[k + 1u].xyz;
     let coat = inputs[k + 2u].xyz;
     let colour = inputs[k + 3u].xyz;
+    let specular = inputs[k + 4u];
     let n = vec3<f32>(0.0, 0.0, 1.0);
     let t = vec3<f32>(1.0, 0.0, 0.0);
     var alpha = vec2<f32>(r * r);
@@ -214,23 +219,23 @@ fn gpu_anisotropic_and_tinted_lobes_pass_the_white_furnace() {
             let h = sc_unit(v + l);
             let vh = max(dot(v, h), 1e-7);
             let pdf = l.z / sc_pi + sc_aniso_ggx_d(h, alpha) * h.z / (4.0 * vh) + sc_aniso_ggx_d(h, vec2<f32>(ac)) * h.z / (4.0 * vh);
-            let f = sc_layered_brdf(vec3<f32>(1.0), parameters, anisotropy, t, coat, colour, n, n, v, l);
+            let f = sc_layered_brdf(vec3<f32>(1.0), parameters, specular, anisotropy, t, coat, colour, n, n, v, l);
             e += f * l.z / pdf;
         }
     }
     e /= f32(count);
     o = vec4<f32>(e, 0.0);
 "#;
-    let Some(got) = evaluate_cases(body, &inputs, 4) else { return gpu_required() };
+    let Some(got) = evaluate_cases(body, &inputs, 5) else { return gpu_required() };
     assert_eq!(got.len(), cases.len());
     let mut worst = 0.0_f32;
     for (k, (case, g)) in cases.iter().zip(&got).enumerate() {
-        let (_, _, nv, _, metallic, coat, colour) = case;
+        let (_, _, nv, _, metallic, specular, coat, colour) = case;
         assert!(g[..3].iter().all(|c| c.is_finite() && *c >= 0.0), "{case:?}: {g:?}");
         worst = worst.max(g[0].max(g[1]).max(g[2]));
         assert!(g[..3].iter().all(|c| *c <= 1.005), "{case:?}: albedo {g:?} above one");
         // Single scattering with separable Smith loses up to ~60 % at roughness 1.
-        if *metallic == 1.0 && *nv >= 0.5 && coat[0] == 0.0 && case.0 <= 0.5 {
+        if *metallic == 1.0 && *nv >= 0.5 && coat[0] == 0.0 && case.0 <= 0.5 && *specular == [1.0; 4] {
             assert!(g[..3].iter().all(|c| *c >= 0.5), "{case:?}: a white metal loses too much: {g:?}");
         }
         // The cases come in groups of four coats: none, white, tinted, tinted half coat. The
@@ -292,9 +297,73 @@ fn gpu_coat_colour_matches_the_f64_oracle() {
     }
 }
 
+/// The specular tint on the GPU (`sc_layered_brdf` with `specular` = (weight, colour), isotropic,
+/// under no coat and under a tinted coat) is the f64 oracle's `tinted_brdf`; the anisotropic
+/// branch of `sc_tinted_base_brdf` at equal axes along a tangent is the same lobe.
+#[test]
+fn gpu_specular_tint_matches_the_f64_oracle() {
+    let mut inputs = Vec::new();
+    let mut expected = Vec::new();
+    for (base, metallic, ior) in
+        [([0.8, 0.5, 0.2], 0.0, 1.5), ([0.95, 0.64, 0.54], 1.0, 1.5), ([0.3, 0.6, 0.9], 0.5, 1.0), ([0.9, 0.9, 0.9], 0.3, 2.4)]
+    {
+        for (weight, colour) in [(1.0, [1.0, 0.5, 0.2]), (0.5, [1.0; 3]), (0.0, [1.0; 3]), (0.8, [0.2, 0.9, 0.6])] {
+            for (coat, coat_colour) in [((0.0, 0.1, 1.5), [1.0; 3]), ((0.7, 0.2, 1.5), [0.1, 0.45, 0.12])] {
+                for (n, t) in frames() {
+                    for (v, l) in directions(n, t) {
+                        let mut surface = OpaqueSurface::new(v3(base), metallic, 0.35, ior).unwrap();
+                        if coat.0 > 0.0 {
+                            surface = surface.with_clear_coat(ClearCoat::new(coat.0, coat.1, coat.2).unwrap());
+                        }
+                        let e = tinted_brdf(surface, weight, v3(colour), v3(coat_colour), v3(n), v3(v), v3(l)).unwrap();
+                        expected.push((
+                            [e.x, e.y, e.z],
+                            format!(
+                                "base {base:?} m={metallic} ior={ior} specular {weight} {colour:?} coat {coat:?} {coat_colour:?} v={v:?} l={l:?}"
+                            ),
+                        ));
+                        inputs.extend([
+                            row(base, metallic),
+                            [weight as f32, colour[0] as f32, colour[1] as f32, colour[2] as f32],
+                            [coat.0 as f32, coat.1 as f32, coat.2 as f32, ior as f32],
+                            row(coat_colour, 0.0),
+                            row(n, 0.0),
+                            row(t, 0.0),
+                            row(v, 0.0),
+                            row(l, 0.0),
+                        ]);
+                    }
+                }
+            }
+        }
+    }
+    let body = r#"
+    let k = id.x * stride;
+    let c = inputs[k + 2u];
+    let parameters = vec3<f32>(i.w, 0.35, c.w);
+    let specular = inputs[k + 1u];
+    let n = inputs[k + 4u].xyz;
+    let t = inputs[k + 5u].xyz;
+    let v = inputs[k + 6u].xyz;
+    let l = inputs[k + 7u].xyz;
+    let layered = sc_layered_brdf(i.xyz, parameters, specular, 0.0, t, c.xyz, inputs[k + 3u].xyz, n, n, v, l);
+    let along = sc_tinted_base_brdf(i.xyz, parameters, specular, vec2<f32>(0.35 * 0.35), n, t, v, l);
+    let plain = sc_tinted_base_brdf(i.xyz, parameters, specular, vec2<f32>(0.35 * 0.35), n, vec3<f32>(0.0), v, l);
+    let rel = abs(along - plain) / max(plain, vec3<f32>(1e-20));
+    o = vec4<f32>(layered, max(rel.x, max(rel.y, rel.z)));
+"#;
+    let Some(got) = evaluate_cases(body, &inputs, 8) else { return gpu_required() };
+    assert_eq!(got.len(), expected.len());
+    for (g, (e, what)) in got.iter().zip(&expected) {
+        assert!((0..3).all(|k| close(g[k], e[k])), "{what}: {g:?} vs {e:?}");
+        assert!(g[3] <= 1e-4, "{what}: the anisotropic branch at equal axes is {} off", g[3]);
+    }
+}
+
 /// The tangent is made perpendicular and turned counter-clockwise about the normal, a tangent
 /// along the normal (or none) gives no direction; OpenPBR's roughness axes; the see-through
-/// fallback's body colour and coverage; the bent reflection at full bend and without roughness.
+/// fallback's body colour and coverage; the bent reflection at full bend and without roughness;
+/// a cut-out's premultiplied coverage (opacity 1 unchanged, below 0 nothing).
 #[test]
 fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
     let body = r#"
@@ -314,6 +383,8 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
             let r = sc_aniso_reflect(n, vec3<f32>(1.0, 0.0, 0.0), v, 0.5, 1.0);
             o = vec4<f32>(r - vec3<f32>(v.x, -v.y, v.z), length(r));
         }
+        case 9u: { o = sc_cover(vec4<f32>(0.4, 0.6, 0.8, 0.9), 0.5); }
+        case 10u: { o = sc_cover(vec4<f32>(0.4, 0.6, 0.8, 0.9), 1.0) + sc_cover(vec4<f32>(1.0), -1.0); }
         case 8u: {
             // A smooth surface is not bent.
             let v = sc_unit(vec3<f32>(0.3, 0.4, 0.8));
@@ -322,11 +393,11 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
         default: {}
     }
 "#;
-    let Some(got) = evaluate_cases(body, &[[0.0; 4]; 9], 1) else { return gpu_required() };
+    let Some(got) = evaluate_cases(body, &[[0.0; 4]; 11], 1) else { return gpu_required() };
     let near = |g: [f32; 4], e: [f64; 4]| g.iter().zip(e).all(|(a, b)| (f64::from(*a) - b).abs() < 1e-5);
     let at = 0.25 * (2.0 / 1.25_f64).sqrt();
     let at1 = 0.25 * 2.0_f64.sqrt();
-    let expected: [[f64; 4]; 9] = [
+    let expected: [[f64; 4]; 11] = [
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
@@ -336,6 +407,8 @@ fn gpu_tangent_alpha_see_through_and_bent_reflection_match_analytic_values() {
         [0.3 + 0.5 * (2.0 / 3.0), 0.3, 0.3, 1.0 - 0.5 / 3.0],
         [0.0, 0.0, 0.0, 1.0],
         [0.0, 0.0, 0.0, 0.0],
+        [0.2, 0.3, 0.4, 0.45],
+        [0.4, 0.6, 0.8, 0.9],
     ];
     for (k, e) in expected.iter().enumerate() {
         assert!(near(got[k], *e), "case {k}: {:?} vs {e:?}", got[k]);
@@ -352,13 +425,15 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
     let un = sc_unit(n);
     let t = sc_aniso_tangent(un, sc_unit(p), p.x);
     let alpha = sc_aniso_alpha(p.y, p.z);
-    var c = sc_layered_brdf(vec3<f32>(0.5), vec3<f32>(0.0, 0.4, 1.5), p.z, t, vec3<f32>(1.0, 0.1, 1.5), vec3<f32>(0.2, 0.5, 0.2), un, sc_unit(n + p * 0.1), sc_unit(p + n), sc_unit(n - p));
+    var c = sc_layered_brdf(vec3<f32>(0.5), vec3<f32>(0.0, 0.4, 1.5), vec4<f32>(p.x, 0.5, 0.6, 0.7), p.z, t, vec3<f32>(1.0, 0.1, 1.5), vec3<f32>(0.2, 0.5, 0.2), un, sc_unit(n + p * 0.1), sc_unit(p + n), sc_unit(n - p));
     c += sc_aniso_base_brdf(vec3<f32>(0.5), vec3<f32>(1.0, 0.4, 1.5), alpha, un, t, sc_unit(p + n), un);
     c += sc_coat_layer(c, vec3<f32>(0.5, 0.2, 1.4), vec3<f32>(0.9), un, sc_unit(p + n), un) * sc_coat_tint(0.5, vec3<f32>(0.3));
     c += sc_aniso_reflect(un, t, sc_unit(p + n), p.y, p.z);
+    c += sc_tinted_base_brdf(vec3<f32>(0.5), vec3<f32>(0.5, 0.4, 1.5), vec4<f32>(0.8, p), alpha, un, t, sc_unit(p + n), un);
+    c += sc_tinted_fresnel(sc_specular_f0(c, 0.5, 1.5, vec4<f32>(p, 1.0)), sc_specular_f90(0.5, 1.5, vec4<f32>(p, 1.0)), p.x);
     let x = sc_aniso_ggx_d(un, alpha) + sc_aniso_smith_g1(un, alpha);
     let s = sc_see_through(c, p.x, vec3<f32>(0.5, 0.2, 0.1));
-    return vec4<f32>(s.rgb + vec3<f32>(x), s.a);
+    return sc_cover(vec4<f32>(s.rgb + vec3<f32>(x), s.a), p.y);
 }
 "#;
     let source = format!("{}\n{probe}", super::library());
@@ -376,7 +451,17 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
     let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
         .and_then(|mut w| w.write().map(|_| ()));
     assert!(written.is_ok(), "{written:?}");
-    for name in ["sc_layered_brdf", "sc_aniso_base_brdf", "sc_coat_layer", "sc_aniso_reflect", "sc_see_through", "sc_aniso_tangent"] {
+    for name in [
+        "sc_layered_brdf",
+        "sc_aniso_base_brdf",
+        "sc_coat_layer",
+        "sc_aniso_reflect",
+        "sc_see_through",
+        "sc_aniso_tangent",
+        "sc_tinted_base_brdf",
+        "sc_specular_f0",
+        "sc_cover",
+    ] {
         assert!(out.contains(name), "{name} is in the GLSL");
     }
 }
