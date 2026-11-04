@@ -296,6 +296,10 @@ fn boundary(
         .map(|e| (e.vertices[0].min(e.vertices[1]), e.vertices[0].max(e.vertices[1])))
         .collect();
     let vertex_point = |v: u32| b.vertices.get(v as usize).map(|x| (Vec3::new(x.point[0], x.point[1], x.point[2]), x.tolerance.max(0.0)));
+    // The face's vertices so far in cells of the chord tolerance, the farthest a vertex can be from
+    // one it is the same point as: a face of thousands of holes looks at the ones near each.
+    let mut vertex_cells: std::collections::HashMap<[i64; 3], Vec<u32>> = std::collections::HashMap::new();
+    let cell_of = |p: Vec3| [p.x, p.y, p.z].map(|c| (c / rules.tol).floor() as i64);
     // Each loop's nodes that are another edge's node (see [`edges::snap`]).
     let mut snapped: Vec<Vec<bool>> = Vec::with_capacity(face.loops.len());
     for l in &face.loops {
@@ -361,11 +365,17 @@ fn boundary(
                         // the record's corners a hair apart (a planar boolean's, where a cut-out's
                         // corner touches another loop's corner) are one point of the face, so its
                         // loops touch there instead of crossing.
-                        let same = vertex_point(v).and_then(|(p, tv)| {
-                            at_vertex.iter().filter(|(w, _)| **w != v && !joined.contains(&(v.min(**w), v.max(**w)))).find_map(|(w, wq)| {
-                                let (pw, tw) = vertex_point(*w)?;
-                                (p.dist(pw) <= tv.max(tw).min(rules.tol)).then_some(*wq)
-                            })
+                        let cell = vertex_point(v).map(|(p, _)| cell_of(p));
+                        let same = vertex_point(v).zip(cell).and_then(|((p, tv), [x, y, z])| {
+                            let around = |c: i64| c.saturating_sub(1)..=c.saturating_add(1);
+                            let near = around(x).flat_map(|i| around(y).flat_map(move |j| around(z).map(move |k| [i, j, k])));
+                            near.filter_map(|c| vertex_cells.get(&c))
+                                .flatten()
+                                .filter(|w| **w != v && !joined.contains(&(v.min(**w), v.max(**w))))
+                                .find_map(|w| {
+                                    let (pw, tw) = vertex_point(*w)?;
+                                    (p.dist(pw) <= tv.max(tw).min(rules.tol)).then(|| at_vertex.get(w).copied()).flatten()
+                                })
                         });
                         if let Some(mut w) = same.filter(|w| !(0..2).any(|d| pole_along(*w, d) || pole_along(*q, d))) {
                             for d in 0..2 {
@@ -374,6 +384,9 @@ fn boundary(
                             *q = w;
                         }
                         at_vertex.insert(v, *q);
+                        if let Some(cell) = cell {
+                            vertex_cells.entry(cell).or_default().push(v);
+                        }
                     }
                 }
             }

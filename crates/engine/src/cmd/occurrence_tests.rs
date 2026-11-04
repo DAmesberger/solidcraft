@@ -1853,3 +1853,39 @@ fn a_body_seen_in_another_placement_pastes_into_another_design_under_its_own_nam
     let is = s.world_state().unwrap().body("Cube").unwrap().mesh().bounds();
     assert!(was.min.dist(is.min) < 1e-6 && was.max.dist(is.max) < 1e-6, "{was:?} vs {is:?}");
 }
+
+#[test]
+fn copy_with_translations_places_every_copy_in_one_step() {
+    let mut s = Session::default();
+    let (part, first) = created(&mut s, "Peg");
+    run(&mut s, "solid.cylinder", json!({"base": [0, 0, 0], "radius": 0.3, "height": 1.6, "axis": "Z", "name": "Barrel"}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "occurrence.move", json!({"occurrence": first, "translate": [5, 5, 0]}));
+    let undo = s.undo.len();
+    let offsets: Vec<Value> = (1..=2000u32).map(|k| json!([f64::from(k % 50) * 1.27, f64::from(k / 50) * 1.27, 0])).collect();
+    let reply = run(&mut s, "occurrence.copy", json!({"component": part, "translations": offsets}));
+    let ids: Vec<u64> = reply["occurrences"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert_eq!(ids.len(), 2000);
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    // Each copy stands at its offset from the first occurrence, numbered after the ones before.
+    for (k, id) in (1..=2000u32).zip(&ids) {
+        let o = s.doc.occurrences.iter().find(|o| o.id == *id).unwrap();
+        assert_eq!(o.component, part);
+        assert_eq!(o.name, format!("Peg:{}", k + 1));
+        assert!((o.transform[3][0] - (5.0 + f64::from(k % 50) * 1.27)).abs() < 1e-12);
+        assert!((o.transform[3][1] - (5.0 + f64::from(k / 50) * 1.27)).abs() < 1e-12);
+    }
+    let world = s.world_state().unwrap();
+    assert_eq!(world.bodies.iter().filter(|b| b.component == part).count(), 2001);
+    // A bad offset, or translations given with translate, change nothing.
+    let doc = s.doc.clone();
+    for bad in [
+        json!({"component": part, "translations": [[0, 0, 0], [1e12, 0, 0]]}),
+        json!({"component": part, "translations": [[0, 0]]}),
+        json!({"component": part, "translations": []}),
+        json!({"component": part, "translations": [[1, 0, 0]], "translate": [1, 0, 0]}),
+    ] {
+        assert!(s.execute("occurrence.copy", &bad).is_err(), "{bad}");
+        assert_eq!(s.doc, doc);
+    }
+}

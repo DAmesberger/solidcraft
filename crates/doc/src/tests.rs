@@ -417,6 +417,41 @@ fn params_and_serialization() {
     assert!(doc.param("d1").is_none(), "unused model parameters are pruned");
 }
 
+/// An expression evaluates the parameters it names (and theirs) only, to the values evaluating
+/// every parameter gives them: user parameters, model parameters and named feature inputs, the
+/// last definition of a name winning as it does there. A parameter in a cycle has no value.
+#[test]
+fn an_expression_reads_the_values_every_parameter_gets() {
+    use crate::expr::Kind;
+    let (mut doc, extrude) = plate_doc();
+    doc.set_param("depth", "width / 4 + 1 mm", None, None).unwrap();
+    doc.set_param("twice", "depth * 2", None, None).unwrap();
+    if let Some(f) = doc.feature_mut(extrude)
+        && let FeatureKind::Extrude { extent, .. } = &mut f.kind
+    {
+        extent.distance = "twice - 1".into();
+    }
+    doc.name_feature_inputs(extrude);
+    // A cycle the design may hold (an imported table) that a check would refuse.
+    for (name, e) in [("loop_a", "loop_b + 1 mm"), ("loop_b", "loop_a")] {
+        doc.params.push(Param { name: name.into(), expr: e.into(), unit: "mm".into(), comment: String::new(), model: false });
+    }
+    let (vals, errors) = doc.param_values();
+    let defs = doc.param_defs();
+    assert!(defs.len() >= 7, "user, model and feature parameters: {defs:?}");
+    for d in &defs {
+        match vals.get(&d.name) {
+            Some(v) => assert_eq!(doc.eval(&d.name, Kind::Length).unwrap(), v.to_kind(Kind::Length).unwrap(), "{}", d.name),
+            None => assert!(errors.contains_key(&d.name) && doc.eval(&d.name, Kind::Length).is_err(), "{}", d.name),
+        }
+    }
+    assert!(doc.eval("loop_a", Kind::Length).is_err());
+    assert_eq!(doc.eval("twice + width", Kind::Length).unwrap(), 2.0 * (40.0 / 4.0 + 1.0) + 40.0);
+    // A change checked without copying the design reports what evaluating all of it reports.
+    assert!(doc.set_param("depth", "twice", None, None).unwrap_err().to_string().contains("circular reference"));
+    assert_eq!(doc.eval("depth", Kind::Length).unwrap(), 11.0, "a refused change changes nothing");
+}
+
 /// #4783: a body reads the material its mass is computed with, as the library or the design
 /// spells it. An unknown name, or a design material with an unusable density, reads as the
 /// default material it weighs. `density` agrees in every case, and a configuration keeps the
