@@ -845,7 +845,7 @@ fn appearance_library(_s: &mut Session, _p: &Value) -> Result<Value> {
     let mut list: Vec<LibraryAppearance> = solidcraft_doc::appearance::LIBRARY
         .iter()
         .map(|(n, c, o)| {
-            let look = LookReply { name: n.to_string(), color: format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]), opacity: *o, pbr: None };
+            let look = LookReply { name: n.to_string(), color: format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]), opacity: *o, pbr: None, graph: None, values: None };
             LibraryAppearance::Plain(PlainAppearance { look, category: category(n) })
         })
         .collect();

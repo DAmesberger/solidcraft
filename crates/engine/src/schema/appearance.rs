@@ -55,6 +55,14 @@ pub struct AppearanceAssignParams {
     /// recipe keeps its own; `null` clears it.
     #[serde(default)]
     pub pbr: Option<PbrParam>,
+    /// A material graph's id (`appearance.graph.list`). A graph look takes no library `appearance`
+    /// and no `pbr`; its `color` is the graph's base colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<String>,
+    /// Values for the graph's interface inputs: by input name, a number, a 2- or 3-vector,
+    /// `{"srgb8": [r,g,b]}` or `{"texture": sha256}`. Checked by the command against the graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<serde_json::Map<String, Value>>,
 }
 
 /// `appearance.assign`'s `faces`: at most 10000 points, each `[x, y, z]` (or `{x, y, z}`) or
@@ -215,11 +223,25 @@ pub struct LookReply {
     /// Its opaque PBR response, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<PbrReply>,
+    /// The material graph's id, when the look names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<String>,
+    /// The look's values for the graph's interface inputs, when it sets any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Value>,
 }
 
 impl From<&Look> for LookReply {
     fn from(l: &Look) -> Self {
-        LookReply { name: l.name.clone(), color: l.hex(), opacity: l.opacity, pbr: l.pbr.map(PbrReply::from) }
+        let values = (l.graph.is_some() && !l.values.is_empty()).then(|| serde_json::to_value(&l.values).ok()).flatten();
+        LookReply {
+            name: l.name.clone(),
+            color: l.hex(),
+            opacity: l.opacity,
+            pbr: l.pbr.map(PbrReply::from),
+            graph: l.graph.as_ref().map(|g| g.as_str().to_string()),
+            values,
+        }
     }
 }
 
