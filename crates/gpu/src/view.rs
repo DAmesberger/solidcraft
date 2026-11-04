@@ -4044,6 +4044,8 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         tris(pass, &res.pbr, &m.pbr);
         m.graphs.draw(pass, &res.materials, tally);
+        // The material draws set group 3 to their own layout; the pipelines below read the studio's.
+        pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(res.drawn_look(cb).map(|look| look.studio)), &[]);
         if !cb.product {
             res.clouds.paint(pass, &res.cloud_pipes, tally);
         }
