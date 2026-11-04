@@ -701,3 +701,33 @@ fn graph_textures_are_resident_sized_and_keep_height_precision() {
         assert_eq!([0, 1, 2, 3].map(|k| words(&texture, first + 4 * texel + k)), [v, v, v, 1.0]);
     }
 }
+
+/// Diagnostics (track C1, `--ignored --nocapture`): the brushed nickel silver fixture on a sphere
+/// through the path tracer, against a plain metal and a plain dielectric of its roughness; the
+/// luminance's range over the sphere shows whether the metal reflects its surroundings.
+#[test]
+#[ignore]
+fn brushed_sphere_in_the_path_tracer() {
+    let Some(executor) = executor() else { return };
+    let text = include_str!("../../../render/tests/fixtures/material_graph/brushed-nickel-silver.json");
+    let (ir, _) = graph(text);
+    let stats = |px: &[[f32; 4]]| {
+        let lum: Vec<f32> = px.iter().map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).filter(|l| l.is_finite()).collect();
+        let (min, max) = lum.iter().fold((f32::MAX, f32::MIN), |(a, b), l| (a.min(*l), b.max(*l)));
+        let mean = lum.iter().sum::<f32>() / lum.len().max(1) as f32;
+        format!("mean {mean:.3} min {min:.3} max {max:.3}")
+    };
+    let mut with_graph = request(48);
+    with_graph.graphs = Some(Arc::new(GraphMaterials::new(vec![material(&ir)], vec![binding(0)]).unwrap()));
+    let brushed = render(&executor, sphere(white()), with_graph);
+    let metal = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.45, 1.5).unwrap()), request(48));
+    let mirror = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.15, 1.5).unwrap()), request(48));
+    let plastic = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 0.0, 0.45, 1.5).unwrap()), request(48));
+    eprintln!(
+        "path: brushed {} | metal 0.45 {} | metal 0.15 {} | dielectric 0.45 {}",
+        stats(&brushed),
+        stats(&metal),
+        stats(&mirror),
+        stats(&plastic)
+    );
+}
