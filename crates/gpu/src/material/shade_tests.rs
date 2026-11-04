@@ -159,3 +159,108 @@ fn specular_tint_coat_colour_and_anisotropy_reach_the_picture() {
     assert!(changed > SIZE * SIZE / 4, "anisotropy changes the picture ({changed} pixels)");
     assert_eq!(middle(&round)[3], 255.0);
 }
+
+/// [`draw`] into a target of `format`, at the fixed view, the realistic look: RGBA bytes as stored.
+fn draw_into(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat) -> Option<Vec<u8>> {
+    let (_, device, queue) = crate::open_headless().ok()?;
+    let valid = validate(graph).unwrap_or_else(|e| panic!("{e}"));
+    let ir = std::sync::Arc::new(lower(&valid).unwrap_or_else(|e| panic!("{e}")));
+    let base = base_sample(&valid).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    let mut scene = GpuScene::default();
+    let m = scene.graphs.material(&ir, &words, &base).unwrap_or_else(|e| panic!("{e}"));
+    for [x, y] in [[-12.0, -12.0], [12.0, -12.0], [12.0, 12.0], [-12.0, -12.0], [12.0, 12.0], [-12.0, 12.0]] {
+        scene.graphs.vertex(m, [x, y, 0.0], [0.0, 0.0, 1.0], [x, y, 0.0]);
+    }
+    let depth = crate::depth_format(&device, true);
+    let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+    r.materials_mut().no_time_budget = true;
+    let frame = Frame { key, product_look: Some(ProductLook::default()), ..test_frame(scene, 1.0) };
+    let texture = |format, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: SIZE as u32, height: SIZE as u32, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+    let color_view = color.create_view(&Default::default());
+    let depth_texture = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
+    let depth_view = depth_texture.create_view(&Default::default());
+    let mut encoder = device.create_command_encoder(&Default::default());
+    r.prepare(&device, &queue, &mut encoder, &frame);
+    {
+        let mut pass = encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(crate::view::far_depth(crate::view::reversed_depth(Some(depth)))),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: depth.has_stencil_aspect().then_some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        r.paint(&frame, &mut pass, [0.0, 0.0, SIZE as f32, SIZE as f32]);
+    }
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (SIZE * SIZE * 4) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        color.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(SIZE as u32 * 4), rows_per_image: Some(SIZE as u32) },
+        },
+        wgpu::Extent3d { width: SIZE as u32, height: SIZE as u32, depth_or_array_layers: 1 },
+    );
+    queue.submit([encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    let bytes = read.slice(..).get_mapped_range().map(|b| b.to_vec()).unwrap_or_default();
+    Some(bytes)
+}
+
+/// A dark surface in the realistic look stores the same bytes on an sRGB target as on a linear
+/// one (the look encodes and dithers itself, and hands an sRGB target the exact inverse). Dark
+/// channels at or below 10/255 used to come back up to 12.92× too bright on sRGB targets, which
+/// the dither flipped pixel by pixel into coloured stripes on coated blacks.
+#[test]
+fn dark_surfaces_store_the_same_bytes_on_srgb_targets() {
+    for (k, base) in [[0.0, 0.0, 0.0], [0.002, 0.003, 0.004], [0.01, 0.012, 0.016], [0.03, 0.03, 0.03]].into_iter().enumerate() {
+        let graph = surface(json!([]), json!({"base_color": base, "specular_roughness": 0.9, "specular_ior": 1}));
+        let key = 40 + 2 * k as u64;
+        let Some(linear) = draw_into(&graph, key, wgpu::TextureFormat::Rgba8Unorm) else { return gpu_required() };
+        let Some(srgb) = draw_into(&graph, key + 1, wgpu::TextureFormat::Rgba8UnormSrgb) else { return };
+        let mut worst = 0;
+        for y in 8..SIZE - 8 {
+            for x in 8..SIZE - 8 {
+                let i = (y * SIZE + x) * 4;
+                for c in 0..3 {
+                    worst = worst.max(linear[i + c].abs_diff(srgb[i + c]));
+                }
+            }
+        }
+        assert!(worst <= 1, "base {base:?}: the sRGB target stores up to {worst} steps from the linear one");
+    }
+}
