@@ -372,7 +372,11 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
         radiance += indirect * p.y;
         radiance += s.emission_color * s.emission_luminance;
         let encoded = look_encode(look_tone(radiance * p.x), f.pos.xy);
-        if (u.back.w > 0.5) { return sc_cover(vec4<f32>(to_linear(encoded), see.a), s.opacity); }
+        // An sRGB target re-encodes what it stores: hand it the exact inverse of the dithered
+        // encode (`srgb_decode`, with the straight segment), so the stored bytes are `encoded`.
+        // `to_linear` skips that segment and lifted dark channels (≤ 10/255) up to 12.92×, which
+        // the dither flipped pixel by pixel into coloured stripes.
+        if (u.back.w > 0.5) { return sc_cover(vec4<f32>(srgb_decode(encoded), see.a), s.opacity); }
         return sc_cover(vec4<f32>(encoded, see.a), s.opacity);
     }
     radiance += s.emission_color * s.emission_luminance;

@@ -544,7 +544,8 @@ fn test_image() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// `image` nodes sample the texture buffer as the reference samples the image: bilinear at the
-/// top-row-first texels, sRGB decoded before filtering, under every wrap mode and channel.
+/// top-row-first texels, sRGB decoded before filtering, under every wrap mode and channel; their
+/// one-texel slopes tilt a height-driven normal as the reference's do.
 #[test]
 fn images_sample_as_the_reference_does() {
     use solidcraft_render::job::graphs::GraphTexture;
@@ -559,7 +560,9 @@ fn images_sample_as_the_reference_does() {
             {"id": "tc", "kind": "texcoord.planar", "inputs": {"u": [2.5, 0.5, 0.0], "v": [-0.5, 2.5, 0.5]}, "params": {"space": "world"}},
             {"id": "img", "kind": "image", "params": {"space": space, "wrap": wrap, "channel": channel},
              "inputs": {"texcoord": {"from": "tc"}, "file": {"texture": sha}}},
-            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": {"from": "img.value"}}}],
+            {"id": "bump", "kind": "normal.from_height", "inputs": {"height": {"from": "img.value"}, "relief_mm": 0.05}},
+            {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": {"from": "img.value"},
+             "geometry_normal": {"from": "bump"}}}],
             "output": "surface"});
         texts.push((space == "srgb", graph.to_string()));
     }
@@ -720,14 +723,34 @@ fn brushed_sphere_in_the_path_tracer() {
     let mut with_graph = request(48);
     with_graph.graphs = Some(Arc::new(GraphMaterials::new(vec![material(&ir)], vec![binding(0)]).unwrap()));
     let brushed = render(&executor, sphere(white()), with_graph);
-    let metal = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.45, 1.5).unwrap()), request(48));
+    let metal = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.28, 1.5).unwrap()), request(48));
     let mirror = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.15, 1.5).unwrap()), request(48));
-    let plastic = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 0.0, 0.45, 1.5).unwrap()), request(48));
+    let plastic = render(&executor, sphere(OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 0.0, 0.28, 1.5).unwrap()), request(48));
     eprintln!(
-        "path: brushed {} | metal 0.45 {} | metal 0.15 {} | dielectric 0.45 {}",
+        "path: brushed {} | metal 0.28 {} | metal 0.15 {} | dielectric 0.28 {}",
         stats(&brushed),
         stats(&metal),
         stats(&mirror),
         stats(&plastic)
     );
+}
+
+/// What the path tracer approximates is listed by `render.preflight` and in the job result, per
+/// bound body: here a brushed look's anisotropy (isotropic) and its emission (not emitted).
+#[test]
+fn preflight_and_the_job_result_list_the_approximations() {
+    use serde_json::json;
+    let Some(executor) = executor() else { return };
+    let brushed = json!({"name": "Brushed", "nodes": [{"id": "surface", "kind": "standard_surface", "inputs": {
+        "base_color": [0.7, 0.7, 0.72], "base_metalness": 1.0, "specular_roughness": 0.3,
+        "specular_roughness_anisotropy": 0.6, "emission_luminance": 2.0}}], "output": "surface"});
+    let mut session = graph_design(executor, brushed);
+    let check = session.execute("render.preflight", &json!({"setup": "Graph"})).unwrap();
+    let want = json!([{"body_index": 0, "body_name": "Coupon", "inputs": [
+        {"input": "specular_roughness_anisotropy", "treatment": "isotropic"},
+        {"input": "emission_luminance", "treatment": "not_emitted"}]}]);
+    assert_eq!(check["graphs"]["approximations"], want, "{}", check["graphs"]);
+    assert_eq!(check["request"]["graphs"]["approximations"], want);
+    let (status, _) = completed(&mut session);
+    assert_eq!(serde_json::to_value(status.graphs.unwrap().approximations).unwrap(), want, "the job result reports them too");
 }
