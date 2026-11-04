@@ -14,6 +14,7 @@ use serde::Deserialize;
 use solidcraft_doc::appearance::Look;
 use solidcraft_doc::appearance_graph::{GraphId, is_texture_key, limits, texture_key};
 use solidcraft_render::ProductScene;
+use solidcraft_render::job::graphs::{GraphBinding, GraphMaterial, GraphMaterials, GraphTexture};
 use solidcraft_render::material_graph::{self as mg, Constant, Ir, PortType};
 
 use crate::{Result, Session, params::bad};
@@ -65,18 +66,8 @@ pub(crate) struct CapturedBinding {
     pub object_to_world: Option<[[f64; 4]; 3]>,
 }
 
-/// The capture of one job. Wiring it to track PT's `solidcraft_render::job::graphs` is a
-/// field-for-field conversion in `prepare_progressive` (errors through `job_error`):
-///
-/// ```text
-/// materials: GraphMaterial::new(m.ir, &m.values,
-///     m.textures.map(|t| t.map(|(bytes, srgb)| GraphTexture::new((*bytes).clone(), srgb)).transpose()))
-/// bindings:  GraphBinding { body_index, body_name, face, material, object_to_world }
-/// request:   ImageRequest { graphs: Some(Arc::new(GraphMaterials::new(materials, bindings)?)), .. }
-/// ```
-///
-/// `tests::captures_meet_the_path_back_ends_constructor_rules` holds a capture to the rules those
-/// constructors check.
+/// The capture of one job: [`CapturedGraphs::to_job`] turns it into the path tracer's input,
+/// and [`CapturedGraphs::give_glass`] gives see-through materials' bodies their glass.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CapturedGraphs {
     pub materials: Vec<CapturedMaterial>,
@@ -93,6 +84,54 @@ impl CapturedGraphs {
             .map(|m| serde_json::json!({"graph": m.graph.as_str(), "values": m.values, "cost": m.ir.cost, "textures": m.textures.iter().filter(|t| t.is_some()).count()}))
             .collect();
         serde_json::json!({"materials": materials, "bindings": self.bindings.len()})
+    }
+}
+
+impl CapturedGraphs {
+    /// The path tracer's input (`solidcraft_render::job::graphs`), field for field. Its
+    /// constructors check the values, textures, bindings and bounds again.
+    pub(crate) fn to_job(&self) -> solidcraft_render::job::Result<GraphMaterials> {
+        let mut materials = Vec::with_capacity(self.materials.len());
+        for m in &self.materials {
+            let textures = m
+                .textures
+                .iter()
+                .map(|t| t.as_ref().map(|(bytes, srgb)| GraphTexture::new((**bytes).clone(), *srgb)).transpose())
+                .collect::<solidcraft_render::job::Result<Vec<_>>>()?;
+            materials.push(GraphMaterial::new(m.ir.clone(), &m.values, textures)?);
+        }
+        let bindings = self
+            .bindings
+            .iter()
+            .map(|b| GraphBinding {
+                body_index: b.body_index,
+                body_name: b.body_name.clone(),
+                face: b.face,
+                material: b.material,
+                object_to_world: b.object_to_world,
+            })
+            .collect();
+        GraphMaterials::new(materials, bindings)
+    }
+
+    /// Glass for the bodies and faces a see-through material shades (`GraphMaterial::see_through`),
+    /// where the scene has none: the path tracer refracts only through captured transmission. A
+    /// body binding gives the body glass, a face binding that face.
+    pub(crate) fn give_glass(job: &GraphMaterials, scene: &mut ProductScene) {
+        for b in job.bindings() {
+            let Some(glass) = job.materials().get(b.material).and_then(|m| m.see_through()) else { continue };
+            let Some(mesh) = scene.meshes.get_mut(b.body_index).filter(|m| m.name == b.body_name) else { continue };
+            match b.face {
+                None => {
+                    mesh.transmission.get_or_insert(glass);
+                }
+                Some(face) => {
+                    if let Some(f) = mesh.faces.iter_mut().find(|f| f.face == face) {
+                        f.transmission.get_or_insert(glass);
+                    }
+                }
+            }
+        }
     }
 }
 
