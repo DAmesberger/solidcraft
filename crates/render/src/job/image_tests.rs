@@ -7,6 +7,7 @@ fn request() -> ImageRequest {
     let mut camera = Camera { distance: 50.0, ..Default::default() };
     camera.set_view(StandardView::Front);
     ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,

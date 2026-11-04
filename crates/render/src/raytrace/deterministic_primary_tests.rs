@@ -64,6 +64,7 @@ fn task(samples: u8, selected: bool, face_override: bool, shadows: bool) -> Imag
         ..Default::default()
     };
     let request = ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,
@@ -229,6 +230,7 @@ fn spatial_reuse_fixture(s: u8, r: u8, selected: bool, face_override: bool, shad
         ..Default::default()
     };
     let request = ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,

@@ -3698,6 +3698,43 @@ impl Renderer {
         self.materials.wants_redraw()
     }
 
+    /// What this device keeps of material textures (docs/material-graph.md §4.3): what a
+    /// [`crate::material::TextureDecoder`] for it prepares to.
+    pub fn material_texture_policy(&self) -> crate::material::ResidentPolicy {
+        self.materials.textures.policy
+    }
+
+    /// The formats the adapter draws into ([`crate::material::TextureCaps::of`]); until set, the
+    /// ones every device has.
+    pub fn set_material_texture_caps(&mut self, caps: crate::material::TextureCaps) {
+        self.materials.textures.caps = caps;
+    }
+
+    pub fn material_texture_caps(&self) -> crate::material::TextureCaps {
+        self.materials.textures.caps
+    }
+
+    /// Make a decoded material texture resident: upload it, build its mips on the GPU, and keep
+    /// the texture budget by dropping levels of the least recently drawn. Draws of its key
+    /// sample it from the next frame on; until then they draw their `image` nodes' `default`.
+    pub fn install_material_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: crate::material::PreparedTexture,
+    ) -> Result<(), solidcraft_render::texture_input::TextureError> {
+        self.materials.textures.install(device, queue, texture)
+    }
+
+    /// Drop a material texture (its asset left the design).
+    pub fn remove_material_texture(&mut self, key: &crate::material::TextureKey) {
+        self.materials.textures.remove(key);
+    }
+
+    pub fn material_texture_stats(&self) -> crate::material::TextureStats {
+        self.materials.textures.stats()
+    }
+
     #[cfg(test)]
     pub(crate) fn materials_mut(&mut self) -> &mut crate::material::cache::Materials {
         &mut self.materials

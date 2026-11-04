@@ -116,6 +116,7 @@ impl TextureMap {
             MapRole::Roughness => 2,
             MapRole::Metallic => 3,
             MapRole::AmbientOcclusion => 4,
+            MapRole::Height => 5,
         };
         (self.digest, role)
     }
@@ -350,7 +351,7 @@ mod tests {
         wrong.normal = wrong.base_color.take();
         assert!(RuntimeTextures::new(vec![wrong]).is_err());
         let mut bytes = png(1, 1, &[0; 4]);
-        bytes.reserve_exact(16 * 1024 * 1024);
+        bytes.reserve_exact(crate::texture_input::MAX_TEXTURE_BYTES);
         assert!(TextureMap::new(bytes, MapRole::BaseColor).is_err());
         assert!(TextureMap::new(png(1, 1, &[0; 4]), MapRole::AmbientOcclusion).is_err());
     }

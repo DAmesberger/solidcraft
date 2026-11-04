@@ -64,6 +64,7 @@ fn request(orientation: AnisotropicOrientation, reflect: bool) -> ImageRequest {
         ..Default::default()
     };
     ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,

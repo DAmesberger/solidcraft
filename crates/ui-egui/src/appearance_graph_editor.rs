@@ -4,9 +4,16 @@
 //! The editor holds no design state of its own. It reads command replies
 //! (`appearance.graph.nodes`, `.list`, `.get`, `.validate`, `appearance.texture.list`) whenever
 //! the design's revision changes, and every edit is one command: values through
-//! `appearance.graph.edit` (a drag or a typed number is one step, sent when it settles) and
-//! structure (layers, drivers) through `appearance.graph.set`. A refused command leaves the
-//! design unchanged, so the editor simply shows the refusal and keeps the replies it had.
+//! `appearance.graph.edit` (a drag or a typed number is one step, sent when it settles), and
+//! structure (layers, drivers) as the edit ops that turn the graph into the new one, with
+//! `connect … fallback` so a driven input keeps its constant for the standard view. Only a
+//! change that moves the output (the top layer added or removed) replaces the graph with
+//! `appearance.graph.set`. Every change is validated first, so a refused one names its rows.
+//! A refused command leaves the design unchanged and the editor keeps the replies it had.
+//!
+//! The dialog's look can name a graph (`Link`): the section defaults to it, its interface rows
+//! then edit the look's own values, "Use on picked objects" assigns it, and "Convert to material
+//! graph" (`appearance.graph.convert`) makes a scalar or PBR look a graph.
 //!
 //! A graph that is not stack-shaped opens read-only with a summary and "Edit as JSON".
 
@@ -14,6 +21,9 @@ mod model;
 mod swatch;
 #[cfg(test)]
 mod tests;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use solidcraft_engine::render::material_graph::{Constant, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
@@ -71,6 +81,8 @@ pub(crate) enum TextureUse {
     Drive { node: String, port: String },
     /// An interface input's default.
     Interface(InterfaceInput),
+    /// The look's own value of an interface input.
+    Value(String),
 }
 
 /// What a frame of the editor asks for; applied after drawing.
@@ -81,8 +93,8 @@ pub(crate) enum Action {
     Duplicate,
     Delete,
     SelectLayer(usize),
-    Edit(Vec<Value>),
-    Set(MaterialGraph),
+    /// Make the graph this one: an edit when one can say it, else a whole replacement.
+    Replace(MaterialGraph),
     Pending(Pending),
     Texture(String, TextureUse),
     /// Open the file picker, then add the texture and use it.
@@ -90,7 +102,39 @@ pub(crate) enum Action {
     Json(String),
     /// The name typed for a new graph.
     Name(String),
+    /// Give the look this graph and apply it to the picked objects.
+    Use,
+    /// Make the dialog's look a graph (`appearance.graph.convert`).
+    Convert,
+    /// Set (or, with `None`, clear) the look's own value of an interface input.
+    Value(String, Option<Constant>),
     Refused(String),
+}
+
+/// What the dialog does after a frame of the section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// Apply the look (now naming the graph) to the picked objects.
+    Apply,
+}
+
+/// The look the dialog edits, when it names a graph: the graph and the look's own values of
+/// its interface inputs (`appearance.assign {graph, values}`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Link {
+    pub graph: String,
+    pub values: BTreeMap<String, Constant>,
+}
+
+/// What the dialog tells the section about the look it edits.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LookContext {
+    /// The look as `appearance.list` shows it (`{name, color, opacity, pbr?}`), for Convert.
+    pub look: Value,
+    /// The overrides Convert rewrites (`{bodies?, components?}`); `None`: every one with the look.
+    pub scope: Option<Value>,
+    /// The look's surface, which the swatch shows when no graph is loaded.
+    pub surface: Option<OpaqueSurface>,
 }
 
 /// The editor's state inside the Appearance dialog.
@@ -110,11 +154,40 @@ pub struct Editor {
     /// The last refusal or result to show.
     pub(crate) note: Option<(String, bool)>,
     pub(crate) new_name: String,
-    /// The loaded graph's base response, read once per reply (`None` until validation is built).
-    base: Option<OpaqueSurface>,
+    /// The look's graph and values, when the dialog's look names a graph.
+    pub(crate) link: Option<Link>,
+    /// Validation's findings for a change that was not sent, shown at their rows.
+    pub(crate) refusal: Option<Validation>,
+    /// The loaded graph lowered for the swatch, with the look's values when it uses the graph.
+    material: Option<Arc<swatch::Material>>,
 }
 
 impl Editor {
+    /// Follow the dialog's look: with a graph, show that graph.
+    pub(crate) fn link_to(&mut self, link: Option<Link>) {
+        if let Some(l) = &link
+            && self.chosen.as_deref() != Some(l.graph.as_str())
+        {
+            self.chosen = Some(l.graph.clone());
+            self.layer = 0;
+            self.stale();
+        }
+        self.link = link;
+        self.lower();
+    }
+
+    /// The look no longer names a graph (its colour or PBR was edited).
+    pub(crate) fn unlink(&mut self) {
+        self.link = None;
+        self.lower();
+    }
+
+    /// Whether the dialog's look uses the loaded graph.
+    fn linked(&self) -> Option<&Link> {
+        let id = self.graph().map(|l| l.id.as_str())?;
+        self.link.as_ref().filter(|l| l.graph == id)
+    }
+
     /// Read the replies again if the design changed since they were read (or never were).
     pub(crate) fn sync(&mut self, c: &mut dyn Commands) {
         if self.synced == Some(c.revision()) {
@@ -125,10 +198,16 @@ impl Editor {
             self.catalogue = Some(c.query("appearance.graph.nodes", json!({})).and_then(|r| Catalogue::from_reply(&r)));
         }
         let graphs = c.query("appearance.graph.list", json!({})).and_then(|r| model::graph_list(&r));
-        if let Ok(list) = &graphs
-            && self.chosen.as_ref().is_none_or(|id| !list.iter().any(|g| &g.id == id))
-        {
-            self.chosen = list.first().map(|g| g.id.clone());
+        if let Ok(list) = &graphs {
+            let has = |id: &str| list.iter().any(|g| g.id == id);
+            if let Some(link) = self.link.as_ref().filter(|l| has(&l.graph))
+                && self.chosen.is_none()
+            {
+                self.chosen = Some(link.graph.clone());
+            }
+            if self.chosen.as_deref().is_none_or(|id| !has(id)) {
+                self.chosen = self.link.as_ref().map(|l| l.graph.clone()).filter(|id| has(id)).or_else(|| list.first().map(|g| g.id.clone()));
+            }
         }
         self.graphs = Some(graphs);
         self.textures = Some(c.query("appearance.texture.list", json!({})).and_then(|r| model::texture_list(&r)));
@@ -140,14 +219,10 @@ impl Editor {
         let Some(id) = self.chosen.clone() else {
             self.loaded = None;
             self.validation = None;
-            self.base = None;
+            self.material = None;
             return;
         };
         let loaded = c.query("appearance.graph.get", json!({"id": id})).and_then(|r| Loaded::from_reply(&r));
-        self.base = loaded.as_ref().ok().and_then(|l| {
-            use solidcraft_engine::render::material_graph as mg;
-            mg::validate(&l.graph).and_then(|v| mg::base_response(&v)).ok()
-        });
         self.validation =
             loaded.as_ref().ok().map(|l| c.query("appearance.graph.validate", json!({"graph": l.graph})).and_then(|r| Validation::from_reply(&r)));
         if let Ok(l) = &loaded
@@ -156,6 +231,13 @@ impl Editor {
             self.layer = self.layer.min(stack.layers.len().saturating_sub(1));
         }
         self.loaded = Some(loaded);
+        self.lower();
+    }
+
+    /// Lower the loaded graph for the swatch (with the look's values when it uses the graph).
+    fn lower(&mut self) {
+        let values = self.linked().map(|l| l.values.clone()).unwrap_or_default();
+        self.material = self.graph().and_then(|l| swatch::Material::new(&l.graph, &values)).map(Arc::new);
     }
 
     /// Mark the replies stale, so the next frame reads them again.
@@ -167,11 +249,16 @@ impl Editor {
         self.loaded.as_ref()?.as_ref().ok()
     }
 
-    /// Send one changing command; on refusal keep the replies and show why.
+    /// Send one changing command; on refusal keep the replies and show why. A reply's `cost`
+    /// is the graph's cost from now on.
     fn change(&mut self, c: &mut dyn Commands, id: &str, params: Value) -> Option<Value> {
         match c.change(id, params) {
             Ok(reply) => {
                 self.note = None;
+                self.refusal = None;
+                if let (Some(cost), Some(Ok(loaded))) = (reply.get("cost").and_then(Value::as_u64), self.loaded.as_mut()) {
+                    loaded.cost = u32::try_from(cost).unwrap_or(u32::MAX);
+                }
                 self.stale();
                 Some(reply)
             }
@@ -183,20 +270,65 @@ impl Editor {
         }
     }
 
-    /// Send the pending value as one edit.
-    pub(crate) fn commit(&mut self, c: &mut dyn Commands) {
-        let (Some(pending), Some(id)) = (self.pending.take(), self.graph().map(|l| l.id.clone())) else { return };
-        let op = match &pending {
-            Pending::Input { node, port, value } => model::set_input(node, port, value),
-            Pending::Param { node, param, value } => model::set_param(node, param, value),
-            Pending::Interface(input) => model::set_interface(input),
-        };
-        self.change(c, "appearance.graph.edit", model::edit(&id, vec![op]));
+    /// Check `graph` before sending it: a graph validation refuses is not sent, and its
+    /// findings are shown at their rows. A check that cannot run leaves the decision to the
+    /// command itself.
+    fn check(&mut self, c: &mut dyn Commands, graph: &MaterialGraph) -> bool {
+        match c.query("appearance.graph.validate", json!({"graph": graph})).and_then(|r| Validation::from_reply(&r)) {
+            Ok(v) if !v.ok => {
+                self.note = Some((tr("appearance.graph.not_made").into(), true));
+                self.refusal = Some(v);
+                self.pending = None;
+                false
+            }
+            _ => true,
+        }
     }
 
-    /// Apply what a frame asked for. Returns a texture use that needs the file picker.
-    pub(crate) fn apply(&mut self, c: &mut dyn Commands, action: Action) -> Option<TextureUse> {
+    /// Make the loaded graph `graph`: checked, then one `edit` (connections keep their
+    /// fallbacks) unless only a whole replacement can say it (the output moved).
+    fn propose(&mut self, c: &mut dyn Commands, graph: MaterialGraph) {
+        let Some(loaded) = self.graph().cloned() else { return };
+        if !self.check(c, &graph) {
+            return;
+        }
+        match model::ops_between(&loaded.graph, &graph) {
+            Some(ops) if ops.is_empty() => {}
+            Some(ops) => {
+                self.change(c, "appearance.graph.edit", model::edit(&loaded.id, ops));
+            }
+            None => {
+                self.change(c, "appearance.graph.set", model::set(&loaded.id, &graph));
+            }
+        }
+    }
+
+    /// Send the pending value as one edit.
+    pub(crate) fn commit(&mut self, c: &mut dyn Commands) {
+        let (Some(pending), Some(loaded)) = (self.pending.take(), self.graph().cloned()) else { return };
+        let (op, proposed) = match &pending {
+            Pending::Input { node, port, value } => (model::set_input(node, port, value), model::with_input(&loaded.graph, node, port, value)),
+            Pending::Param { node, param, value } => (model::set_param(node, param, value), model::with_param(&loaded.graph, node, param, value)),
+            Pending::Interface(input) => (model::set_interface(input), model::with_interface(&loaded.graph, input)),
+        };
+        if self.check(c, &proposed) {
+            self.change(c, "appearance.graph.edit", model::edit(&loaded.id, vec![op]));
+        }
+    }
+
+    /// Validation's findings for `node`'s `port` (`None`: the node itself).
+    fn issues<'a>(&'a self, node: &'a str, port: Option<&'a str>) -> impl Iterator<Item = &'a model::Issue> + 'a {
+        let shown = self.refusal.as_ref().or(self.validation.as_ref().and_then(|v| v.as_ref().ok()));
+        shown.into_iter().flat_map(|v| v.errors.iter()).filter(move |i| i.node.as_deref() == Some(node) && i.port.as_deref() == port)
+    }
+
+    /// Apply what a frame asked for. Returns a texture use that needs the file picker, or what
+    /// the dialog does next.
+    pub(crate) fn apply(&mut self, c: &mut dyn Commands, action: Action, look: &LookContext) -> Option<Next> {
         let id = self.graph().map(|l| l.id.clone());
+        if !matches!(action, Action::Pending(_) | Action::Name(_) | Action::SelectLayer(_)) {
+            self.refusal = None;
+        }
         match action {
             Action::Choose(graph) => {
                 self.chosen = Some(graph);
@@ -230,19 +362,10 @@ impl Editor {
                 }
             }
             Action::SelectLayer(i) => self.layer = i,
-            Action::Edit(ops) => {
-                if let Some(id) = id {
-                    self.change(c, "appearance.graph.edit", model::edit(&id, ops));
-                }
-            }
-            Action::Set(graph) => {
-                if let Some(id) = id {
-                    self.change(c, "appearance.graph.set", model::set(&id, &graph));
-                }
-            }
+            Action::Replace(graph) => self.propose(c, graph),
             Action::Pending(p) => self.pending = Some(p),
             Action::Texture(sha, use_) => self.use_texture(c, &sha, use_),
-            Action::AddTexture(use_) => return Some(use_),
+            Action::AddTexture(use_) => return Some(Next::PickTexture(use_)),
             Action::Json(text) => match serde_json::from_str::<Value>(&text) {
                 Ok(graph) => {
                     if let Some(id) = id {
@@ -252,6 +375,34 @@ impl Editor {
                 Err(e) => self.note = Some((format("appearance.graph.bad_json", &[("error", &e.to_string())]), true)),
             },
             Action::Name(name) => self.new_name = name,
+            Action::Use => {
+                let id = id?;
+                let values = self.linked().map(|l| l.values.clone()).unwrap_or_default();
+                self.link_to(Some(Link { graph: id, values }));
+                return Some(Next::Dialog(Outcome::Apply));
+            }
+            Action::Convert => {
+                let mut params = json!({"look": look.look});
+                if let Some(scope) = &look.scope {
+                    params["scope"] = scope.clone();
+                }
+                if let Some(reply) = self.change(c, "appearance.graph.convert", params)
+                    && let Some(graph) = reply.get("id").and_then(Value::as_str)
+                {
+                    let count = reply.get("count").and_then(Value::as_u64).unwrap_or(0);
+                    self.link_to(Some(Link { graph: graph.into(), values: BTreeMap::new() }));
+                    self.note = Some((format("appearance.graph.converted", &[("count", &count.to_string())]), false));
+                }
+            }
+            Action::Value(name, value) => {
+                if let Some(link) = self.link.as_mut() {
+                    match value {
+                        Some(v) => link.values.insert(name, v),
+                        None => link.values.remove(&name),
+                    };
+                }
+                self.lower();
+            }
             Action::Refused(id) => self.note = Some((tr(&id).into(), true)),
         }
         None
@@ -263,18 +414,25 @@ impl Editor {
         let texture = Constant::Texture(solidcraft_engine::render::material_graph::graph::TextureRef { texture: sha.into() });
         match use_ {
             TextureUse::File { node, port } => {
-                self.change(c, "appearance.graph.edit", model::edit(&loaded.id, vec![model::set_input(&node, &port, &texture)]));
+                let proposed = model::with_input(&loaded.graph, &node, &port, &texture);
+                if self.check(c, &proposed) {
+                    self.change(c, "appearance.graph.edit", model::edit(&loaded.id, vec![model::set_input(&node, &port, &texture)]));
+                }
             }
             TextureUse::Interface(mut input) => {
                 input.default = Some(texture);
                 self.change(c, "appearance.graph.edit", model::edit(&loaded.id, vec![model::set_interface(&input)]));
             }
+            TextureUse::Value(name) => {
+                if let Some(link) = self.link.as_mut() {
+                    link.values.insert(name, texture);
+                }
+                self.lower();
+            }
             TextureUse::Drive { node, port } => {
                 let Some(Ok(catalogue)) = &self.catalogue else { return };
                 match model::drive_with(&loaded.graph, catalogue, &node, &port, Driver::Image, Some(sha)) {
-                    Ok(graph) => {
-                        self.change(c, "appearance.graph.set", model::set(&loaded.id, &graph));
-                    }
+                    Ok(graph) => self.propose(c, graph),
                     Err(e) => self.note = Some((tr(e).into(), true)),
                 }
             }
@@ -283,7 +441,14 @@ impl Editor {
 
     /// After the file picker: add the texture at `path`, then use it.
     pub(crate) fn add_texture(&mut self, c: &mut dyn Commands, path: &str, use_: TextureUse) {
-        if let Some(reply) = self.change(c, "appearance.texture.add", json!({"path": path}))
+        let params = match texture_params(path) {
+            Ok(p) => p,
+            Err(e) => {
+                self.note = Some((e, true));
+                return;
+            }
+        };
+        if let Some(reply) = self.change(c, "appearance.texture.add", params)
             && let Some(sha) = reply.get("texture").and_then(Value::as_str)
         {
             self.sync(c);
@@ -291,31 +456,67 @@ impl Editor {
         }
     }
 
-    /// The surface the swatch shows: the graph's base response once validation is built, else
-    /// the look the dialog is editing.
-    pub(crate) fn preview(&self, look: Option<OpaqueSurface>) -> Option<OpaqueSurface> {
-        self.graph().and(self.base).or(look)
+    /// What the swatch shows: the loaded graph's material, else the look's surface.
+    fn sample(&self, look: Option<OpaqueSurface>) -> Option<swatch::Sample> {
+        match (&self.material, self.graph()) {
+            (Some(m), Some(_)) => Some(swatch::Sample::Graph(m.clone())),
+            _ => look.map(swatch::Sample::Surface),
+        }
     }
 }
 
-/// The Material graph section of the Appearance dialog. `look` is the look being edited, which
-/// the swatch shows until a graph's base response can be read.
-pub(crate) fn section(app: &mut SolveApp, ui: &mut egui::Ui, ed: &mut Editor, look: Option<OpaqueSurface>) {
+/// `appearance.texture.add`'s parameters for a picked file. Natively the engine reads the
+/// path; a browser page reads only the files it was given, so the web build sends the bytes.
+#[cfg(not(target_arch = "wasm32"))]
+fn texture_params(path: &str) -> Result<Value, String> {
+    Ok(json!({"path": path}))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn texture_params(path: &str) -> Result<Value, String> {
+    let bytes = solidcraft_engine::io::vfs::read(path, limits::TEXTURE_BYTES).map_err(|e| e.to_string())?;
+    Ok(texture_bytes(path, &bytes))
+}
+
+/// The bytes of an image as `appearance.texture.add` takes them, named after the file.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+fn texture_bytes(path: &str, bytes: &[u8]) -> Value {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let mut params = json!({"data_base64": solidcraft_engine::doc::canvas::base64_encode(bytes)});
+    if !name.is_empty() && name.len() <= limits::NAME_BYTES {
+        params["name"] = json!(name);
+    }
+    params
+}
+
+/// What `Editor::apply` hands back to the section.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Next {
+    PickTexture(TextureUse),
+    Dialog(Outcome),
+}
+
+/// The Material graph section of the Appearance dialog. `look` is the look being edited.
+pub(crate) fn section(app: &mut SolveApp, ui: &mut egui::Ui, ed: &mut Editor, look: &LookContext) -> Option<Outcome> {
     let gpu = app.viewport.gpu.is_some();
     let mut actions = Vec::new();
     ed.sync(app);
     // Open by default when the design has a graph to show.
     let open = ed.graph().is_some();
     ui_kit::section(ui, "ap_material_graph", tr("appearance.graph.section"), open, |ui| actions = body(ui, ed, gpu, look));
+    let mut outcome = None;
     for action in actions {
-        if let Some(use_) = ed.apply(app, action) {
-            pick_texture(app, use_);
+        match ed.apply(app, action, look) {
+            Some(Next::PickTexture(use_)) => pick_texture(app, use_),
+            Some(Next::Dialog(o)) => outcome = Some(o),
+            None => {}
         }
     }
     let settled = ui.input(|i| !i.pointer.any_down()) && ui.ctx().memory(|m| m.focused().is_none());
     if settled && ed.pending.is_some() {
         ed.commit(app);
     }
+    outcome
 }
 
 /// Ask for an image file, add it as a texture and use it. The dialog's editor gets the result.
@@ -334,16 +535,16 @@ fn pick_texture(app: &mut SolveApp, use_: TextureUse) {
 }
 
 /// The section's contents; returns what the user asked for.
-pub(crate) fn body(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<OpaqueSurface>) -> Vec<Action> {
+pub(crate) fn body(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: &LookContext) -> Vec<Action> {
     let mut out = Vec::new();
-    graph_chooser(ui, ed, &mut out);
+    graph_chooser(ui, ed, look, &mut out);
     match &ed.loaded {
         None => {}
         Some(Err(e)) => {
             ui_kit::status_line(ui, e, ui_kit::StatusTone::Warning);
         }
         Some(Ok(loaded)) => {
-            preview(ui, ed, gpu, look);
+            preview(ui, ed, gpu, look.surface);
             budget(ui, ed);
             match (&ed.catalogue, model::stack(&loaded.graph)) {
                 (Some(Ok(catalogue)), Ok(stack)) => {
@@ -367,7 +568,7 @@ pub(crate) fn body(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<Opaqu
     out
 }
 
-fn graph_chooser(ui: &mut egui::Ui, ed: &Editor, out: &mut Vec<Action>) {
+fn graph_chooser(ui: &mut egui::Ui, ed: &Editor, look: &LookContext, out: &mut Vec<Action>) {
     match &ed.graphs {
         Some(Ok(graphs)) if !graphs.is_empty() => {
             let labels: Vec<String> =
@@ -410,11 +611,34 @@ fn graph_chooser(ui: &mut egui::Ui, ed: &Editor, out: &mut Vec<Action>) {
     if name != ed.new_name {
         out.push(Action::Name(name));
     }
+    // The look and the graph: use this graph on the picked objects, or make the look a graph.
+    ui.horizontal_wrapped(|ui| {
+        if ed.graph().is_some() {
+            let label = if ed.linked().is_some() { tr("appearance.graph.apply_graph") } else { tr("appearance.graph.use_graph") };
+            let use_ = ui_kit::button(ui, label, ui_kit::Button::Normal).on_hover_text(tr("appearance.graph.use_hint"));
+            crate::scenario::publish_handle("appearance:graph_use", use_.rect.center());
+            if use_.clicked() {
+                out.push(Action::Use);
+            }
+        }
+        if ed.link.is_none() && !look.look.is_null() {
+            let convert =
+                ui_kit::button(ui, tr("appearance.graph.convert"), ui_kit::Button::Normal).on_hover_text(tr("appearance.graph.convert_hint"));
+            crate::scenario::publish_handle("appearance:graph_convert", convert.rect.center());
+            if convert.clicked() {
+                out.push(Action::Convert);
+            }
+        }
+    });
+    if let Some(link) = &ed.link {
+        let text = format("appearance.graph.look_uses", &[("graph", &link.graph)]);
+        ui_kit::text(ui, &text, ui_kit::Text::Note("graph_link"));
+    }
 }
 
 /// The live swatch, or why there is none.
 fn preview(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<OpaqueSurface>) {
-    let Some(surface) = ed.preview(look) else { return };
+    let Some(sample) = ed.sample(look) else { return };
     if !gpu {
         ui_kit::status_line(ui, tr("appearance.graph.no_gpu"), ui_kit::StatusTone::Dim);
         return;
@@ -424,16 +648,18 @@ fn preview(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<OpaqueSurface
     let height = (width * 0.45).clamp(t.control_height * 2.0, t.control_height * 5.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     crate::scenario::publish_rect("appearance:graph_swatch", rect);
-    swatch::paint(ui, ui.id().with("graph_swatch"), rect, surface);
+    swatch::paint(ui, ui.id().with("graph_swatch"), rect, sample);
     ui.painter().rect_stroke(rect, t.control_radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
 }
 
 /// The cost against the budget, and validation's findings.
 fn budget(ui: &mut egui::Ui, ed: &Editor) {
     let Some(loaded) = ed.graph() else { return };
-    let (cost, samples, textures) = match &ed.validation {
-        Some(Ok(v)) => (v.cost, Some(v.samples), Some(v.textures)),
-        _ => (loaded.cost, None, None),
+    // The cost is the last reply's (`get`, or the change that made the graph).
+    let cost = loaded.cost;
+    let (samples, textures) = match &ed.validation {
+        Some(Ok(v)) => (Some(v.samples), Some(v.textures)),
+        _ => (None, None),
     };
     let text = format("appearance.graph.cost", &[("cost", &cost.to_string()), ("budget", &limits::COST_UNITS.to_string())]);
     ui_kit::row(ui, tr("appearance.graph.budget"), |ui| ui_kit::text(ui, &text, ui_kit::Text::MonoCell));
@@ -450,18 +676,19 @@ fn budget(ui: &mut egui::Ui, ed: &Editor) {
         );
         ui_kit::text(ui, &text, ui_kit::Text::Note("graph_samples"));
     }
-    match &ed.validation {
-        Some(Ok(v)) => {
-            for issue in v.errors.iter().take(8) {
-                let at = [issue.node.as_deref(), issue.port.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(".");
-                let line = if at.is_empty() { issue.message.clone() } else { format!("{at}: {}", issue.message) };
-                ui_kit::status_line(ui, &line, ui_kit::StatusTone::Error);
-            }
+    // Findings with a node are shown at that node's rows; the graph's own ones here, with a count.
+    let shown = ed.refusal.as_ref().or(ed.validation.as_ref().and_then(|v| v.as_ref().ok()));
+    if let Some(v) = shown {
+        for issue in v.errors.iter().filter(|i| i.node.is_none()).take(8) {
+            ui_kit::status_line(ui, &issue.message, ui_kit::StatusTone::Error);
         }
-        Some(Err(e)) => {
-            ui_kit::status_line(ui, e, ui_kit::StatusTone::Dim);
+        let at_rows = v.errors.iter().filter(|i| i.node.is_some()).count();
+        if at_rows > 0 {
+            ui_kit::status_line(ui, &format("appearance.graph.at_rows", &[("count", &at_rows.to_string())]), ui_kit::StatusTone::Error);
         }
-        None => {}
+    }
+    if let Some(Err(e)) = &ed.validation {
+        ui_kit::status_line(ui, e, ui_kit::StatusTone::Dim);
     }
 }
 
@@ -554,7 +781,7 @@ impl View<'_> {
                     let remove = ui_kit::compact_button(ui, "×", tr("appearance.graph.remove_layer"), masked, false);
                     crate::scenario::publish_handle(&format!("appearance:graph_layer_remove:{i}"), remove.rect.center());
                     let swap = |at: usize, out: &mut Vec<Action>| match model::swap_layers(self.graph, stack, at) {
-                        Ok(g) => out.push(Action::Set(g)),
+                        Ok(g) => out.push(Action::Replace(g)),
                         Err(e) => out.push(Action::Refused(e.into())),
                     };
                     if up.clicked() {
@@ -568,7 +795,7 @@ impl View<'_> {
                     if remove.clicked() {
                         match model::remove_layer(self.graph, stack, i) {
                             Ok(g) => {
-                                out.push(Action::Set(g));
+                                out.push(Action::Replace(g));
                                 out.push(Action::SelectLayer(i - 1));
                             }
                             Err(e) => out.push(Action::Refused(e.into())),
@@ -581,7 +808,7 @@ impl View<'_> {
             if add.clicked() {
                 match model::add_layer(self.graph, stack) {
                     Ok(g) => {
-                        out.push(Action::Set(g));
+                        out.push(Action::Replace(g));
                         out.push(Action::SelectLayer(count));
                     }
                     Err(e) => out.push(Action::Refused(e.into())),
@@ -618,31 +845,71 @@ impl View<'_> {
         if self.graph.interface.is_empty() {
             return;
         }
-        ui_kit::section_count(ui, "ap_graph_interface", tr("appearance.graph.interface"), false, Some(self.graph.interface.len()), |ui| {
+        let linked = self.ed.linked();
+        let open = linked.is_some();
+        ui_kit::section_count(ui, "ap_graph_interface", tr("appearance.graph.interface"), open, Some(self.graph.interface.len()), |ui| {
+            // With the dialog's look on this graph the rows are the look's own values (sent by
+            // Apply or OK with the look); otherwise they are the graph's defaults.
+            let hint = if linked.is_some() { "appearance.graph.values_hint" } else { "appearance.graph.defaults_hint" };
+            ui_kit::text(ui, tr(hint), ui_kit::Text::Note("graph_interface"));
             for input in &self.graph.interface {
                 let shown = match &self.ed.pending {
                     Some(Pending::Interface(p)) if p.name == input.name => p,
                     _ => input,
                 };
                 let spec = PortSpec { name: input.name.clone(), ty: input.ty, range: None, default: model::PortDefault::Float(0.0) };
-                ui_kit::row(ui, &input.name, |ui| {
-                    if input.ty == PortType::Texture {
-                        let current = match &shown.default {
-                            Some(Constant::Texture(t)) => Some(t.texture.as_str()),
-                            _ => None,
-                        };
-                        self.texture_picker(ui, &input.name, current, TextureUse::Interface(input.clone()), out);
-                    } else if let Some(value) = self.value_widget(ui, &spec, shown.default.as_ref()) {
-                        out.push(Action::Pending(Pending::Interface(InterfaceInput { default: Some(value), ..input.clone() })));
-                    }
+                let own = linked.and_then(|l| l.values.get(&input.name));
+                let value = own.or(shown.default.as_ref());
+                let response = ui_kit::row(ui, &input.name, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if own.is_some() {
+                            let reset = ui_kit::compact_button(ui, "×", tr("appearance.graph.value_reset"), true, false);
+                            crate::scenario::publish_handle(&format!("appearance:graph_value_reset:{}", input.name), reset.rect.center());
+                            if reset.clicked() {
+                                out.push(Action::Value(input.name.clone(), None));
+                            }
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if input.ty == PortType::Texture {
+                                let current = match value {
+                                    Some(Constant::Texture(t)) => Some(t.texture.as_str()),
+                                    _ => None,
+                                };
+                                let use_ =
+                                    if linked.is_some() { TextureUse::Value(input.name.clone()) } else { TextureUse::Interface(input.clone()) };
+                                self.texture_picker(ui, &input.name, current, use_, out);
+                            } else if let Some(v) = self.value_widget(ui, &spec, value) {
+                                out.push(if linked.is_some() {
+                                    Action::Value(input.name.clone(), Some(v))
+                                } else {
+                                    Action::Pending(Pending::Interface(InterfaceInput { default: Some(v), ..input.clone() }))
+                                });
+                            }
+                        });
+                    });
+                    ui.max_rect()
                 });
+                crate::scenario::publish_handle(&format!("appearance:graph_value:{}", input.name), response.center());
             }
         });
     }
 
     /// One input: its value (or what drives it), the Drive menu, and for a wired input the
     /// nodes upstream with their own values.
+    /// Validation's findings for `node`'s `port`, under its row.
+    fn findings(&self, ui: &mut egui::Ui, node: &str, port: Option<&str>) {
+        for issue in self.ed.issues(node, port).take(4) {
+            let response = ui_kit::status_line(ui, &issue.message, ui_kit::StatusTone::Error);
+            crate::scenario::publish_handle(&format!("appearance:graph_issue:{node}:{}", port.unwrap_or("")), response.rect.center());
+        }
+    }
+
     fn port(&self, ui: &mut egui::Ui, n: &Node, spec: &PortSpec, label: Option<&str>, drivable: bool, out: &mut Vec<Action>) {
+        self.port_row(ui, n, spec, label, drivable, out);
+        self.findings(ui, &n.id, Some(&spec.name));
+    }
+
+    fn port_row(&self, ui: &mut egui::Ui, n: &Node, spec: &PortSpec, label: Option<&str>, drivable: bool, out: &mut Vec<Action>) {
         let label = label.map_or_else(|| port_label(&spec.name), str::to_string);
         let handle = format!("appearance:graph_port:{}:{}", n.id, spec.name);
         match model::drive(n, &spec.name) {
@@ -655,7 +922,7 @@ impl View<'_> {
                         crate::scenario::publish_handle(&format!("{handle}:undrive"), remove.rect.center());
                         if remove.clicked() {
                             match model::undrive(self.graph, &n.id, &spec.name, connection.fallback.clone()) {
-                                Ok(g) => out.push(Action::Set(g)),
+                                Ok(g) => out.push(Action::Replace(g)),
                                 Err(e) => out.push(Action::Refused(e.into())),
                             }
                         }
@@ -675,7 +942,7 @@ impl View<'_> {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui_kit::compact_button(ui, "×", tr("appearance.graph.fix_value"), true, false).clicked() {
                             match model::undrive(self.graph, &n.id, &spec.name, None) {
-                                Ok(g) => out.push(Action::Set(g)),
+                                Ok(g) => out.push(Action::Replace(g)),
                                 Err(e) => out.push(Action::Refused(e.into())),
                             }
                         }
@@ -725,6 +992,7 @@ impl View<'_> {
         let title = if shared { format("appearance.graph.shared", &[("kind", &kind_label(&n.kind))]) } else { kind_label(&n.kind) };
         let open = n.kind.starts_with("pattern.") || n.kind == "image" || n.kind == "remap";
         ui_kit::section(ui, (&owner.id, &owner_port.name, &n.id), &title, open, |ui| {
+            self.findings(ui, &n.id, None);
             self.params(ui, n, kind, out);
             for spec in &kind.inputs {
                 let wired = matches!(n.inputs.get(&spec.name), Some(solidcraft_engine::render::material_graph::InputValue::Connection(_)));
@@ -761,7 +1029,11 @@ impl View<'_> {
                     if index != before
                         && let Some(option) = options.get(index)
                     {
-                        out.push(Action::Edit(vec![model::set_param(&n.id, &spec.name, &ParamValue::Text(option.clone()))]));
+                        out.push(Action::Pending(Pending::Param {
+                            node: n.id.clone(),
+                            param: spec.name.clone(),
+                            value: ParamValue::Text(option.clone()),
+                        }));
                     }
                 }
                 ParamKind::Int { min, max, .. } => {
@@ -775,6 +1047,7 @@ impl View<'_> {
                     }
                 }
             }
+            self.findings(ui, &n.id, Some(&spec.name));
         }
     }
 
@@ -870,7 +1143,7 @@ impl View<'_> {
                     continue;
                 }
                 match model::drive_with(self.graph, self.catalogue, &n.id, &spec.name, driver, None) {
-                    Ok(g) => out.push(Action::Set(g)),
+                    Ok(g) => out.push(Action::Replace(g)),
                     Err(e) => out.push(Action::Refused(e.into())),
                 }
             }

@@ -410,6 +410,7 @@ fn prepare(s: &Session, params: &Value, command: &str) -> Result<Prepared> {
         return Err(bad(command, "resolved executor is not installed as an image job host"));
     }
     let request = ImageRequest {
+        graphs: None,
         studio_weights: validate_studio_weights(input.studio_weights, command)?,
         environment: None,
         textures: None,
@@ -621,6 +622,7 @@ fn prepare_progressive(
         return Err(bad(command, "image host is unavailable"));
     }
     let request = ImageRequest {
+        graphs: None,
         studio_weights: validate_studio_weights(input.studio_weights, command)?,
         integrator: Default::default(),
         raytrace: None,

@@ -17,6 +17,7 @@ pub mod bloom;
 mod cpu_budget;
 pub(crate) mod encoding;
 pub mod finishing;
+pub mod graphs;
 mod host;
 pub(crate) mod image;
 pub mod led_strip;
@@ -1061,6 +1062,11 @@ pub struct ImageRequest {
     pub environment: Option<Arc<crate::lighting::environment::EnvironmentSource>>,
     #[serde(skip)]
     pub textures: Option<Arc<textures::RuntimeTextures>>,
+    /// Material graphs for the GPU path tracer (docs/material-graph.md §5.7). Captured, never
+    /// read from a request; serialised as their summary, which names every input the path
+    /// tracer approximates.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<Arc<graphs::GraphMaterials>>,
     #[serde(default)]
     pub integrator: Integrator,
     #[serde(default, skip_serializing_if = "Option::is_none")]

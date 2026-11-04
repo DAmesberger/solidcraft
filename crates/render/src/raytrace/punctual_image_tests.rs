@@ -44,6 +44,7 @@ fn task(blocker: Option<(f64, f64)>, shadows: bool) -> ImageTask {
         ..Default::default()
     };
     let request = ImageRequest {
+        graphs: None,
         studio_weights: None,
         environment: None,
         textures: None,

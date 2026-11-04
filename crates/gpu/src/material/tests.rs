@@ -892,13 +892,102 @@ fn gpu_surfaces(
     base: &SurfaceSample,
     points: &[Point],
 ) -> Result<Vec<Vec<f32>>, String> {
+    gpu_surfaces_with(device, queue, ir, words, base, points, None)
+}
+
+/// [`gpu_surfaces`] with the material textures bound (group 3, as the raster pipelines bind them;
+/// `None`: the 1 × 1 stand-in in every binding).
+pub(super) fn gpu_surfaces_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    ir: &Ir,
+    words: &[u32],
+    base: &SurfaceSample,
+    points: &[Point],
+    textures: Option<[&wgpu::TextureView; 4]>,
+) -> Result<Vec<Vec<f32>>, String> {
     use wgpu::util::DeviceExt;
-    let source = format!("{}\n{READBACK}\n{}", crate::shading::library(), super::material_eval(ir).map_err(|e| e.0)?);
+    let source =
+        format!("{}\n{READBACK}\n{}\n{}", crate::shading::library(), super::textures::sampling_source(), super::material_eval(ir).map_err(|e| e.0)?);
     super::validate(&source).map_err(|e| e.0)?;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
+    let entry = |binding, ty| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None };
+    let storage = |read_only| wgpu::BindingType::Buffer {
+        ty: wgpu::BufferBindingType::Storage { read_only },
+        has_dynamic_offset: false,
+        min_binding_size: None,
+    };
+    let group0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            entry(0, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }),
+            entry(1, storage(true)),
+            entry(2, storage(false)),
+        ],
+    });
+    let texture = wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    };
+    let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+    let group3 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            entry(4, texture),
+            entry(5, texture),
+            entry(6, texture),
+            entry(7, texture),
+            entry(8, sampler),
+            entry(9, sampler),
+            entry(10, sampler),
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&group0), None, None, Some(&group3)],
+        immediate_size: 0,
+    });
+    let blank = device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[255; 4],
+        )
+        .create_view(&Default::default());
+    let views = textures.unwrap_or([&blank, &blank, &blank, &blank]);
+    let samplers = [wgpu::AddressMode::Repeat, wgpu::AddressMode::ClampToEdge, wgpu::AddressMode::MirrorRepeat].map(|mode| {
+        device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: mode,
+            address_mode_v: mode,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        })
+    });
+    let mut entries: Vec<wgpu::BindGroupEntry> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| wgpu::BindGroupEntry { binding: 4 + i as u32, resource: wgpu::BindingResource::TextureView(v) })
+        .collect();
+    entries.extend(
+        samplers.iter().enumerate().map(|(i, s)| wgpu::BindGroupEntry { binding: 8 + i as u32, resource: wgpu::BindingResource::Sampler(s) }),
+    );
+    let textures_bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &group3, entries: &entries });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
-        layout: None,
+        layout: Some(&layout),
         module: &module,
         entry_point: Some("readback"),
         compilation_options: Default::default(),
@@ -928,7 +1017,7 @@ fn gpu_surfaces(
     });
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
-        layout: &pipeline.get_bind_group_layout(0),
+        layout: &group0,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: pts.as_entire_binding() },
@@ -940,6 +1029,7 @@ fn gpu_surfaces(
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind, &[]);
+        pass.set_bind_group(3, &textures_bind, &[]);
         pass.dispatch_workgroups(points.len() as u32, 1, 1);
     }
     encoder.copy_buffer_to_buffer(&out, 0, &read, 0, size);
@@ -1166,4 +1256,58 @@ fn a_see_through_graph_blends_over_what_lies_behind() {
     let opaque = frame_with(&mut r, Some(&glass(0.0)), 3);
     assert!(opaque[0] < 0.2 * behind[0], "without transmission it hides the face: {opaque:?}");
     assert!(blended[0] > opaque[0] + 20.0, "transmission lets the face through: {blended:?} against {opaque:?}");
+}
+
+/// A texture the scene gives only as encoded bytes is decoded on the renderer's worker and made
+/// resident: until then its `image` node draws its default colour; afterwards the image itself
+/// (red on the left half of the square, blue on the right).
+#[test]
+fn scene_textures_are_decoded_and_drawn() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let key = "ab".repeat(32);
+    let graph = lowered(&graph_of(json!({"name": "label", "nodes": [
+        {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}, "inputs": {"origin": [-12, -12, 0], "u": [24, 0, 0], "v": [0, 24, 0]}},
+        {"id": "img", "kind": "image", "params": {"space": "srgb", "wrap": "clamp"}, "inputs": {"texcoord": {"from": "uv"}, "file": {"texture": key}, "default": [0.0, 0.8, 0.0]}},
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": 0.9}}], "output": "s"})))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_fn(2, 1, |x, _| if x == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) });
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&graph.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    let set = super::texture_keys(&graph.ir, &BTreeMap::new());
+    assert!(set[0].is_some(), "the constant texture is bound");
+    let scene = || {
+        let mut scene = GpuScene::default();
+        let m = scene.graphs.textured_material(&graph.ir, &words, &graph.base, &set).unwrap_or_else(|e| panic!("{e}"));
+        for k in set.iter().flatten() {
+            scene.graphs.texture_source(k.clone(), Arc::new(png.clone()));
+        }
+        let face = scene.color([200, 200, 200, 255]);
+        for p in SQUARE {
+            scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+            scene.tri(p, [0.0, 0.0, 1.0], face);
+        }
+        scene
+    };
+    let mut r = renderer(&device, &queue);
+    let side = |bytes: &[u8], x: usize| {
+        let at = (32 * SIZE as usize + x) * 4;
+        bytes.get(at..at + 3).map(|p| [p[0], p[1], p[2]]).unwrap_or_default()
+    };
+    let first = render_frame(&mut r, &device, &queue, &realistic(scene(), 1, 1.0), true);
+    let mut key_n = 2;
+    let mut last = first.clone();
+    for _ in 0..200 {
+        if !r.wants_redraw() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        last = render_frame(&mut r, &device, &queue, &realistic(scene(), key_n, 1.0), true);
+        key_n += 1;
+    }
+    assert!(!r.wants_redraw(), "the texture finished decoding");
+    let (left, right) = (side(&last, 14), side(&last, 50));
+    assert!(left[0] > left[2] + 40 && right[2] > right[0] + 40, "red left, blue right: {left:?} {right:?}");
+    let before = side(&first, 14);
+    assert!(before[1] > before[0] || first == last, "before decoding the default colour (green) shows: {before:?}");
 }

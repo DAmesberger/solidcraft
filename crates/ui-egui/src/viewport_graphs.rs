@@ -32,6 +32,8 @@ pub(crate) struct GraphLooks {
     lowered: HashMap<u64, Option<Arc<Lowered>>>,
     /// Content keys already reported as failing.
     warned: HashSet<u64>,
+    /// Texture assets' encoded bytes by SHA-256 (content-addressed, so kept across designs).
+    bytes: HashMap<String, Option<Arc<Vec<u8>>>>,
 }
 
 /// At most this many lowered looks are kept; past it the cache starts again.
@@ -53,6 +55,19 @@ fn lower(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<L
 }
 
 impl GraphLooks {
+    /// A texture asset's encoded bytes from the design, read once.
+    fn texture_bytes(&mut self, doc: &solidcraft_engine::doc::Document, sha256: &str) -> Option<Arc<Vec<u8>>> {
+        if let Some(b) = self.bytes.get(sha256) {
+            return b.clone();
+        }
+        if self.bytes.len() >= MAX_LOOKS {
+            self.bytes.clear();
+        }
+        let bytes = doc.appearances.tables.textures.get(sha256).and_then(|t| t.bytes(sha256).ok()).map(Arc::new);
+        self.bytes.insert(sha256.to_owned(), bytes.clone());
+        bytes
+    }
+
     /// The lowered graph look, or `None` when it cannot draw as a graph.
     fn get(&mut self, graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Option<Arc<Lowered>> {
         let key = content_key(graph, values);
@@ -133,7 +148,20 @@ pub(crate) fn add_body(
         let key = content_key(graph, &look.values);
         let material = *by_look.entry(key).or_insert_with(|| {
             let l = looks.get(graph, &look.values)?;
-            sc.graphs.material(&l.ir, &l.words, &l.base).ok()
+            // The textures it reads: constants, and interface inputs from the look's values over
+            // the graph's defaults.
+            let mut values: BTreeMap<String, Constant> =
+                graph.interface.iter().filter_map(|i| i.default.clone().map(|d| (i.name.clone(), d))).collect();
+            values.extend(look.values.iter().map(|(k, v)| (k.clone(), v.clone())));
+            let set = solidcraft_gpu::material::texture_keys(&l.ir, &values);
+            for k in set.iter().flatten() {
+                if !sc.graphs.texture_sources().contains_key(k)
+                    && let Some(bytes) = looks.texture_bytes(doc, &k.sha256)
+                {
+                    sc.graphs.texture_source(k.clone(), bytes);
+                }
+            }
+            sc.graphs.textured_material(&l.ir, &l.words, &l.base, &set).ok()
         });
         if let Some(m) = material {
             materials.insert(face, m);
