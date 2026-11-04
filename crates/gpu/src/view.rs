@@ -4949,6 +4949,16 @@ mod realistic_tests;
 pub(crate) mod glass_tests {
     use super::*;
 
+    /// Standard-look parity frames (`cargo xtask render-parity`). Included rather than a file
+    /// module so that the tool can add the same file to older revisions' `glass_tests`.
+    mod parity_frames {
+        include!("view/parity_frames.rs");
+    }
+    /// Realistic-look parity frames (`cargo xtask render-parity --realistic-base`).
+    mod parity_frames_realistic {
+        include!("view/parity_frames_realistic.rs");
+    }
+
     #[test]
     fn ground_shadow_does_not_require_order_independent_transparency() {
         let batch = || Some(Batch { parts: Vec::new(), chunk: TRI_SIZE * 6 });

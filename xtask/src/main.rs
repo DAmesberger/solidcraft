@@ -15,6 +15,7 @@ mod licences;
 mod lists;
 mod pending;
 mod render_assets;
+mod render_parity;
 mod skills;
 mod test;
 mod test_nextest;
@@ -86,6 +87,10 @@ commands:
   web-frame --design FILE --out PNG [--site DIR] [--look standard|realistic] [--view NAME]
             [--size WxH] [--settle SECONDS] [--webgpu]
                   one browser frame of a saved design in a web build (WebGL2 unless --webgpu)
+  render-parity --base REV [--realistic-base REV] [--tolerance N] [--out DIR] [--keep]
+                  draw the viewport's parity frames here and in REV's worktree on this GPU:
+                  Standard frames must equal REV's byte for byte; with --realistic-base,
+                  Realistic frames must be within N (default 1) of that revision's per channel
   web-offline-test [--site DIR]
                   check in headless Chrome that the web app works offline and updates to a new
                   build (a stand-in app, or the web build in DIR such as dist/web)
@@ -149,6 +154,7 @@ fn main() -> ExitCode {
                 _ => Err(format!("web-frame: --design and --out are required\n\n{USAGE}")),
             }
         }
+        Some("render-parity") => render_parity::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
