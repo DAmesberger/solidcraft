@@ -46,8 +46,8 @@
     "in": {
      "from": "lines"
     },
-    "out_min": 0.41,
-    "out_max": 0.49
+    "out_min": 0.25,
+    "out_max": 0.31
    }
   },
   {

@@ -109,7 +109,7 @@ fn brushed_nickel_silver_follows_its_remaps() {
         let v = first_of(&ir, &e, "pattern.brushed");
         assert!((0.0..=1.0).contains(&v));
         let s = e.surface;
-        assert!(close(s.roughness, 0.41 + v * 0.08, 1e-6), "{} vs {v}", s.roughness);
+        assert!(close(s.roughness, 0.25 + v * 0.06, 1e-6), "{} vs {v}", s.roughness);
         let tint = 0.97 + v * 0.06;
         for (k, c) in [0.80, 0.77, 0.70].iter().enumerate() {
             assert!(close(s.base_color[k], c * tint, 1e-6));

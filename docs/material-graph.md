@@ -282,7 +282,7 @@ sRGB constant. Values are visual estimates, not measured optical data.
    "inputs": {"origin": [0,0,0], "u": [1,0,0], "v": [0,1,0]}},
   {"id": "lines", "kind": "pattern.brushed",
    "inputs": {"texcoord": {"from": "uv"}, "density_per_mm": 40, "streak_mm": 4, "contrast": 0.6, "jitter": 0.3, "seed": 7}},
-  {"id": "rough", "kind": "remap", "inputs": {"in": {"from": "lines"}, "out_min": 0.41, "out_max": 0.49}},
+  {"id": "rough", "kind": "remap", "inputs": {"in": {"from": "lines"}, "out_min": 0.25, "out_max": 0.31}},
   {"id": "tint", "kind": "remap", "inputs": {"in": {"from": "lines"}, "out_min": 0.97, "out_max": 1.03}},
   {"id": "base", "kind": "multiply", "inputs": {"a": [0.80, 0.77, 0.70], "b": {"from": "tint"}}},
   {"id": "surface", "kind": "standard_surface", "inputs": {
