@@ -387,7 +387,7 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
     if (look) {
         base = clamp(base, vec3<f32>(0.0), vec3<f32>(1.0));
         // Occlusion darkens only the indirect light: the studio and the ambient kind.
-        ao = occlusion(TOut(f.pos, f.n, vec4<f32>(base, 1.0), f.wp));
+        ao = occlusion(TOut(f.pos, f.n, vec4<f32>(base, 1.0), f.wp, 0u));
     }
     let ambient = select(1.0, ao * pbr_coat_keep(coat, dot(coat_n, v)), look);
     let coat_tint = sc_coat_tint(coat.x, s.coat_color);
@@ -475,13 +475,13 @@ fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) bas
 /// The AO prepass's depth of a PBR surface (drawn there only with the product look).
 @fragment
 fn fs_ao_depth_pbr(i: PbrOut, @builtin(front_facing) front: bool) -> AoDepth {
-    return opaque_depth(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp), front);
+    return opaque_depth(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp, 0u), front);
 }
 
 /// The AO term of a PBR surface, on the prepass's depth (drawn only with the product look).
 @fragment
 fn fs_ao_term_pbr(i: PbrOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return ao_term(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp), front);
+    return ao_term(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp, 0u), front);
 }
 
 // A material's input at a fragment of a PBR vertex stream: the fragment and the vertex's

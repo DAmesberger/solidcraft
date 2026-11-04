@@ -167,7 +167,7 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
-    for entry in ["fs_solid", "fs_solid_cut", "fs_solid_touch", "fs_solid_flat", "fs_solid_cut_flat", "fs_solid_touch_flat"] {
+    for entry in ["fs_solid", "fs_solid_cut", "fs_solid_open", "fs_solid_flat", "fs_solid_cut_flat", "fs_solid_open_flat"] {
         let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
