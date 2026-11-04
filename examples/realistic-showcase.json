@@ -1,0 +1,1099 @@
+{
+ "commands": [
+  {
+   "command": "file.new",
+   "params": {
+    "name": "Realistic showcase"
+   }
+  },
+  {
+   "command": "document.metadata.set",
+   "params": {
+    "values": {
+     "license": "MIT OR Apache-2.0",
+     "author": "SolidCraft contributors",
+     "project": "Realistic view showcase",
+     "description": "Original example design for the Realistic view: brushed, polished and coated finishes, a carbon-fibre twill with a printed label, a clear silicone dome and the Sample Plate. Illustrative visual estimates, not measured optical data."
+    }
+   }
+  },
+  {
+   "command": "parameters.change",
+   "params": {
+    "name": "width",
+    "expression": "80 mm",
+    "comment": "plate width"
+   }
+  },
+  {
+   "command": "parameters.change",
+   "params": {
+    "name": "depth",
+    "expression": "50 mm"
+   }
+  },
+  {
+   "command": "parameters.change",
+   "params": {
+    "name": "thickness",
+    "expression": "8 mm"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Base"
+   }
+  },
+  {
+   "command": "sketch.rectangle.two_point",
+   "params": {
+    "p0": [
+     0,
+     0
+    ],
+    "p1": [
+     80,
+     50
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "p1",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "l1"
+    ],
+    "value": "width"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "l2"
+    ],
+    "value": "depth"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": "thickness",
+    "body_name": "Sample Plate"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      0,
+      0,
+      4
+     ],
+     [
+      80,
+      0,
+      4
+     ],
+     [
+      80,
+      50,
+      4
+     ],
+     [
+      0,
+      50,
+      4
+     ]
+    ],
+    "radius": "6 mm"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Holes"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     12,
+     25
+    ],
+    "diameter": 8
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     68,
+     25
+    ],
+    "diameter": 8
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": "thickness",
+    "operation": "cut",
+    "name": "Holes"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "offset": "thickness",
+    "name": "Boss"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     40,
+     25
+    ],
+    "diameter": 24
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": 14,
+    "operation": "join",
+    "name": "Boss"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "offset": "thickness + 14 mm",
+    "name": "Bore"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     40,
+     25
+    ],
+    "diameter": 12
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": "thickness + 14 mm",
+    "direction": "negative",
+    "operation": "cut",
+    "name": "Bore"
+   }
+  },
+  {
+   "command": "solid.move",
+   "params": {
+    "bodies": [
+     "Sample Plate"
+    ],
+    "translate": [
+     -150,
+     30,
+     0
+    ]
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "name": "Brushed lid profile",
+    "plane": {
+     "origin": [
+      -10,
+      55,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "command": "sketch.rectangle.rounded",
+   "params": {
+    "p0": [
+     -45.0,
+     -30.0
+    ],
+    "p1": [
+     45.0,
+     30.0
+    ],
+    "radius": 8
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": 10,
+    "operation": "new",
+    "body_name": "Brushed lid",
+    "name": "Brushed lid"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      -10,
+      25.0,
+      10
+     ],
+     [
+      -10,
+      85.0,
+      10
+     ],
+     [
+      -55.0,
+      55,
+      10
+     ],
+     [
+      35.0,
+      55,
+      10
+     ],
+     [
+      -52.65685424949238,
+      27.34314575050762,
+      10
+     ],
+     [
+      -52.65685424949238,
+      82.65685424949238,
+      10
+     ],
+     [
+      32.65685424949238,
+      27.34314575050762,
+      10
+     ],
+     [
+      32.65685424949238,
+      82.65685424949238,
+      10
+     ]
+    ],
+    "radius": 3
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "name": "Carbon plate profile",
+    "plane": {
+     "origin": [
+      115,
+      50,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "command": "sketch.rectangle.rounded",
+   "params": {
+    "p0": [
+     -55.0,
+     -35.0
+    ],
+    "p1": [
+     55.0,
+     35.0
+    ],
+    "radius": 6
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": 4,
+    "operation": "new",
+    "body_name": "Carbon plate",
+    "name": "Carbon plate"
+   }
+  },
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "body_name": "Steel cylinder",
+    "base": [
+     -125,
+     -45,
+     0
+    ],
+    "radius": 15,
+    "height": 40,
+    "axis": "Z",
+    "operation": "new"
+   }
+  },
+  {
+   "command": "solid.sphere",
+   "params": {
+    "body_name": "Steel sphere",
+    "center": [
+     -75,
+     -45,
+     18
+    ],
+    "radius": 18,
+    "operation": "new"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "name": "Epoxy box profile",
+    "plane": {
+     "origin": [
+      -5,
+      -45,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "command": "sketch.rectangle.rounded",
+   "params": {
+    "p0": [
+     -27.0,
+     -20.0
+    ],
+    "p1": [
+     27.0,
+     20.0
+    ],
+    "radius": 7
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": 26,
+    "operation": "new",
+    "body_name": "Epoxy box",
+    "name": "Epoxy box"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      -5,
+      -65.0,
+      26
+     ],
+     [
+      -5,
+      -25.0,
+      26
+     ],
+     [
+      -32.0,
+      -45,
+      26
+     ],
+     [
+      22.0,
+      -45,
+      26
+     ],
+     [
+      -29.949747468305834,
+      -62.94974746830583,
+      26
+     ],
+     [
+      -29.949747468305834,
+      -27.050252531694166,
+      26
+     ],
+     [
+      19.949747468305834,
+      -62.94974746830583,
+      26
+     ],
+     [
+      19.949747468305834,
+      -27.050252531694166,
+      26
+     ]
+    ],
+    "radius": 4
+   }
+  },
+  {
+   "command": "solid.sphere",
+   "params": {
+    "body_name": "Silicone dome",
+    "center": [
+     85,
+     -45,
+     0
+    ],
+    "radius": 24,
+    "operation": "new"
+   }
+  },
+  {
+   "command": "solid.box",
+   "params": {
+    "corner": [
+     59,
+     -71,
+     -26
+    ],
+    "length": 52,
+    "width": 52,
+    "height": 26,
+    "operation": "cut",
+    "targets": [
+     "Silicone dome"
+    ],
+    "name": "Dome base"
+   }
+  },
+  {
+   "command": "appearance.texture.add",
+   "params": {
+    "path": "assets/examples/realistic-showcase-label.png",
+    "name": "Showcase label"
+   }
+  },
+  {
+   "command": "appearance.graph.create",
+   "params": {
+    "id": "brushed-aluminium",
+    "name": "Brushed aluminium",
+    "graph": {
+     "name": "Brushed aluminium",
+     "nodes": [
+      {
+       "id": "uv",
+       "kind": "texcoord.planar",
+       "params": {
+        "space": "object"
+       },
+       "inputs": {
+        "origin": [
+         0,
+         0,
+         0
+        ],
+        "u": [
+         1,
+         0,
+         0
+        ],
+        "v": [
+         0,
+         1,
+         0
+        ]
+       }
+      },
+      {
+       "id": "lines",
+       "kind": "pattern.brushed",
+       "inputs": {
+        "texcoord": {
+         "from": "uv"
+        },
+        "density_per_mm": 40,
+        "streak_mm": 6,
+        "contrast": 0.55,
+        "jitter": 0.3,
+        "seed": 5
+       }
+      },
+      {
+       "id": "rough",
+       "kind": "remap",
+       "inputs": {
+        "in": {
+         "from": "lines"
+        },
+        "out_min": 0.26,
+        "out_max": 0.36
+       }
+      },
+      {
+       "id": "tint",
+       "kind": "remap",
+       "inputs": {
+        "in": {
+         "from": "lines"
+        },
+        "out_min": 0.96,
+        "out_max": 1.03
+       }
+      },
+      {
+       "id": "base",
+       "kind": "multiply",
+       "inputs": {
+        "a": [
+         0.91,
+         0.92,
+         0.92
+        ],
+        "b": {
+         "from": "tint"
+        }
+       }
+      },
+      {
+       "id": "surface",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": {
+         "from": "base",
+         "fallback": [
+          0.91,
+          0.92,
+          0.92
+         ]
+        },
+        "base_metalness": 1,
+        "specular_roughness": {
+         "from": "rough",
+         "fallback": 0.31
+        },
+        "specular_roughness_anisotropy": 0.7,
+        "geometry_tangent": {
+         "from": "lines.tangent"
+        }
+       }
+      }
+     ],
+     "output": "surface"
+    }
+   }
+  },
+  {
+   "command": "appearance.graph.create",
+   "params": {
+    "id": "black-epoxy",
+    "name": "Black epoxy, clear coated",
+    "graph": {
+     "name": "Black epoxy, clear coated",
+     "nodes": [
+      {
+       "id": "p",
+       "kind": "geometry.position",
+       "params": {
+        "space": "object"
+       }
+      },
+      {
+       "id": "edm",
+       "kind": "pattern.noise",
+       "params": {
+        "kind": "cellular",
+        "dimensions": 3,
+        "octaves": 2
+       },
+       "inputs": {
+        "position": {
+         "from": "p"
+        },
+        "scale_mm": 0.04,
+        "seed": 11
+       }
+      },
+      {
+       "id": "edm_r",
+       "kind": "remap",
+       "inputs": {
+        "in": {
+         "from": "edm"
+        },
+        "out_min": 0.4,
+        "out_max": 0.52
+       }
+      },
+      {
+       "id": "surface",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": [
+         0.022,
+         0.022,
+         0.024
+        ],
+        "specular_roughness": {
+         "from": "edm_r",
+         "fallback": 0.46
+        },
+        "specular_ior": 1,
+        "coat_weight": 1,
+        "coat_roughness": 0.08,
+        "coat_ior": 1.5
+       }
+      }
+     ],
+     "output": "surface"
+    }
+   }
+  },
+  {
+   "command": "appearance.graph.create",
+   "params": {
+    "id": "carbon-twill",
+    "name": "Carbon-fibre twill with label",
+    "graph": {
+     "name": "Carbon-fibre twill with label",
+     "interface": [
+      {
+       "name": "label",
+       "type": "texture"
+      }
+     ],
+     "nodes": [
+      {
+       "id": "uv",
+       "kind": "texcoord.planar",
+       "params": {
+        "space": "object"
+       },
+       "inputs": {
+        "origin": [
+         0,
+         0,
+         0
+        ],
+        "u": [
+         0.7071,
+         0.7071,
+         0
+        ],
+        "v": [
+         -0.7071,
+         0.7071,
+         0
+        ]
+       }
+      },
+      {
+       "id": "weave",
+       "kind": "pattern.weave",
+       "params": {
+        "kind": "twill_2x2"
+       },
+       "inputs": {
+        "texcoord": {
+         "from": "uv"
+        },
+        "pitch_mm": [
+         2.0,
+         2.0
+        ],
+        "crown": 1,
+        "fibres": 9,
+        "fibre_contrast": 0.35
+       }
+      },
+      {
+       "id": "albedo",
+       "kind": "remap",
+       "inputs": {
+        "in": {
+         "from": "weave"
+        },
+        "out_min": 0.018,
+        "out_max": 0.075
+       }
+      },
+      {
+       "id": "rough",
+       "kind": "remap",
+       "inputs": {
+        "in": {
+         "from": "weave"
+        },
+        "out_min": 0.42,
+        "out_max": 0.28
+       }
+      },
+      {
+       "id": "bump",
+       "kind": "normal.from_height",
+       "inputs": {
+        "height": {
+         "from": "weave"
+        },
+        "relief_mm": 0.02
+       }
+      },
+      {
+       "id": "carbon",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": {
+         "from": "albedo",
+         "fallback": [
+          0.035,
+          0.035,
+          0.038
+         ]
+        },
+        "specular_roughness": {
+         "from": "rough",
+         "fallback": 0.35
+        },
+        "specular_ior": 1,
+        "geometry_normal": {
+         "from": "bump"
+        },
+        "coat_weight": 1,
+        "coat_roughness": 0.05,
+        "coat_ior": 1.5
+       }
+      },
+      {
+       "id": "frame",
+       "kind": "texcoord.planar",
+       "params": {
+        "space": "object"
+       },
+       "inputs": {
+        "origin": [
+         95,
+         65,
+         0
+        ],
+        "u": [
+         60,
+         0,
+         0
+        ],
+        "v": [
+         0,
+         -30,
+         0
+        ]
+       }
+      },
+      {
+       "id": "print",
+       "kind": "image",
+       "params": {
+        "space": "srgb",
+        "wrap": "clamp",
+        "channel": "a"
+       },
+       "inputs": {
+        "texcoord": {
+         "from": "frame"
+        },
+        "file": {
+         "interface": "label"
+        }
+       }
+      },
+      {
+       "id": "paper",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": {
+         "from": "print.color",
+         "fallback": [
+          0.95,
+          0.93,
+          0.89
+         ]
+        },
+        "specular_roughness": 0.5,
+        "specular_ior": 1.5
+       }
+      },
+      {
+       "id": "surface",
+       "kind": "surface.mix",
+       "inputs": {
+        "fg": {
+         "from": "paper"
+        },
+        "bg": {
+         "from": "carbon"
+        },
+        "mix": {
+         "from": "print.alpha",
+         "fallback": 0
+        }
+       }
+      }
+     ],
+     "output": "surface"
+    }
+   }
+  },
+  {
+   "command": "appearance.graph.create",
+   "params": {
+    "id": "clear-silicone",
+    "name": "Clear silicone",
+    "graph": {
+     "name": "Clear silicone",
+     "nodes": [
+      {
+       "id": "surface",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": [
+         0.96,
+         0.98,
+         0.99
+        ],
+        "specular_roughness": 0.12,
+        "specular_ior": 1.41,
+        "transmission_weight": 1,
+        "transmission_color": [
+         0.8,
+         0.92,
+         0.95
+        ]
+       }
+      }
+     ],
+     "output": "surface"
+    }
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Brushed lid"
+    ],
+    "graph": "brushed-aluminium",
+    "name": "Brushed aluminium"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Steel cylinder",
+     "Steel sphere"
+    ],
+    "color": "#c4c7cb",
+    "pbr": {
+     "metallic": 1,
+     "roughness": 0.08,
+     "dielectric_ior": 1.5
+    },
+    "name": "Polished steel"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Epoxy box"
+    ],
+    "graph": "black-epoxy",
+    "name": "Black epoxy, clear coated"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Carbon plate"
+    ],
+    "graph": "carbon-twill",
+    "values": {
+     "label": {
+      "texture": "a54fc9b28157a0a100abc9865e97ea4ac6d4a96c13e31f72ba9f1be7a029f5a1"
+     }
+    },
+    "name": "Carbon twill, labelled"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Silicone dome"
+    ],
+    "graph": "clear-silicone",
+    "name": "Clear silicone"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "Sample Plate"
+    ],
+    "color": "#c9ccd1",
+    "pbr": {
+     "metallic": 1,
+     "roughness": 0.25,
+     "dielectric_ior": 1.5
+    },
+    "name": "Machined steel"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "body": "Sample Plate",
+    "faces": [
+     [
+      -110,
+      64,
+      22
+     ]
+    ],
+    "color": "#2f6db5"
+   }
+  },
+  {
+   "command": "view.save",
+   "params": {
+    "name": "Showcase: isometric front-left",
+    "camera": {
+     "target": [
+      -10,
+      5,
+      12
+     ],
+     "yaw": 0.7853981633974483,
+     "pitch": 0.6154797086703874,
+     "distance": 520,
+     "fov": 0.6
+    }
+   }
+  },
+  {
+   "command": "view.save",
+   "params": {
+    "name": "Showcase: low back three-quarter",
+    "camera": {
+     "target": [
+      -10,
+      5,
+      10
+     ],
+     "yaw": -2.35,
+     "pitch": 0.26,
+     "distance": 500,
+     "fov": 0.6
+    }
+   }
+  },
+  {
+   "command": "view.save",
+   "params": {
+    "name": "Showcase: label and dome",
+    "camera": {
+     "target": [
+      100,
+      0,
+      6
+     ],
+     "yaw": 0.55,
+     "pitch": 0.62,
+     "distance": 260,
+     "fov": 0.6
+    }
+   }
+  },
+  {
+   "command": "view.apply",
+   "params": {
+    "view": "Showcase: isometric front-left"
+   }
+  }
+ ]
+}

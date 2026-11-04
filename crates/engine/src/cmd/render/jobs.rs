@@ -512,6 +512,14 @@ fn prepare_progressive(
     super::clear_coat::apply(&mut scene, &input.raytrace.clear_coats, command)?;
     // The scene's graph looks with this job's runtime values, for the path back end.
     let graphs = super::graphs::capture(s, &scene, &input.raytrace.graph_values, &input.raytrace.graph_textures, command)?;
+    // Their path-tracer form; see-through materials give their bodies glass in progressive jobs,
+    // the only ones that refract.
+    let graph_job = graphs.as_ref().map(|g| g.to_job()).transpose().map_err(job_error)?;
+    if input.progressive
+        && let Some(job) = &graph_job
+    {
+        super::graphs::CapturedGraphs::give_glass(job, &mut scene);
+    }
     let settings = if let Some(name) = &input.setup {
         s.doc.render.setups.get(name).cloned().ok_or_else(|| bad(command, "no saved render setup with that name"))?
     } else if let Some(settings) = &input.settings {
@@ -621,8 +629,11 @@ fn prepare_progressive(
     if !host.is_available() {
         return Err(bad(command, "image host is unavailable"));
     }
+    // The path tracer evaluates graphs; every other executor draws their base responses, which
+    // the scene's surfaces already hold.
+    let path_graphs = resolved.executor.as_str() == "gpu-path";
     let request = ImageRequest {
-        graphs: None,
+        graphs: graph_job.filter(|_| path_graphs).map(std::sync::Arc::new),
         studio_weights: validate_studio_weights(input.studio_weights, command)?,
         integrator: Default::default(),
         raytrace: None,
@@ -645,6 +656,10 @@ fn prepare_progressive(
     let mut reply = reply;
     if let Some(graphs) = &graphs {
         reply["graphs"] = graphs.summary();
+        reply["graphs"]["drawn_as"] = json!(if path_graphs { "path_tracer" } else { "base_response" });
+        if let Some(job) = &request.graphs {
+            reply["graphs"]["approximations"] = json!(job.summary().approximations);
+        }
     }
     if options.denoise {
         reply["denoising"] = json!({

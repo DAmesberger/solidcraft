@@ -2,6 +2,8 @@
 //! job's material-graph table (`material.rs`), whose images share these pixels by identity.
 //! Word 1 of the header is the graph table's first word (0: none).
 use solidcraft_geom::Vec3;
+
+use crate::material::textures::ResidentPolicy;
 use solidcraft_render::job::{
     CancelToken, ErrorCode, JobError, Result,
     graphs::GraphMaterials,
@@ -45,7 +47,7 @@ pub(super) fn pixels(
 }
 #[cfg(test)]
 pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, origin: Vec3, cancel: &CancelToken) -> Result<Vec<u8>> {
-    flatten_with_graphs(resources, None, body_count, origin, cancel).map(|(bytes, _)| bytes)
+    flatten_with_graphs(resources, None, body_count, origin, cancel, &ResidentPolicy::path(u64::MAX)).map(|(bytes, _)| bytes)
 }
 /// The texture buffer with the job's graph table after the runtime maps, and where each graph
 /// binding's record starts.
@@ -55,6 +57,7 @@ pub(super) fn flatten_with_graphs(
     body_count: usize,
     origin: Vec3,
     cancel: &CancelToken,
+    policy: &ResidentPolicy,
 ) -> Result<(Vec<u8>, super::material::Records)> {
     let mut shared = std::collections::BTreeMap::new();
     let mut bytes = match resources {
@@ -62,7 +65,7 @@ pub(super) fn flatten_with_graphs(
         None => vec![0; 16],
     };
     let records = match graphs {
-        Some(graphs) => super::material::append(&mut bytes, graphs, origin, cancel, &mut shared)?,
+        Some(graphs) => super::material::append(&mut bytes, graphs, origin, cancel, &mut shared, policy)?,
         None => Default::default(),
     };
     Ok((bytes, records))

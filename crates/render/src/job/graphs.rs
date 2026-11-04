@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use super::textures::TextureMap;
 use super::{CancelToken, ErrorCode, JobError, MAX_GPU_PATH_BODIES, Result};
 use crate::ProductScene;
 use crate::material_graph::ir::{Ir, Operand, ShapeKey};
 use crate::material_graph::{Constant, limits, uniform_words};
-use crate::texture_input::MapRole;
+use crate::texture_input::{MapRole, TextureSource, role_of};
+use sha2::Digest as _;
 
 /// Graph materials (a graph with one look's values) one job may hold.
 pub const MAX_GRAPH_MATERIALS: usize = 4096;
@@ -33,28 +33,63 @@ fn invalid(message: impl Into<String>) -> JobError {
     JobError::new(ErrorCode::InvalidScene, message)
 }
 
-/// A texture an `image` node reads, decoded for the path tracer's texture buffer.
-#[derive(Clone, Debug)]
+/// A texture an `image` node reads, admitted as the viewport admits it (`texture_input`, the file's
+/// safety bounds and the role its use implies) and decoded at the path tracer's resident size.
+#[derive(Clone)]
 pub struct GraphTexture {
-    map: TextureMap,
+    source: Arc<TextureSource>,
     srgb: bool,
+    digest: [u8; 32],
+}
+
+impl std::fmt::Debug for GraphTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GraphTexture").field("info", self.source.info()).field("srgb", &self.srgb).finish()
+    }
+}
+
+/// The largest resident edge of a graph texture in any path job: the path tracer's resident clamp
+/// (`material::textures::ResidentPolicy::path`) at its largest budget. A device with a smaller
+/// storage binding drops more.
+pub fn resident_edge() -> u32 {
+    u32::try_from((super::textures::MAX_TEXTURE_PIXELS_BYTES / 16).isqrt()).unwrap_or(1)
 }
 
 impl GraphTexture {
     /// An encoded image (PNG or JPEG) for an `image` node in colour space `srgb` (decoded per
-    /// texel before filtering) or linear data.
+    /// texel before filtering), linear data, or 16-bit grey height (`texture_input::role_of`).
     pub fn new(bytes: Vec<u8>, srgb: bool) -> Result<Self> {
-        let role = if srgb { MapRole::BaseColor } else { MapRole::Roughness };
-        Ok(Self { map: TextureMap::new(bytes, role)?, srgb })
+        let role = role_of(&bytes, srgb);
+        let digest = sha2::Sha256::digest(&bytes).into();
+        let source = TextureSource::new(bytes, role).map_err(|e| invalid(e.to_string()))?;
+        Ok(Self { source: Arc::new(source), srgb, digest })
     }
-    pub fn map(&self) -> &TextureMap {
-        &self.map
+    pub fn source(&self) -> &TextureSource {
+        &self.source
     }
     pub fn srgb(&self) -> bool {
         self.srgb
     }
+    /// Content plus interpretation: equal identities share one decode in a job's texture buffer,
+    /// with runtime maps as well (`TextureMap::identity`'s role numbering).
+    pub fn identity(&self) -> ([u8; 32], u8) {
+        let role = match self.source.info().role {
+            MapRole::BaseColor => 0,
+            MapRole::NormalOpenGl => 1,
+            MapRole::Roughness => 2,
+            MapRole::Metallic => 3,
+            MapRole::AmbientOcclusion => 4,
+            MapRole::Height => 5,
+        };
+        (self.digest, role)
+    }
+    /// The linear RGBA `f32` bytes resident at most: halved until it fits [`resident_edge`].
     fn pixel_bytes(&self) -> u64 {
-        let [w, h] = self.map.dimensions();
+        let info = self.source.info();
+        let (mut w, mut h) = (info.width.max(1), info.height.max(1));
+        while w > resident_edge() || h > resident_edge() {
+            (w, h) = ((w / 2).max(1), (h / 2).max(1));
+        }
         u64::from(w) * u64::from(h) * 16
     }
 }
@@ -65,7 +100,8 @@ pub struct Approximation {
     /// The `standard_surface` input (OpenPBR name).
     pub input: &'static str,
     /// What the path tracer does: `isotropic`, `untinted`, `ignored`, `base_normal`, `not_emitted`,
-    /// `captured_transmission` or `opaque`.
+    /// `full_glass` (a constant transmission weight below 1), `captured_transmission` (a driven
+    /// weight: the scene's own transmission applies) or `opaque`.
     pub treatment: &'static str,
 }
 
@@ -84,6 +120,8 @@ const LACKING: &[Lacking] = &[
     Lacking { input: "specular_color", neutral: &[1.0, 1.0, 1.0], treatment: "ignored" },
     Lacking { input: "geometry_coat_normal", neutral: &[], treatment: "base_normal" },
     Lacking { input: "emission_luminance", neutral: &[0.0], treatment: "not_emitted" },
+    // A constant weight above 0 is glass (`GraphMaterial::see_through`), all or nothing; a driven
+    // weight keeps the scene's transmission.
     Lacking { input: "transmission_weight", neutral: &[0.0], treatment: "captured_transmission" },
     Lacking { input: "geometry_opacity", neutral: &[1.0], treatment: "opaque" },
 ];
@@ -129,6 +167,32 @@ impl GraphMaterial {
     pub fn approximations(&self) -> &[Approximation] {
         &self.approximations
     }
+    /// The glass a see-through material gives its body or face in the path tracer, whose
+    /// transmission is all or nothing: for a constant `transmission_weight` above 0, closed
+    /// glass whose absorption gives `transmission_color` after `transmission_depth_mm` (Beer's
+    /// law). `None` for an opaque material, and for a driven weight, which keeps the scene's own
+    /// transmission (reported as `captured_transmission`).
+    pub fn see_through(&self) -> Option<crate::transmission::Transmission> {
+        let find = |name: &str| self.ir.surface.iter().find(|(n, _)| *n == name).map(|(_, o)| *o).unwrap_or(Operand::Absent);
+        let read = |name: &str, default: &[f64]| -> Option<Vec<f64>> {
+            match find(name) {
+                Operand::Absent => Some(default.to_vec()),
+                Operand::Uniform { offset, width } => {
+                    let start = usize::try_from(offset).ok()?;
+                    (0..usize::from(width)).map(|k| self.words.get(start + k).map(|w| f64::from(f32::from_bits(*w)))).collect()
+                }
+                _ => None,
+            }
+        };
+        let weight = read("transmission_weight", &[0.0])?.first().copied()?;
+        if !(weight > 0.0) {
+            return None;
+        }
+        let color = read("transmission_color", &[1.0, 1.0, 1.0])?;
+        let depth = read("transmission_depth_mm", &[1.0])?.first().copied()?.max(1e-3);
+        let a = |k: usize| -color.get(k).copied().unwrap_or(1.0).clamp(1e-4, 1.0).ln() / depth;
+        crate::transmission::Transmission::new(solidcraft_geom::Vec3::new(a(0), a(1), a(2)), None).ok()
+    }
 }
 
 /// Whether `op` makes its input differ from `neutral`: a wire always may, a constant when its
@@ -148,6 +212,14 @@ fn active(op: &Operand, neutral: &[f32], words: &[u32]) -> bool {
     }
 }
 
+/// A scalar operand's constant value: its uniform word, or none for a wire or an unset input.
+fn constant(op: &Operand, words: &[u32]) -> Option<f32> {
+    match op {
+        Operand::Uniform { offset, width: 1 } => usize::try_from(*offset).ok().and_then(|i| words.get(i)).map(|w| f32::from_bits(*w)),
+        _ => None,
+    }
+}
+
 fn approximations(ir: &Ir, words: &[u32]) -> Vec<Approximation> {
     let layers = std::iter::once(ir.surface.as_slice()).chain(ir.mix_layers.iter().map(|l| l.fg.as_slice()));
     let mut out: Vec<Approximation> = Vec::new();
@@ -155,14 +227,24 @@ fn approximations(ir: &Ir, words: &[u32]) -> Vec<Approximation> {
         let find = |name: &str| surface.iter().find(|(n, _)| *n == name).map(|(_, o)| *o).unwrap_or(Operand::Absent);
         for lacking in LACKING {
             let op = find(lacking.input);
+            let mut treatment = lacking.treatment;
             let on = if lacking.input == "geometry_coat_normal" {
                 // One shading normal: a coat normal only differs when it is not the base's.
                 op != Operand::Absent && op != find("geometry_normal")
+            } else if lacking.input == "transmission_weight" {
+                // A constant weight is glass (`see_through`): exact at 1, full glass below it.
+                match constant(&op, words) {
+                    Some(w) => {
+                        treatment = "full_glass";
+                        w > 0.0 && w < 1.0
+                    }
+                    None => active(&op, lacking.neutral, words),
+                }
             } else {
                 active(&op, lacking.neutral, words)
             };
             if on && !out.iter().any(|a| a.input == lacking.input) {
-                out.push(Approximation { input: lacking.input, treatment: lacking.treatment });
+                out.push(Approximation { input: lacking.input, treatment });
             }
         }
     }
@@ -259,7 +341,7 @@ impl GraphMaterials {
         }
         let mut unique = std::collections::BTreeMap::new();
         for texture in materials.iter().flat_map(|m| m.textures.iter().flatten()) {
-            unique.entry(texture.map.identity()).or_insert(texture.pixel_bytes());
+            unique.entry(texture.identity()).or_insert(texture.pixel_bytes());
         }
         let pixel_bytes = unique.values().try_fold(0u64, |s, b| s.checked_add(*b)).ok_or_else(|| invalid("graph texture accounting overflow"))?;
         if pixel_bytes > MAX_GRAPH_PIXEL_BYTES {
@@ -284,7 +366,7 @@ impl GraphMaterials {
     }
     /// Source snapshots, decoded pixels, staging and the device buffer, plus generated code.
     pub fn working_bytes(&self) -> u64 {
-        let sources: u64 = self.materials.iter().flat_map(|m| m.textures.iter().flatten()).map(|t| t.map.retained_bytes() as u64).sum();
+        let sources: u64 = self.materials.iter().flat_map(|m| m.textures.iter().flatten()).map(|t| t.source.info().encoded_bytes as u64).sum();
         let records = self.bindings.len() as u64 * (limits::UNIFORM_FLOATS as u64 * 4 + 256);
         sources.saturating_add(self.pixel_bytes.saturating_mul(3)).saturating_add(records).saturating_add(4 * 1024 * 1024)
     }

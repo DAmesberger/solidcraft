@@ -1,0 +1,19 @@
+{
+ "name": "Printed ink",
+ "interface": [{"name": "color", "type": "color3", "default": [0.86, 0.86, 0.84]}, {"name": "strength", "type": "float", "default": 1}],
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 1]}},
+  {"id": "fine", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.05, "seed": 3}},
+  {"id": "coarse", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.16, "seed": 4}},
+  {"id": "grain", "kind": "add", "inputs": {"a": {"from": "fine"}, "b": {"from": "coarse"}}},
+  {"id": "swing", "kind": "multiply", "inputs": {"a": {"interface": "strength"}, "b": 0.36}},
+  {"id": "tint_lo", "kind": "subtract", "inputs": {"a": 1, "b": {"from": "swing"}}},
+  {"id": "tint_hi", "kind": "add", "inputs": {"a": 1, "b": {"from": "swing"}}},
+  {"id": "tint", "kind": "remap", "inputs": {"in": {"from": "grain"}, "in_min": 0, "in_max": 2, "out_min": {"from": "tint_lo", "fallback": 1}, "out_max": {"from": "tint_hi", "fallback": 1}}},
+  {"id": "base", "kind": "multiply", "inputs": {"a": {"interface": "color"}, "b": {"from": "tint", "fallback": 1}}},
+  {"id": "relief_h", "kind": "multiply", "inputs": {"a": {"from": "grain"}, "b": {"interface": "strength"}}},
+  {"id": "relief", "kind": "normal.from_height", "inputs": {"height": {"from": "relief_h"}, "relief_mm": 0.002}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "base", "fallback": [0.86, 0.86, 0.84]}, "specular_roughness": 0.6, "specular_ior": 1.5, "geometry_normal": {"from": "relief"}}}
+ ],
+ "output": "surface"
+}

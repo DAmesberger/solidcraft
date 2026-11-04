@@ -6,7 +6,7 @@ use crate::schema::libraries::{
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session, params::bad};
 use serde_json::{Value, json};
-use solidcraft_io::catalog::{Catalog, Definition};
+use solidcraft_io::catalog::{BUILTIN_PATH, CONTAINER_EXT, Catalog, Definition};
 
 const INSPECT_CONTRACT: TypedContract<LibraryInspectParams> = TypedContract::new();
 const EXPORT_CONTRACT: TypedContract<LibraryExportParams> = TypedContract::new();
@@ -16,15 +16,15 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library.inspect", "Inspect Local Library", crate::checked!("library.inspect", inspect)).icon("inspect").noundo().doc_only()
         .contract(&INSPECT_CONTRACT)
         .output(output_schema_for::<LibraryInspected>)
-        .params("path: v1/v2 library JSON or v3 (JSON, or a container with textures); returns validated catalog and exact entry revisions, without changing the design"),
+        .params("path: v1/v2 library JSON or v3 (JSON, or a .sclib container with textures), or builtin:materials for the built-in material graphs; returns validated catalog and exact entry revisions, without changing the design"),
     CommandSpec::new("library.export", "Export Design Library", crate::checked!("library.export", export)).icon("export").noundo().doc_only()
         .contract(&EXPORT_CONTRACT)
         .output(output_schema_for::<LibraryExported>)
-        .params("path: .json; id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names a material graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
+        .params("path: .json, or .sclib when the library has textures (a container); id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names a material graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
     CommandSpec::new("library.apply", "Apply Local Library Entry", crate::checked!("library.apply", apply)).icon("import").enabled(super::not_in_sketch)
         .contract(&APPLY_CONTRACT)
         .output(output_schema_for::<LibraryApplied>)
-        .params("path, entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import; graph_id?: id for the copy of a look's material graph (default the library's; a different graph under that id refuses). A look's graph and textures are copied with it. Copies values in one undo step; material conflicts are explicit"),
+        .params("path (or builtin:materials), entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import; graph_id?: id for the copy of a look's material graph (default the library's; a different graph under that id refuses). A look's graph and textures are copied with it. Copies values in one undo step; material conflicts are explicit"),
 ];
 
 impl LibraryTargets {
@@ -48,6 +48,9 @@ impl LibraryTargets {
     }
 }
 fn path(cmd: &str, value: &str) -> Result<()> {
+    if value == BUILTIN_PATH {
+        return Ok(());
+    }
     if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
         return Err(bad(cmd, "invalid library path"));
     }
@@ -70,8 +73,9 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "library.export";
     let request: LibraryExportParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
     path(cmd, &request.path)?;
-    if !request.path.to_ascii_lowercase().ends_with(".json") {
-        return Err(bad(cmd, "library export path must end in .json"));
+    let extension = std::path::Path::new(&request.path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if !matches!(extension.as_deref(), Some("json") | Some(CONTAINER_EXT)) {
+        return Err(bad(cmd, format!("library export path must end in .json, or .{CONTAINER_EXT} for a library with textures")));
     }
     let catalog = Catalog::from_document(&s.doc, &request.id, &request.name, request.provenance)
         .and_then(|catalog| match &request.format {
@@ -80,6 +84,19 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .map_err(|e| bad(cmd, e.to_string()))?;
     let bytes = catalog.encode().map_err(|e| bad(cmd, e.to_string()))?;
+    // The reader tells a container from JSON by its bytes, but a file's name should say which.
+    match (solidcraft_io::is_design_container(&bytes), extension.as_deref()) {
+        (true, Some("json")) => {
+            return Err(bad(
+                cmd,
+                format!("this library has textures, so it is written as a container (ZIP): save it as .{CONTAINER_EXT}, not .json"),
+            ));
+        }
+        (false, Some(CONTAINER_EXT)) => {
+            return Err(bad(cmd, format!("this library has no textures, so it is written as plain JSON: save it as .json, not .{CONTAINER_EXT}")));
+        }
+        _ => {}
+    }
     #[cfg(not(target_arch = "wasm32"))]
     let result = if request.overwrite {
         solidcraft_io::write_atomic(std::path::Path::new(&request.path), &bytes, false)
