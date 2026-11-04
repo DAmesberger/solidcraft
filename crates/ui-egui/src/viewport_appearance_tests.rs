@@ -667,3 +667,85 @@ fn a_see_through_graph_look_is_drawn_blended() {
     app.ui.view_look = crate::view_look::STANDARD;
     assert!(build_scene(&app).graphs.draws().is_empty());
 }
+
+/// The modelling view in the Realistic look with two graph looks (the brushed nickel silver and
+/// the clear-coated black epoxy fixtures), drawn as the window draws it, offscreen: PNGs into
+/// `$C1_APP_SHOTS`. Evidence for review, not a check (`--ignored`).
+#[test]
+#[ignore]
+fn screenshot_graph_looks_in_the_realistic_view() {
+    let Ok(dir) = std::env::var("C1_APP_SHOTS") else { return };
+    let fixture = |name: &str| -> serde_json::Value {
+        let path = format!("{}/../render/tests/fixtures/material_graph/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default()).unwrap_or_default()
+    };
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    app.run("solid.box", json!({"corner": [50, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
+    app.run("solid.box", json!({"corner": [100, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "brushed", "name": "Brushed", "graph": fixture("brushed-nickel-silver")})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "epoxy", "name": "Epoxy", "graph": fixture("black-epoxy-clear-coat")})).unwrap();
+    let names: Vec<String> = crate::open_meshing::shown_world(&app).bodies.iter().map(|b| b.name.clone()).collect();
+    app.run("appearance.assign", json!({"bodies": [names[0]], "graph": "brushed"})).unwrap();
+    app.run("appearance.assign", json!({"bodies": [names[1]], "graph": "epoxy"})).unwrap();
+    // The epoxy without its texture: a constant coated black, to tell pattern from shading.
+    app.run("appearance.graph.create", json!({"id": "black", "name": "Black", "graph": {"name": "Black", "nodes": [{"id": "s", "kind": "standard_surface",
+        "inputs": {"base_color": [0.022, 0.022, 0.024], "specular_roughness": 0.46, "specular_ior": 1, "coat_weight": std::env::var("C1_COAT").ok().and_then(|c| c.parse::<f64>().ok()).unwrap_or(1.0), "coat_roughness": 0.08, "coat_ior": 1.5}}], "output": "s"}})).unwrap();
+    app.run("appearance.assign", json!({"bodies": [names[2]], "graph": "black"})).unwrap();
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.ground_shadow = false;
+    const SIZE: u32 = 1024;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    let (yaw, pitch) = solidcraft_engine::render::StandardView::Iso.angles();
+    for (name, distance) in [("iso", 200.0), ("close", 45.0)] {
+        for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
+            app.ui.view_look = look;
+            app.cam = crate::Camera {
+                target: Vec3::new(if name == "close" { 20.0 } else { 70.0 }, 15.0, 10.0),
+                yaw,
+                pitch,
+                roll: 0.0,
+                distance,
+                fov: 0.0,
+                ..Default::default()
+            };
+            let proj = super::projection(&app, rect);
+            let e = proj.cam.eye().to_f32();
+            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            let scene = build_scene(&app).merged();
+            if look == crate::view_look::REALISTIC {
+                assert!(!scene.graphs.draws().is_empty(), "the graph looks are in the scene");
+            }
+            let Some(bytes) =
+                crate::gpu::render_realistic_offscreen(scene, proj.vp.to_f32(), proj.cam.back().to_f32(), [e[0], e[1], e[2], 0.0], SIZE, product)
+            else {
+                return;
+            };
+            // Each box's top: mean and spread of each channel.
+            for (k, b) in names.iter().enumerate() {
+                let c = Vec3::new(20.0 + 50.0 * k as f64, 15.0, 20.0);
+                let Some(p) = proj.to_screen(c) else { continue };
+                let (x0, y0) = (p.x as i64, p.y as i64);
+                let mut stats = [[0.0f64; 2]; 3];
+                let mut n = 0.0;
+                for y in y0 - 20..y0 + 20 {
+                    for x in x0 - 20..x0 + 20 {
+                        let i = ((y.clamp(0, SIZE as i64 - 1) * SIZE as i64 + x.clamp(0, SIZE as i64 - 1)) * 4) as usize;
+                        for (ch, stat) in stats.iter_mut().enumerate() {
+                            let v = f64::from(bytes.get(i + ch).copied().unwrap_or(0));
+                            stat[0] += v;
+                            stat[1] += v * v;
+                        }
+                        n += 1.0;
+                    }
+                }
+                let s: Vec<String> = stats.iter().map(|[a, b]| format!("{:.1}±{:.1}", a / n, (b / n - (a / n).powi(2)).max(0.0).sqrt())).collect();
+                eprintln!("{look_name}-{name} {b} top: {}", s.join(" "));
+            }
+            if let Some(img) = image::RgbaImage::from_raw(SIZE, SIZE, bytes) {
+                let _ = img.save(format!("{dir}/{look_name}-{name}.png"));
+            }
+        }
+    }
+}

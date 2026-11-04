@@ -630,6 +630,148 @@ fn offscreen(
     Some(bytes)
 }
 
+/// The model view as the window draws it in the Realistic look: `scene` through the viewport
+/// callback with `look` (its studio baked and installed), occlusion on, drawn frame after frame
+/// until no material-graph shape or texture is still pending (at most 120 frames). Sized
+/// `size` × `size`, sRGB. For the graph-look screenshots (test evidence only).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn render_realistic_offscreen(
+    scene: GpuScene,
+    view_proj: [[f32; 4]; 4],
+    back: [f32; 3],
+    eye: [f32; 4],
+    size: u32,
+    look: Option<ProductLook>,
+) -> Option<Vec<u8>> {
+    let (_, device, queue) = offscreen_device()?;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let depth = solidcraft_gpu::depth_format(&device, true);
+    let target = GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false };
+    let mut renderer = Renderer::new(&device, target, None);
+    if let Some(look) = look {
+        renderer.set_studio_environment(&device, &queue, &StudioEnvironment::bake(look.studio));
+    }
+    let mut resources = egui_wgpu::CallbackResources::default();
+    resources.insert(renderer);
+    let none = || Arc::new(Mutex::new(None));
+    let slot = Arc::new(Mutex::new(Some(scene)));
+    let frame = |key: u64| {
+        ViewportCallback(Frame {
+            product_lights: None,
+            product_look: look,
+            units_per_mm: 1.0,
+            product: false,
+            upload_error: None,
+            key,
+            slot: slot.clone(),
+            sketch_key: 0,
+            sketch_slot: none(),
+            hl_key: 0,
+            hl_slot: none(),
+            pv_key: 0,
+            pv_slot: none(),
+            pv_hide: false,
+            view_proj,
+            back,
+            size_px: [size as f32; 2],
+            clip: [0.0; 4],
+            cap: [0.0; 4],
+            images: Vec::new(),
+            clouds: Vec::new(),
+            analysis: [0.0; 8],
+            analysis_colors: [0.0; 36],
+            access: None,
+            outline: false,
+            eye,
+            ao_radius: 30.0,
+            ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+            ssaa: 1.0,
+            sky: [0.0; 4],
+            hover_tint: [0.0; 3],
+            selection_tint: [0.0; 3],
+        })
+    };
+    let texture = |format, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("offscreen"),
+            size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+    let depth_tex = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
+    let (color_view, depth_view) = (color.create_view(&Default::default()), depth_tex.create_view(&Default::default()));
+    let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
+    let reversed = solidcraft_gpu::view::reversed_depth(Some(depth));
+    for n in 0..120u64 {
+        let cb = frame(1);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let extra = egui_wgpu::CallbackTrait::prepare(&cb, &device, &queue, &screen, &mut encoder, &mut resources);
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("offscreen"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.93, g: 0.93, b: 0.94, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(if reversed { 0.0 } else { 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size as f32, size as f32));
+            let info = egui::PaintCallbackInfo { viewport: rect, clip_rect: rect, pixels_per_point: 1.0, screen_size_px: [size, size] };
+            egui_wgpu::CallbackTrait::paint(&cb, info, &mut pass, &resources);
+        }
+        let done = resources.get::<Renderer>().is_none_or(|r| !r.wants_redraw());
+        if !done || n == 0 {
+            queue.submit(extra.into_iter().chain([encoder.finish()]));
+            device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            continue;
+        }
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offscreen read"),
+            size: u64::from(size * size * 4),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            color.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(size * 4), rows_per_image: Some(size) },
+            },
+            wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        );
+        queue.submit(extra.into_iter().chain([encoder.finish()]));
+        let slice = read.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        return Some(slice.get_mapped_range().ok()?.to_vec());
+    }
+    None
+}
+
 /// A viewport renderer kept on an offscreen device of its own, for timing frames (prepare, paint,
 /// and the GPU finishing them) as the window would draw them. Scale measurements only.
 #[cfg(all(test, not(target_arch = "wasm32")))]
