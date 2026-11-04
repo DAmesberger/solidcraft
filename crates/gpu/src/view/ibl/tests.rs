@@ -1004,7 +1004,7 @@ fn probe_layers(@builtin(global_invocation_id) id: vec3<u32>) {
     var p: PbrIbl;
     if (id.x % 2u == 0u) {
         let t = sc_aniso_tangent(n, vec3<f32>(1.0, 0.0, 0.0), q.w);
-        p = pbr_ibl_layers(s.xyz, parameters, coat, c.xyz, n, n, v, sc_aniso_reflect(n, t, v, q.x, q.z), 0.3);
+        p = pbr_ibl_layers(s.xyz, parameters, vec4<f32>(1.0), coat, c.xyz, n, n, v, sc_aniso_reflect(n, t, v, q.x, q.z), 0.3);
     } else {
         p = pbr_ibl_parts(s.xyz, parameters, coat, n, v, 0.3);
     }
@@ -1072,4 +1072,65 @@ fn probe_layers(@builtin(global_invocation_id) id: vec3<u32>) {
     let moved = cases.iter().enumerate().filter(|(k, c)| c.1 == 1.0 && (0..3).any(|j| (got[2 * k][j] - got[2 * k + 1][j]).abs() > 1e-3)).count();
     assert!(got.iter().all(|g| g.iter().all(|x| x.is_finite() && *x >= 0.0)), "{got:?}");
     assert!(moved > 0, "the bend changes no anisotropic metal");
+}
+
+/// The studio term with a specular tint (track C2): in the white furnace a white dielectric still
+/// reflects exactly what it receives, whatever the tint (the diffuse layer takes what the weaker
+/// specular leaves); a tinted white metal reflects less than an untinted one, its colour where
+/// the tint is, and nothing at weight 0. The default tint is `pbr_ibl_parts` (to f32 rounding).
+#[test]
+fn the_specular_tint_in_the_studio_passes_the_white_furnace() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_tint(@builtin(global_invocation_id) id: vec3<u32>) {
+    let b = id.x * 2u;
+    let s = probes[b];
+    let specular = probes[b + 1u];
+    let parameters = vec3<f32>(s.x, s.y, s.z);
+    let n = vec3<f32>(0.0, 0.0, 1.0);
+    let v = sc_unit(vec3<f32>(0.5, 0.2, 0.8));
+    let r = 2.0 * max(dot(n, v), 0.0001) * n - v;
+    let p = pbr_ibl_layers(vec3<f32>(1.0), parameters, specular, vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(1.0), n, n, v, r, 0.3);
+    let q = pbr_ibl_parts(vec3<f32>(1.0), parameters, vec3<f32>(0.0, 1.0, 1.0), n, v, 0.3);
+    let d = abs((p.specular + p.diffuse) - (q.specular + q.diffuse)) / max(q.specular + q.diffuse, vec3<f32>(1e-20));
+    result[id.x] = vec4<f32>(p.specular + p.diffuse, max(d.x, max(d.y, d.z)));
+}
+"#;
+    // (metallic, roughness, ior, specular weight and colour)
+    let mut cases: Vec<(f64, f64, f64, [f64; 4])> = Vec::new();
+    for (metallic, ior) in [(0.0, 1.5), (0.0, 2.4), (1.0, 1.5)] {
+        for roughness in [0.1, 0.5, 1.0] {
+            for specular in [[1.0; 4], [0.5, 1.0, 1.0, 1.0], [1.0, 1.0, 0.5, 0.2], [0.0, 1.0, 1.0, 1.0]] {
+                cases.push((metallic, roughness, ior, specular));
+            }
+        }
+    }
+    let input: Vec<f32> = cases.iter().flat_map(|(m, r, ior, s)| [*m, *r, *ior, 0.0, s[0], s[1], s[2], s[3]]).map(|x| x as f32).collect();
+    let furnace = StudioEnvironment::furnace(1.0);
+    let got = run_probe(&device, &queue, probe, "probe_tint", &input, cases.len(), Some(&furnace));
+    assert_eq!(got.len(), cases.len());
+    for (k, (case, g)) in cases.iter().zip(&got).enumerate() {
+        let (metallic, _, _, specular) = case;
+        if *specular == [1.0; 4] {
+            // The same expressions; two inlined call sites may round differently under fast math.
+            assert!(g[3] <= 1e-6, "{case:?}: the default tint is {} from pbr_ibl_parts", g[3]);
+        }
+        if *metallic == 0.0 {
+            assert!((0..3).all(|c| (g[c] - 1.0).abs() < 1e-3), "{case:?}: a white dielectric reflects {g:?}");
+        } else {
+            let plain = got[k - k % 4];
+            assert!((0..3).all(|c| g[c] <= plain[c] + 1e-6), "{case:?}: tinted metal {g:?} above {plain:?}");
+            if specular[0] == 0.0 {
+                assert!(g[..3].iter().all(|c| *c == 0.0), "{case:?}: weight 0 leaves {g:?}");
+            }
+            // The edge tint acts through the split sum's grazing term B, which the fit takes to 0
+            // for a fully rough lobe seen this steeply.
+            if specular[3] < 1.0 && case.1 < 1.0 {
+                assert!(g[2] < g[0], "{case:?}: the edge tint is not blue-poor: {g:?}");
+            }
+        }
+    }
 }
