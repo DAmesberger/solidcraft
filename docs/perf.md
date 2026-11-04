@@ -37,7 +37,7 @@ Other measurements:
 
 | Item | Measured |
 |---|---|
-| Showcase, modelling view, 1920 × 1080, isometric pose | Standard 0.42 ms, Realistic 1.44 ms a frame (median); low back pose 0.21 / 1.20 ms |
+| Showcase, modelling view, 1920 × 1080, the app's default camera | Standard 0.42 ms, Realistic 1.44 ms a frame (median) in one run, 0.21 / 1.20 ms in the second. Both runs were meant to be the saved isometric and low back poses, but `view.apply` only queues the camera in the app, so both drew the default camera; the spread between them is run-to-run noise on a loaded machine. The test now applies the view at once (`follow_view_request`); the poses themselves are not yet measured. |
 | Anisotropic taps | the brushed aluminium graph 3.24 ms against the same graph without anisotropy (another shape, same cost units) 3.03 ms: +7 % (≈ 0.03 ms per full-screen 1080p layer) |
 | Showcase label (17 KiB PNG, 1024 × 512) | decode + resident preparation 0.69 ms (worker); upload + GPU mips 1.23 ms |
 | Original 4096² RGBA test image (19 MB PNG) | decode + preparation 115 ms (worker, off the window thread); upload + GPU mips 12.7 ms |
