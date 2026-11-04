@@ -59,10 +59,26 @@ at equal axes differs from today's isotropic expression only by f32 rounding: a 
 ULPs, more at very sharp peaks, where the isotropic `1 − (n·h)²` loses precision
 against α².
 
-Image-based light has no anisotropic prefiltering. The studio term looks up the
-prefiltered cube along a reflection about a normal bent toward the plane across the
-lobe's long axis (a public real-time approximation, as described in Filament's
-documentation; mathematics only), with the bend growing with anisotropy and fading
-below perceptual roughness 0.2. The split-sum albedo stays the isotropic one, so the
-white furnace is unchanged. The GPU path tracer has no anisotropic lobe and draws an
-isotropic one, reporting the approximation (decision O10).
+Image-based light has no anisotropic prefiltering. For an anisotropic base, the studio
+term reads the prefiltered cube in five fixed taps (`pbr_stretched_studio` in
+`crates/gpu/src/pbr.rs`) about the mirror direction, spread along the tangent's direction
+perpendicular to the lookup, with normalised Gaussian weights (offsets 0, ±0.75, ±1.5
+steps), so a uniform studio returns itself exactly and the white furnace holds. The
+taps read the level of their own lobe αl = max(αb, 0.36·αt) and are spaced by
+1.28·√(αt² − αl²) per unit step, so the taps' lobe widens to the major axis's half width.
+An f64 test checks that against `AnisotropicSurface`'s reflected specular at normal
+incidence: within 15 %. The floor on αl keeps neighbouring taps overlapping, since five
+sharp copies would ghost. Across the tangent, a strongly anisotropic lobe is therefore
+up to 0.36·αt wide rather than αb, still sharper than the isotropic one. On the baked
+studio, a brushed metal keeps 0.56 of the isotropic surface's reflected detail along the
+tangent and 0.96 across it. Isotropic surfaces keep the single lookup bit for bit. The
+split-sum albedo stays the isotropic one. The GPU path tracer has no anisotropic lobe
+and draws an isotropic one, reporting the approximation (decision O10).
+
+Cost (counted, not yet measured against docs/material-graph.md §5.4): an anisotropic
+fragment in the Realistic view samples the studio cube four more times than an
+isotropic one (five base taps instead of one), plus about 30 ALU operations. The loop
+count is fixed, and every sample has an explicit level, so it is valid on WebGL2. Only
+fragments with anisotropy > 0 and a usable tangent pay it. The §5.4 fragment-cost target
+(a graph at the 2000-unit budget at most 1.5× today's look fragment time at 1080p)
+stays a target until track I measures it.

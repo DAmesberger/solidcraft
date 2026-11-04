@@ -1004,7 +1004,7 @@ fn probe_layers(@builtin(global_invocation_id) id: vec3<u32>) {
     var p: PbrIbl;
     if (id.x % 2u == 0u) {
         let t = sc_aniso_tangent(n, vec3<f32>(1.0, 0.0, 0.0), q.w);
-        p = pbr_ibl_layers(s.xyz, parameters, vec4<f32>(1.0), coat, c.xyz, n, n, v, sc_aniso_reflect(n, t, v, q.x, q.z), 0.3);
+        p = pbr_ibl_layers(s.xyz, parameters, vec4<f32>(1.0), coat, c.xyz, n, n, v, sc_aniso_reflect(n, t, v, q.x, q.z), 0.3, vec4<f32>(t, q.z));
     } else {
         p = pbr_ibl_parts(s.xyz, parameters, coat, n, v, 0.3);
     }
@@ -1093,7 +1093,7 @@ fn probe_tint(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = vec3<f32>(0.0, 0.0, 1.0);
     let v = sc_unit(vec3<f32>(0.5, 0.2, 0.8));
     let r = 2.0 * max(dot(n, v), 0.0001) * n - v;
-    let p = pbr_ibl_layers(vec3<f32>(1.0), parameters, specular, vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(1.0), n, n, v, r, 0.3);
+    let p = pbr_ibl_layers(vec3<f32>(1.0), parameters, specular, vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(1.0), n, n, v, r, 0.3, vec4<f32>(0.0));
     let q = pbr_ibl_parts(vec3<f32>(1.0), parameters, vec3<f32>(0.0, 1.0, 1.0), n, v, 0.3);
     let d = abs((p.specular + p.diffuse) - (q.specular + q.diffuse)) / max(q.specular + q.diffuse, vec3<f32>(1e-20));
     result[id.x] = vec4<f32>(p.specular + p.diffuse, max(d.x, max(d.y, d.z)));
@@ -1132,5 +1132,110 @@ fn probe_tint(@builtin(global_invocation_id) id: vec3<u32>) {
                 assert!(g[2] < g[0], "{case:?}: the edge tint is not blue-poor: {g:?}");
             }
         }
+    }
+}
+
+/// The anisotropic studio lobe (`pbr_stretched_studio`) on the baked studio: sweeping the mirror
+/// direction along the tangent, a brushed metal's reflection is smeared (it keeps much less detail
+/// than the isotropic one's), while across the tangent it keeps about as much. Detail is the
+/// summed second differences of the reflected luminance along short sweeps from 32 starting
+/// directions, relative to the isotropic surface's.
+#[test]
+fn the_anisotropic_studio_lobe_spreads_along_the_tangent() {
+    let Ok((_, device, queue)) = crate::open_headless() else { return };
+    let probe = r#"
+@group(0) @binding(2) var<storage, read> probes: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn probe_stretch(@builtin(global_invocation_id) id: vec3<u32>) {
+    let q = probes[id.x];
+    let n = vec3<f32>(0.0, 0.0, 1.0);
+    let r = sc_unit(q.xyz);
+    let v = 2.0 * dot(n, r) * n - r;
+    let parameters = vec3<f32>(1.0, 0.35, 1.5);
+    let p = pbr_ibl_layers(vec3<f32>(1.0), parameters, vec4<f32>(1.0), vec3<f32>(0.0, 1.0, 1.0), vec3<f32>(1.0), n, n, v, r, 0.0,
+        select(vec4<f32>(0.0), vec4<f32>(1.0, 0.0, 0.0, 0.8), q.w > 0.5));
+    let c = p.specular;
+    result[id.x] = vec4<f32>(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 0.0, 1.0);
+}
+"#;
+    const STEPS: usize = 24;
+    // Sweeps of the mirror direction from (elevation, azimuth) starts, along x (the tangent) or y.
+    let mut input = Vec::new();
+    let mut sweeps = 0;
+    for elevation in [25.0_f64, 40.0, 55.0, 70.0] {
+        for azimuth in (0..8).map(|k| f64::from(k) * 45.0) {
+            let (e, a) = (elevation.to_radians(), azimuth.to_radians());
+            let start = [e.cos() * a.cos(), e.cos() * a.sin(), e.sin()];
+            for axis in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+                for stretched in [0.0, 1.0] {
+                    for k in 0..STEPS {
+                        let t = (k as f64 / (STEPS - 1) as f64 - 0.5) * 0.6;
+                        let d: [f64; 3] = std::array::from_fn(|i| start[i] + t * axis[i]);
+                        input.extend([d[0], d[1], d[2].max(0.05), stretched].map(|x| x as f32));
+                    }
+                }
+            }
+            sweeps += 1;
+        }
+    }
+    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let got = run_probe(&device, &queue, probe, "probe_stretch", &input, input.len() / 4, Some(&env));
+    assert!(got.iter().all(|g| g[0].is_finite() && g[0] >= 0.0));
+    // Detail along a sweep: the summed second differences, which a blur along it removes first.
+    let variation = |sweep: usize, axis: usize, stretched: usize| -> f64 {
+        let base = ((sweep * 2 + axis) * 2 + stretched) * STEPS;
+        let l = |k: usize| f64::from(got[base + k][0]);
+        (1..STEPS - 1).map(|k| (l(k + 1) - 2.0 * l(k) + l(k - 1)).abs()).sum()
+    };
+    let total = |axis: usize, stretched: usize| -> f64 { (0..sweeps).map(|s| variation(s, axis, stretched)).sum() };
+    let along = total(0, 1) / total(0, 0);
+    let across = total(1, 1) / total(1, 0);
+    eprintln!("anisotropic / isotropic variation: along the tangent {along:.3}, across {across:.3}");
+    assert!(along < 0.75 * across, "the reflection is smeared along the tangent: {along:.3} against {across:.3} across");
+    assert!(across > 0.85, "and not blurred across it: {across:.3}");
+}
+
+/// The tap calibration against the f64 anisotropic GGX oracle: at normal incidence, the half
+/// width of the lobe's reflected specular along the tangent matches the taps' model — their own
+/// lobe αl = max(αb, 0.36 αt), widened by their spread (`PBR_STRETCH_SCALE`, offsets of 0.75
+/// steps, Gaussian weights) — within 15 %; across the tangent the taps' lobe is never wider than
+/// the isotropic one's.
+#[test]
+fn the_anisotropic_studio_taps_match_the_oracle_lobe() {
+    use solidcraft_geom::Vec3;
+    use solidcraft_render::anisotropic_surface::{AnisotropicSurface, VisualFrame};
+    assert!(crate::pbr::SOURCE.contains("const PBR_STRETCH_SCALE: f32 = 1.28;"));
+    assert!(crate::pbr::SOURCE.contains("const PBR_STRETCH_FLOOR: f32 = 0.36;"));
+    assert!(crate::pbr::SOURCE.contains("let o = (f32(k) - 2.0) * 0.75;"));
+    let Ok(frame) = VisualFrame::new(Vec3::Z, Vec3::X) else { panic!("frame") };
+    // The reflected angle (rad) along `axis` where the specular falls to half its peak.
+    let half_width = |rx: f64, ry: f64, axis: Vec3| -> f64 {
+        let Ok(s) = AnisotropicSurface::new(Vec3::new(1.0, 1.0, 1.0), 1.0, rx, ry, 1.5) else { panic!("surface") };
+        let at = |theta: f64| s.specular_brdf(frame, Vec3::Z, Vec3::Z, axis * theta.sin() + Vec3::Z * theta.cos()).map_or(0.0, |f| f.x);
+        let peak = at(0.0);
+        let (mut lo, mut hi) = (0.0, 1.5);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if at(mid) > 0.5 * peak { lo = mid } else { hi = mid }
+        }
+        lo
+    };
+    let offsets = [-1.5_f64, -0.75, 0.0, 0.75, 1.5];
+    let weights = offsets.map(|o| (-0.5 * o * o).exp());
+    let deviation = (offsets.iter().zip(&weights).map(|(o, w)| w * o * o).sum::<f64>() / weights.iter().sum::<f64>()).sqrt();
+    for (roughness, anisotropy) in [(0.3_f64, 0.5_f64), (0.35, 0.6), (0.35, 0.8), (0.4, 0.95), (0.5, 0.4)] {
+        let alpha = roughness * roughness;
+        let k = 1.0 - anisotropy;
+        let at = alpha * (2.0 / (1.0 + k * k)).sqrt();
+        let ab = (k * at).max(0.002025);
+        let own = ab.max(0.36 * at);
+        let along = half_width(at.sqrt(), ab.sqrt(), Vec3::X);
+        let taps = half_width(own.sqrt(), own.sqrt(), Vec3::X);
+        // A Gaussian's half width at half maximum is 1.1774 σ.
+        let spread = 1.28 * (at * at - own * own).max(0.0).sqrt() * deviation;
+        let model = (taps * taps + (1.1774 * spread).powi(2)).sqrt();
+        assert!((model / along - 1.0).abs() <= 0.15, "r={roughness} a={anisotropy}: taps' half width {model:.4} against the oracle's {along:.4}");
+        assert!(taps <= half_width(roughness, roughness, Vec3::X) + 1e-9, "r={roughness} a={anisotropy}: across, sharper than isotropic");
     }
 }

@@ -262,7 +262,9 @@ fn sc_layered_brdf(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, 
 // "anisotropic specular" image-based lighting). The lobe is stretched along `t` (OpenPBR's αt is
 // the larger), so the reflection streaks along `t`. The bend grows with anisotropy and fades out
 // on smooth surfaces (below perceptual roughness 0.2). Unit `n`, `t` and `v`; without a tangent
-// or anisotropy it is the mirror reflection 2(n·v)n − v.
+// or anisotropy it is the mirror reflection 2(n·v)n − v. A single-lookup approximation for a
+// target without the viewport's studio taps; the viewport's studio spreads its lookup along the
+// tangent instead (`pbr_stretched_studio` in pbr.rs) and does not bend it.
 fn sc_aniso_reflect(n: vec3<f32>, t: vec3<f32>, v: vec3<f32>, roughness: f32, anisotropy: f32) -> vec3<f32> {
     let nv = max(dot(n, v), 0.0001);
     if (!(anisotropy > 0.0) || dot(t, t) == 0.0) { return 2.0 * nv * n - v; }

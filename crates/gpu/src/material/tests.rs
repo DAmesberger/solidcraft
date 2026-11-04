@@ -632,11 +632,13 @@ fn a_checker_draws_its_cells() {
 }
 
 /// A shape that is not compiled yet draws its base response through the fallback pipeline, which
-/// equals its base response's `pbr` drawing; once compiled it draws its pattern.
+/// equals its base response's `pbr` drawing; once compiled it draws its pattern. (A patterned
+/// fixture with an isotropic base: `pbr` vertices carry no anisotropy, which the studio now
+/// shows.)
 #[test]
 fn a_shape_draws_its_base_response_until_it_compiles() {
     let Some((_, device, queue)) = crate::open_headless().ok() else { return };
-    let (name, text) = FIXTURES[1];
+    let (name, text) = FIXTURES[2];
     let brushed = fixture(text);
     let mut r = renderer(&device, &queue);
     let surface = brushed.base.opaque;
