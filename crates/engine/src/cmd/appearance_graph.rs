@@ -822,7 +822,9 @@ fn update_from_library(s: &mut Session, p: &Value) -> Result<Value> {
     if params.library.is_empty() || params.library.len() > 4096 || params.library.chars().any(char::is_control) {
         return Err(bad(cmd, "invalid library path"));
     }
-    solidcraft_io::vfs::check(&params.library).map_err(|e| bad(cmd, e.to_string()))?;
+    if params.library != solidcraft_io::catalog::BUILTIN_PATH {
+        solidcraft_io::vfs::check(&params.library).map_err(|e| bad(cmd, e.to_string()))?;
+    }
     let catalog = solidcraft_io::catalog::Catalog::read(&params.library).map_err(|e| bad(cmd, e.to_string()))?;
     if catalog.id != source.library {
         return Err(bad(cmd, format!("this library is `{}`, but the graph came from `{}`", shown(&catalog.id), shown(&source.library))));

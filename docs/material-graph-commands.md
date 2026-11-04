@@ -101,10 +101,21 @@ reads only files the page was given.
   a copied look pastes with its graph.
 
 `library.export` writes `solidcraft-library/3` by default when an exported look names a
-graph (`solidcraft-library/2` otherwise); an explicit `/1` or `/2` refuses graphs.
+graph (`solidcraft-library/2` otherwise); an explicit `/1` or `/2` refuses graphs. A library
+with textures is a container (a ZIP), so its path ends in `.sclib`; one without textures is
+plain JSON and ends in `.json`. The other name is refused, and the message names the right one.
 `library.apply` copies an entry's graph, with its source and its textures, into the design.
 The same graph already under that id is reused; a different one is refused unless
 `graph_id` names a new id for the copy.
+
+The path `builtin:materials` names the built-in material library
+([built-in material graphs](render-material-graphs.md)) wherever `library.inspect`,
+`library.apply` or `appearance.graph.update_from_library` reads a library:
+
+```json
+{"command": "library.inspect", "params": {"path": "builtin:materials"}}
+{"command": "library.apply", "params": {"path": "builtin:materials", "entry": "<id from inspect>", "revision": "<revision from inspect>", "targets": {"bodies": ["Can"]}}}
+```
 
 `render.library.appearance.apply` with `variant: "graph"` adds a built-in recipe as a graph
 and assigns it:
@@ -114,6 +125,11 @@ and assigns it:
   planar and binds the roughness and metallic maps too;
 - a `SELENE-AP-*` entry, which has no maps, becomes the one-node graph of its baseline;
 - `graph_id` chooses the id (default: the entry's id in lower case);
+- an entry with a direction (brushed, milled, turned, wood grain, printed lines) gets a
+  specular anisotropy and a tangent rotation from the binding table
+  ([built-in material graphs](render-material-graphs.md#starter-and-selene-bindings)); the
+  reply's `anisotropy` is `{value, rotation_rad, basis, note?}`, and `basis` is
+  `authored_estimate` (or `isotropic` for an entry the table does not list);
 - the reply's `omitted` always lists `height_displacement`, because graphs never move geometry.
 
 `variant: "uniform_opaque"` is unchanged.

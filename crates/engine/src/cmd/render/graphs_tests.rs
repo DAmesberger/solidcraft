@@ -163,3 +163,32 @@ fn captures_meet_the_path_back_ends_constructor_rules() {
     let given = overrides(json!([{"body_index": label, "body_name": "Label", "values": {"tint": [0.1, 0.2, 0.3]}}]));
     assert_path_back_end_shapes(&capture(&s, &scene, &given, &[], "render.start").unwrap().unwrap());
 }
+
+/// `examples/realistic-showcase.json` (note §5.9) builds through commands, and the capture holds
+/// its four graph looks with the label image, in the shapes the path tracer takes.
+#[test]
+fn the_realistic_showcase_builds_and_captures_its_graph_looks() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let mut script: serde_json::Value = serde_json::from_str(include_str!("../../../../../examples/realistic-showcase.json")).unwrap();
+    // The texture path is relative to the repository root, where the script is run.
+    for step in script["commands"].as_array_mut().unwrap() {
+        if step["command"] == "appearance.texture.add" {
+            let path = format!("{root}{}", step["params"]["path"].as_str().unwrap());
+            step["params"]["path"] = json!(path);
+        }
+    }
+    let mut s = Session::default();
+    s.run_script(&script).unwrap();
+    let scene = crate::product_scene::extract(&s).unwrap();
+    let names: Vec<&str> = scene.meshes.iter().map(|m| m.name.as_str()).collect();
+    for body in ["Sample Plate", "Brushed lid", "Carbon plate", "Steel cylinder", "Steel sphere", "Epoxy box", "Silicone dome"] {
+        assert!(names.contains(&body), "{body} in {names:?}");
+    }
+    let captured = capture(&s, &scene, &[], &[], "render.start").unwrap().unwrap();
+    assert_eq!(captured.materials.len(), 4, "brushed, epoxy, carbon and silicone");
+    let label = std::fs::read(format!("{root}assets/examples/realistic-showcase-label.png")).unwrap();
+    assert!(captured.materials.iter().any(|m| m.textures.iter().flatten().any(|(bytes, srgb)| bytes.as_slice() == label.as_slice() && *srgb)));
+    assert_path_back_end_shapes(&captured);
+    let views: Vec<&str> = s.doc.named_views.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(views, ["Showcase: isometric front-left", "Showcase: low back three-quarter", "Showcase: label and dome"]);
+}

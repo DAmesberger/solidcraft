@@ -127,9 +127,16 @@ A v3 catalog with textures is a ZIP container: `container.json`
 (`{"format":"solidcraft-library/1"}`), `catalog.json` (at most 4 MiB, each texture with
 an `image_blob` reference) and `blobs/<sha256>.png|jpeg`. It is read by the design
 container's bounded reader; a blob must hash to its texture's key. A v3 catalog
-without textures stays plain JSON. Exporting a design writes v2 unless an exported
+without textures stays plain JSON. The reader tells them apart by their bytes; on export a
+container's path ends in `.sclib` and a JSON library's in `.json`, and the other name is
+refused with a message naming the right one. Exporting a design writes v2 unless an exported
 look names a graph, and copies only the graphs and textures those looks use. An
 explicit v2 or v1 envelope refuses graphs. Older readers refuse v3.
+
+The built-in material library is the v3 catalog `solidcraft-materials`, read from the path
+`builtin:materials` (the Appearance dialog's **Built-in materials** button). It is built from
+`assets/appearances/graphs/` when it is read, so its entry ids and revisions follow from the
+content like any exported library's ([built-in material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-material-graphs.md)).
 
 ## Scalar catalog v1 compatibility
 
