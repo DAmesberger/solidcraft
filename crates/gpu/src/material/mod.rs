@@ -79,3 +79,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod shade_tests;
+
+#[cfg(test)]
+mod perf_tests;

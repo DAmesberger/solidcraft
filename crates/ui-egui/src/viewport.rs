@@ -22,6 +22,10 @@ use crate::{SolveApp, icons};
 mod appearance_tests;
 
 #[cfg(test)]
+#[path = "viewport_perf_tests.rs"]
+mod perf_tests;
+
+#[cfg(test)]
 #[path = "viewport_overlays_tests.rs"]
 mod overlays_tests;
 

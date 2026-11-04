@@ -1,5 +1,53 @@
 # Design loading
 
+## Material graphs and the Realistic view against their targets (2026-11-04)
+
+The targets of [the material graph note](material-graph.md) §5.4, measured on the package tip
+(`material-graph` at 45427568d) with the ignored tests in
+`crates/gpu/src/material/perf_tests.rs` and `crates/ui-egui/src/viewport_perf_tests.rs`:
+
+```sh
+cargo test --release -p solidcraft-gpu --lib material::perf_tests -- --ignored --nocapture --test-threads=1
+PERF_DESIGN=<showcase.solidcraft> cargo test --release -p solidcraft-ui-egui --lib viewport_frame_costs -- --ignored --nocapture
+```
+
+Apple M5 Max (Metal), 18 cores, macOS. **The machine was loaded**: other builds ran throughout,
+with a 1-minute load average between 40 and 110, so CPU-bound times are high and every number
+is a single afternoon's record, not a benchmark. GPU times are wall time from `prepare` to the
+end of the GPU wait (no read-back), medians over 60 frames after warm-up, the camera nudged each
+frame so no picture is reused; "graph" frames draw 8 full-screen layers at 1920 × 1080 far to
+near (each layer shaded), with the scalar face the viewport draws under every graph face unless
+stated. The showcase is `examples/realistic-showcase.json` saved by `solidcraft-cli run`.
+
+| §5.4 item | Target | Measured | Status |
+|---|---|---|---|
+| Validation + IR + base response, 128 nodes | ≤ 1 ms | 0.13 ms (127-node maths chain), 0.14 ms (128 nodes: noise, brushed, weave, checker and 119 maths); 0.007–0.025 ms for the fixtures and the showcase's graphs | met |
+| WGSL generation + naga validation per new shape | ≤ 5 ms | generation 0.02–0.09 ms; with naga 5.6–6.1 ms (median), 138–152 KiB of WGSL per shape, nearly all of it the shared library, so a 1-node graph costs the same | missed under load (by ≤ 1.7 ms; not measured idle) |
+| Pipeline creation per new shape, native | ≤ 30 ms | **cold (shader never compiled on this machine): 324–426 ms, median 344 ms**; warm (the system's Metal shader cache has it): 6.6–11.6 ms, median 7.8 ms | missed cold, met warm |
+| …off the critical frame (§5.2) | no frame stall | the compile runs inside `Renderer::prepare` on the frame's thread (at most 2 a frame, none once the frame has taken 8 ms); a cold compile therefore stalls that frame by ~0.35 s per shape | missed |
+| Pipeline creation, WebGL2 | ≤ 150 ms | – | not measured |
+| GPU memory per material | ≤ 1 KiB uniform + textures | records 272–544 B for the fixtures and showcase graphs, 768 B for the 128-node chain; a graph at the 256-float uniform limit needs 112 + 1024 = 1,136 B | met for real graphs; missed at the uniform limit |
+| Draws per frame | ≤ 20 typical scene | showcase in the Realistic view: 12 draw calls (5 graph draws, 6 shapes); Standard: 4 | met |
+| Fragment: constant-only graph = today's `fs_pbr` | equal | `fs_pbr` 1.21 ms; constant graph alone 1.45 ms (1.20×); as the viewport draws it, over its scalar face, 2.50 ms (2.07×) | missed (1.2× shading alone, 2.1× with the underlay) |
+| Fragment: a graph at the 2000-unit budget | ≤ 1.5× today's look at 1080p | ten 8-octave 3-D gradient noises (1,924 units): 9.37 ms against 1.21 ms (7.7×) | missed: the cost model under-prices 3-D gradient noise |
+| Value edit | uniform upload only, ≤ 0.1 ms, no geometry rebuild | `prepare` 0.04–0.12 ms (median 0.12 ms); uploads: one 16 KiB page, 0 material vertices, no compile; the scene's own 1,344 B of scalar geometry is uploaded again because the test gives the edited scene a new key | met for the upload, borderline on time |
+| Selection and camera changes | no rebuild, no recompile | camera: `prepare` 0.02–0.05 ms, upload counters unchanged, 0 compiles; selection not measured | met (camera) |
+
+Other measurements:
+
+| Item | Measured |
+|---|---|
+| Showcase, modelling view, 1920 × 1080, isometric pose | Standard 0.42 ms, Realistic 1.44 ms a frame (median); low back pose 0.21 / 1.20 ms |
+| Anisotropic taps | the brushed aluminium graph 3.24 ms against the same graph without anisotropy (another shape, same cost units) 3.03 ms: +7 % (≈ 0.03 ms per full-screen 1080p layer) |
+| Showcase label (17 KiB PNG, 1024 × 512) | decode + resident preparation 0.69 ms (worker); upload + GPU mips 1.23 ms |
+| Original 4096² RGBA test image (19 MB PNG) | decode + preparation 115 ms (worker, off the window thread); upload + GPU mips 12.7 ms |
+| Realistic look with scalar faces only | 1.30 ms against Standard 0.36 ms (8 layers) |
+
+The two misses that matter for users are the cold pipeline compile, which stalls a frame on the
+window thread the first time a machine sees a shape (a later run hits the system's shader cache),
+and the cost model's price for 3-D gradient noise. The naga time is the shared library's: a
+cached parsed library or validating only the generated function would bring it well under 5 ms.
+
 ## Edges made by booleans: each point evaluated once (2026-10-16)
 
 A boolean meshes both operands with truck-meshalgo, which first divides every edge into a
