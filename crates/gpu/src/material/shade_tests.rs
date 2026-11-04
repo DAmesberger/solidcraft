@@ -163,6 +163,11 @@ fn specular_tint_coat_colour_and_anisotropy_reach_the_picture() {
 
 /// [`draw`] into a target of `format`, at the fixed view, the realistic look: RGBA bytes as stored.
 fn draw_into(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat) -> Option<Vec<u8>> {
+    draw_into_tilted(graph, key, format, 0.0, 1.0)
+}
+
+/// [`draw_into`] with the square turned by `slope` (z = slope·y).
+fn draw_into_tilted(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat, slope: f32, exposure: f32) -> Option<Vec<u8>> {
     let (_, device, queue) = crate::open_headless().ok()?;
     let valid = validate(graph).unwrap_or_else(|e| panic!("{e}"));
     let ir = std::sync::Arc::new(lower(&valid).unwrap_or_else(|e| panic!("{e}")));
@@ -170,14 +175,17 @@ fn draw_into(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat) -> Op
     let words = uniform_words(&ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
     let mut scene = GpuScene::default();
     let m = scene.graphs.material(&ir, &words, &base).unwrap_or_else(|e| panic!("{e}"));
+    let length = (1.0 + slope * slope).sqrt();
+    let normal = [0.0, -slope / length, 1.0 / length];
     for [x, y] in [[-12.0, -12.0], [12.0, -12.0], [12.0, 12.0], [-12.0, -12.0], [12.0, 12.0], [-12.0, 12.0]] {
-        scene.graphs.vertex(m, [x, y, 0.0], [0.0, 0.0, 1.0], [x, y, 0.0]);
+        let p = [x, y, slope * y];
+        scene.graphs.vertex(m, p, normal, p);
     }
     let depth = crate::depth_format(&device, true);
     let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
     r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
     r.materials_mut().no_time_budget = true;
-    let frame = Frame { key, product_look: Some(ProductLook::default()), ..test_frame(scene, 1.0) };
+    let frame = Frame { key, product_look: Some(ProductLook { exposure, ..ProductLook::default() }), ..test_frame(scene, 1.0) };
     let texture = |format, usage| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -263,5 +271,44 @@ fn dark_surfaces_store_the_same_bytes_on_srgb_targets() {
             }
         }
         assert!(worst <= 1, "base {base:?}: the sRGB target stores up to {worst} steps from the linear one");
+    }
+}
+
+/// A clear-coated black seen at about 35° and near grazing, on an sRGB target as on a linear one,
+/// over a sweep of exposures that carries its channels across the sRGB straight segment's end
+/// (about 10/255, where an inexact decode used to flip them pixel by pixel): every channel's
+/// spread over the face stays within the dither (no pixel-scale stripes), and red and green, which
+/// the surface has alike, stay alike.
+#[test]
+fn a_dark_coated_face_has_no_channel_noise_at_grazing_angles() {
+    let black = surface(
+        json!([]),
+        json!({"base_color": [0.022, 0.022, 0.024], "specular_roughness": 0.46, "specular_ior": 1, "coat_weight": 1, "coat_roughness": 0.08, "coat_ior": 1.5}),
+    );
+    let mut key = 100;
+    for slope in [0.7_f32, 2.5] {
+        for step in 0..10 {
+            let exposure = 0.3 * 1.25_f32.powi(step);
+            for format in [wgpu::TextureFormat::Rgba8UnormSrgb, wgpu::TextureFormat::Rgba8Unorm] {
+                key += 1;
+                let Some(bytes) = draw_into_tilted(&black, key, format, slope, exposure) else { return gpu_required() };
+                let mut sums = [[0.0_f64; 2]; 3];
+                let mut n = 0.0;
+                for y in 16..SIZE - 16 {
+                    for x in 16..SIZE - 16 {
+                        let i = (y * SIZE + x) * 4;
+                        for (c, sum) in sums.iter_mut().enumerate() {
+                            let v = f64::from(bytes[i + c]);
+                            sum[0] += v;
+                            sum[1] += v * v;
+                        }
+                        n += 1.0;
+                    }
+                }
+                let stats: Vec<(f64, f64)> = sums.iter().map(|[a, b]| (a / n, (b / n - (a / n).powi(2)).max(0.0).sqrt())).collect();
+                assert!(stats.iter().all(|(_, spread)| *spread <= 1.5), "slope {slope}, exposure {exposure}, {format:?}: channel spread {stats:?}");
+                assert!((stats[0].0 - stats[1].0).abs() <= 1.5, "slope {slope}, exposure {exposure}, {format:?}: red and green part: {stats:?}");
+            }
+        }
     }
 }
