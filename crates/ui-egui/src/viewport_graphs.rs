@@ -4,6 +4,10 @@
 //! scene draws anyway (blocks, plans or instances), so those keep their depth, occlusion, edges
 //! and hover and selection tints, and planned and instanced bodies keep their GPU paths.
 //!
+//! A `pbr` look is, in memory, the one-node constant graph of decision O9 ([`pbr_graph`]): its
+//! metals reflect the studio here as they do in the Render preview, and every `pbr` look shares
+//! that graph's one shape (its values are uniforms).
+//!
 //! A look reads its graph from `appearances.graphs` by id, with its `values` for the graph's
 //! interface. A graph that is missing or does not validate draws as before: the look's `color`
 //! (logged once). Lowering is cached by the graph's and values' content, so a value edit costs
@@ -114,6 +118,19 @@ pub(crate) fn see_through_faces(
         .collect()
 }
 
+/// A `pbr` look as the constant graph it is (O9): one `standard_surface` with the look's colour
+/// (exact sRGB8), metalness, roughness and dielectric IOR. Always the same four inputs, so every
+/// `pbr` look has the same shape.
+pub(crate) fn pbr_graph(color: [u8; 3], pbr: &solidcraft_engine::doc::pbr_appearance::PbrParameters) -> Option<MaterialGraph> {
+    let graph = serde_json::json!({"name": "pbr", "nodes": [{"id": "surface", "kind": "standard_surface", "inputs": {
+        "base_color": {"srgb8": color},
+        "base_metalness": pbr.metallic(),
+        "specular_roughness": pbr.roughness(),
+        "specular_ior": pbr.dielectric_ior(),
+    }}], "output": "surface"});
+    serde_json::from_value(graph).ok()
+}
+
 /// Whether the model view draws graph looks: the Realistic view, with a GPU.
 pub(crate) fn active(app: &crate::SolveApp) -> bool {
     app.viewport.gpu.is_some() && crate::view_look::current(app, "model") == crate::view_look::REALISTIC
@@ -132,19 +149,29 @@ pub(crate) fn add_body(
     drawn: impl Fn(usize) -> bool,
 ) -> usize {
     let graphs = &doc.appearances.tables.graphs;
-    if graphs.is_empty() {
-        return 0;
-    }
     let body_look = doc.model_body_look(b);
     let mut materials: HashMap<usize, solidcraft_gpu::material::GraphMaterial> = HashMap::new();
     let mut by_look: HashMap<u64, Option<solidcraft_gpu::material::GraphMaterial>> = HashMap::new();
     for face in 0..b.body.face_count() {
         let Some(look) = face_looks.get(&face).or(body_look.as_ref()) else { continue };
-        let Some(id) = look.graph.as_ref() else { continue };
         if !drawn(face) {
             continue;
         }
-        let Some(graph) = graphs.get(id) else { continue };
+        let pbr;
+        let graph = match (look.graph.as_ref(), look.pbr.as_ref()) {
+            (Some(id), _) => match graphs.get(id) {
+                Some(g) => g,
+                None => continue,
+            },
+            (None, Some(p)) => match pbr_graph(look.color, p) {
+                Some(g) => {
+                    pbr = g;
+                    &pbr
+                }
+                None => continue,
+            },
+            (None, None) => continue,
+        };
         let key = content_key(graph, &look.values);
         let material = *by_look.entry(key).or_insert_with(|| {
             let l = looks.get(graph, &look.values)?;

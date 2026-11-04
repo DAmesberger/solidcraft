@@ -1315,3 +1315,142 @@ fn scene_textures_are_decoded_and_drawn() {
     let before = side(&first, 14);
     assert!(before[1] > before[0] || first == last, "before decoding the default colour (green) shows: {before:?}");
 }
+
+/// Diagnostics for the brushed fixture's look (`--ignored --nocapture`): its evaluated surface on
+/// a box top, and a tilted square of it against the same metal through the PBR stream, and with
+/// its anisotropy off.
+#[test]
+#[ignore]
+fn brushed_metal_diagnostics() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let text = FIXTURES[1].1;
+    let l = fixture(text);
+    let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    let point = Point::new([10.3, 7.7, 20.0], [0.0, 0.0, 1.0]);
+    let got = gpu_surfaces(&device, &queue, &ir, &words, &l.base, &[point]).unwrap_or_default();
+    if let Some(s) = got.first() {
+        let names = [
+            "base_r", "base_g", "base_b", "metal", "rough", "ior", "coat_w", "coat_r", "coat_ior", "nx", "ny", "nz", "cnx", "cny", "cnz", "spec_w",
+            "sc_r", "sc_g", "sc_b", "aniso", "rot", "tx", "ty", "tz",
+        ];
+        let pairs: Vec<String> = names.iter().zip(s).map(|(n, v)| format!("{n}={v:.3}")).collect();
+        eprintln!("surface: {}", pairs.join(" "));
+    }
+    // A square tilted 55° toward the eye, as a box top seen in an iso view.
+    let slope = 1.43f32;
+    let len = (1.0 + slope * slope).sqrt();
+    let normal = [0.0, -slope / len, 1.0 / len];
+    let corners = SQUARE.map(|p| [p[0], p[1], slope * p[1]]);
+    let mut r = renderer(&device, &queue);
+    let mean = |bytes: &[u8]| {
+        let p = inner_pixels(bytes);
+        let n = p.len().max(1) as f64;
+        let m = [0, 1, 2].map(|k| p.iter().map(|c| f64::from(c[k])).sum::<f64>() / n);
+        let sd = (p.iter().map(|c| (f64::from(c[0]) - m[0]).powi(2)).sum::<f64>() / n).sqrt();
+        (m, sd)
+    };
+    let graph_frame = |r: &mut Renderer, l: &Lowered, key: u64| {
+        let mut scene = GpuScene::default();
+        let words = uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_default();
+        let m = scene.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
+        let face = scene.color([200, 200, 200, 255]);
+        for p in corners {
+            scene.graphs.vertex(m, p, normal, p);
+            scene.tri(p, normal, face);
+        }
+        render_frame(r, &device, &queue, &realistic(scene, key, 10.0), true)
+    };
+    let brushed = graph_frame(&mut r, &l, 1);
+    save("diag-brushed", &brushed);
+    let iso = fixture(&text.replace("\"specular_roughness_anisotropy\": 0.6", "\"specular_roughness_anisotropy\": 0"));
+    let isotropic = graph_frame(&mut r, &iso, 2);
+    save("diag-brushed-isotropic", &isotropic);
+    let surface =
+        solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), 1.0, 0.45, 1.5).unwrap_or_else(|e| panic!("{e}"));
+    let mut scene = GpuScene::default();
+    for p in corners {
+        scene.pbr_tri(p, normal, surface);
+    }
+    let pbr = render_frame(&mut r, &device, &queue, &realistic(scene, 3, 10.0), true);
+    save("diag-pbr-metal", &pbr);
+    let dielectric =
+        solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), 0.0, 0.45, 1.5).unwrap_or_else(|e| panic!("{e}"));
+    let mut scene = GpuScene::default();
+    for p in corners {
+        scene.pbr_tri(p, normal, dielectric);
+    }
+    let plastic = render_frame(&mut r, &device, &queue, &realistic(scene, 4, 10.0), true);
+    eprintln!(
+        "mean rgb ± sd(r): brushed {:?} | isotropic graph {:?} | pbr metal {:?} | pbr plastic {:?}",
+        mean(&brushed),
+        mean(&isotropic),
+        mean(&pbr),
+        mean(&plastic)
+    );
+}
+
+/// Diagnostics (`--ignored --nocapture`): the brushed fixture on a sphere in the viewport's
+/// realistic look, against a plain metal and a plain dielectric of its roughness.
+#[test]
+#[ignore]
+fn brushed_sphere_in_the_viewport() {
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+    let l = fixture(FIXTURES[1].1);
+    let mesh = |scene: &mut GpuScene, mut vertex: Box<dyn FnMut(&mut GpuScene, [f32; 3], [f32; 3])>| {
+        let (rows, columns) = (32u32, 64u32);
+        let at = |i: u32, j: u32| {
+            let theta = f64::from(i) * std::f64::consts::PI / f64::from(rows);
+            let phi = f64::from(j) * std::f64::consts::TAU / f64::from(columns);
+            [(theta.sin() * phi.cos()) as f32, (theta.sin() * phi.sin()) as f32, theta.cos() as f32]
+        };
+        for i in 0..rows {
+            for j in 0..columns {
+                for (di, dj) in [(0, 0), (1, 0), (0, 1), (0, 1), (1, 0), (1, 1)] {
+                    let n = at(i + di, j + dj);
+                    vertex(scene, n.map(|c| c * 10.0), n);
+                }
+            }
+        }
+    };
+    let stats = |bytes: &[u8]| {
+        let lum: Vec<f64> = (0..SIZE as usize * SIZE as usize)
+            .filter_map(|i| bytes.get(i * 4..i * 4 + 3))
+            .filter(|p| !(p[0] == 255 && p[1] == 255 && p[2] == 255))
+            .map(|p| 0.2126 * f64::from(p[0]) + 0.7152 * f64::from(p[1]) + 0.0722 * f64::from(p[2]))
+            .collect();
+        let (min, max) = lum.iter().fold((f64::MAX, f64::MIN), |(a, b), l| (a.min(*l), b.max(*l)));
+        format!("mean {:.1} min {min:.0} max {max:.0}", lum.iter().sum::<f64>() / lum.len().max(1) as f64)
+    };
+    let mut r = renderer(&device, &queue);
+    let words = uniform_words(&l.ir, &BTreeMap::new()).unwrap_or_default();
+    let mut scene = GpuScene::default();
+    let m = scene.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
+    let face = scene.color([200, 200, 200, 255]);
+    mesh(
+        &mut scene,
+        Box::new(move |s, p, n| {
+            s.graphs.vertex(m, p, n, p);
+            s.tri(p, n, face);
+        }),
+    );
+    let brushed = render_frame(&mut r, &device, &queue, &realistic(scene, 1, 10.0), true);
+    save("diag-sphere-brushed", &brushed);
+    let pbr = |r: &mut Renderer, metal: f64, rough: f64, key: u64| {
+        let surface = solidcraft_render::surface::OpaqueSurface::new(solidcraft_geom::Vec3::new(0.8, 0.77, 0.7), metal, rough, 1.5)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let mut scene = GpuScene::default();
+        mesh(&mut scene, Box::new(move |s, p, n| s.pbr_tri(p, n, surface)));
+        render_frame(r, &device, &queue, &realistic(scene, key, 10.0), true)
+    };
+    let metal = pbr(&mut r, 1.0, 0.45, 2);
+    let mirror = pbr(&mut r, 1.0, 0.15, 3);
+    save("diag-sphere-metal-015", &mirror);
+    let plastic = pbr(&mut r, 0.0, 0.45, 4);
+    eprintln!(
+        "viewport: brushed {} | metal 0.45 {} | metal 0.15 {} | dielectric 0.45 {}",
+        stats(&brushed),
+        stats(&metal),
+        stats(&mirror),
+        stats(&plastic)
+    );
+}
