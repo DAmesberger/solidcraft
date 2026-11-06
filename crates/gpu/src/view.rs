@@ -1859,14 +1859,17 @@ impl Batches {
                 Some((tess, encoder)) => self.planned(device, tess, encoder, &sc.planned, donor.as_deref_mut()),
                 None => Vec::new(),
             };
-            self.instanced = self.instanced(device, &sc.instanced, donor.as_deref());
+            // The triangles of the last scene, kept for whichever list of this one draws them.
+            let mut kept = std::mem::take(&mut self.instanced_tris);
+            self.instanced = self.instanced(device, &sc.instanced, donor.as_deref(), &mut kept);
             self.hover_planned = sc.hover_planned;
             self.selected_planned = sc.selected_planned;
             self.hover_blocks = sc.hover_blocks;
             self.selected_blocks = sc.selected_blocks;
             self.recoloured = sc.recoloured;
-            self.hover_instanced = self.instanced(device, &sc.hover_instanced, donor.as_deref());
-            self.selected_instanced = self.instanced(device, &sc.selected_instanced, donor.as_deref());
+            self.hover_instanced = self.instanced(device, &sc.hover_instanced, donor.as_deref(), &mut kept);
+            self.selected_instanced = self.instanced(device, &sc.selected_instanced, donor.as_deref(), &mut kept);
+            drop(kept);
             let mut kept = std::mem::take(&mut self.blocks);
             let mut order = Vec::with_capacity(sc.blocks.len());
             let mut geometry = 0;
@@ -1962,8 +1965,13 @@ impl Batches {
 
     /// The instanced meshes on the GPU: triangles uploaded once per key (kept while the key comes
     /// back with the same bytes), placements every time.
-    fn instanced(&mut self, device: &wgpu::Device, meshes: &[InstancedMesh], donor: Option<&Batches>) -> Vec<InstancedDraw> {
-        let mut kept = std::mem::take(&mut self.instanced_tris);
+    fn instanced(
+        &mut self,
+        device: &wgpu::Device,
+        meshes: &[InstancedMesh],
+        donor: Option<&Batches>,
+        kept: &mut std::collections::HashMap<usize, (Arc<SharedTris>, Arc<SharedGpu>)>,
+    ) -> Vec<InstancedDraw> {
         let mut out = Vec::with_capacity(meshes.len());
         for m in meshes {
             let count = u32::try_from(m.count()).unwrap_or(u32::MAX);
