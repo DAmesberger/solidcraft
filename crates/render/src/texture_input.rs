@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{io::Cursor, sync::Arc};
 
 pub mod normalization;
+pub(crate) mod png_metadata;
 
 /// Encoded bytes of one texture (the design container's per-part cap).
 pub const MAX_TEXTURE_BYTES: usize = 256 * 1024 * 1024;
@@ -28,6 +29,7 @@ pub const MAX_DESIGN_DECODED_BYTES: u64 = 1024 * 1024 * 1024;
 pub const CODEC_SCRATCH_BYTES: u64 = 64 * 1024 * 1024;
 /// Mip levels of a texture of [`MAX_TEXTURE_EDGE`] a side, through 1 × 1.
 pub const MAX_MIP_LEVELS: usize = MAX_TEXTURE_EDGE.ilog2() as usize + 1;
+pub(crate) const MAX_CODEC_BYTES: u64 = CODEC_SCRATCH_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,6 +140,15 @@ impl DecodeBudget {
     }
 }
 
+/// An explicit base-color role means normalized sRGB samples. Reject conflicting
+/// encoded declarations; data roles preserve their numerical channels unchanged.
+pub fn validate_color_declarations(bytes: &[u8], role: MapRole) -> Result<()> {
+    if role == MapRole::BaseColor && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        png_metadata::validate_srgb_declarations(bytes)?;
+    }
+    Ok(())
+}
+
 /// Header-admitted source. Full decoding must succeed before publishing pixels.
 #[derive(Clone)]
 pub struct TextureSource {
@@ -204,6 +215,9 @@ impl TextureSource {
     }
     pub fn new(bytes: Vec<u8>, role: MapRole) -> Result<Self> {
         let format = admitted_format(&bytes, bytes.capacity())?;
+        if format == ImageFormat::Png {
+            png_metadata::validate(&bytes)?;
+        }
         let (width, height) = guarded(|| {
             let mut decoder = reader(&bytes, format, CODEC_SCRATCH_BYTES).into_decoder().map_err(|e| invalid(e.to_string()))?;
             admitted_color(role, decoder.color_type())?;
@@ -232,8 +246,39 @@ impl TextureSource {
         };
         Ok(Self { bytes: Arc::new(bytes), format, info })
     }
+    /// Admit a portable source with strict PNG metadata and color declarations
+    /// before opening its codec. Legacy runtime inputs keep `new`'s admission.
+    pub fn new_portable(bytes: Vec<u8>, role: MapRole) -> Result<Self> {
+        if admitted_format(&bytes, bytes.capacity())? == ImageFormat::Png {
+            png_metadata::validate(&bytes)?;
+            validate_color_declarations(&bytes, role)?;
+        }
+        Self::new(bytes, role)
+    }
     pub fn info(&self) -> &TextureInfo {
         &self.info
+    }
+    /// Complete static-source metadata admission before portable publication.
+    /// This bounded scan belongs on the caller's existing import worker. It does
+    /// not replace pixel decoding or the cooperative image worker's own checks.
+    pub fn validate_static_source(&self) -> Result<()> {
+        if self.format == ImageFormat::Png {
+            let mut metadata = png_metadata::PngMetadata::new(true, true).with_role(self.info.role);
+            while !metadata.step(&self.bytes)? {}
+        }
+        Ok(())
+    }
+    /// Share admitted encoded ownership with the cooperative native row worker.
+    #[cfg(feature = "raytrace-cpu")]
+    pub(crate) fn png_encoded(&self) -> Result<Arc<Vec<u8>>> {
+        if self.format != ImageFormat::Png || self.bytes.get(24).copied() != Some(8) || self.bytes.get(28).copied() != Some(0) {
+            return Err(invalid("CPU row preparation supports noninterlaced 8-bit PNG only"));
+        }
+        Ok(self.bytes.clone())
+    }
+    #[cfg(all(test, feature = "raytrace-cpu"))]
+    pub(crate) fn encoded_weak(&self) -> std::sync::Weak<Vec<u8>> {
+        Arc::downgrade(&self.bytes)
     }
     /// Bounded whole-image codec work, intended for a caller-owned worker. Cancellation is
     /// checked at the codec boundary and between rows of the layout conversion, not during

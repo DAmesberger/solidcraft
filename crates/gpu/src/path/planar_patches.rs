@@ -124,6 +124,7 @@ mod tests {
             transmission: None,
             medium: body,
             graph: 0.0,
+            scalar_face: false,
         }
     }
 

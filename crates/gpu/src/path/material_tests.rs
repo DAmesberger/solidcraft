@@ -146,8 +146,8 @@ fn graph_pipelines_are_shared_by_shape_set() {
     };
     let a = task(graphs(BTreeMap::new()));
     let b = task(graphs(BTreeMap::new()));
-    assert!(Arc::ptr_eq(a.pipeline.as_ref().unwrap(), b.pipeline.as_ref().unwrap()), "one pipeline per shape set");
-    assert!(task(None).pipeline.is_none());
+    assert!(Arc::ptr_eq(a.graph_pipelines.as_ref().unwrap(), b.graph_pipelines.as_ref().unwrap()), "one pipeline per shape set");
+    assert!(task(None).graph_pipelines.is_none());
     assert_eq!(executor.context.graph_pipelines.lock().unwrap().len(), 1);
 }
 

@@ -89,6 +89,8 @@ fn viewport_frame_costs() {
                     let proj = super::projection(&app, rect);
                     let e = proj.cam.eye().to_f32();
                     let frame = Frame {
+                        moving: None,
+                        preview_bounds: None,
                         hatch: Default::default(),
                         product_lights: None,
                         product_look: product,

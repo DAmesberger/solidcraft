@@ -157,11 +157,21 @@ fn pixels(
     texture: &GraphTexture,
     policy: &ResidentPolicy,
     cancel: &CancelToken,
+    runtime: &BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
     shared: &mut BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
 ) -> Result<(u32, [u32; 2])> {
     cancel.check()?;
     if let Some(record) = shared.get(&texture.identity()) {
         return Ok(*record);
+    }
+    // A runtime map's record is its mip descriptor: the top level's pixels start where its first
+    // level entry says (`textures::pixels`).
+    if let Some((descriptor, size)) = runtime.get(&texture.identity()) {
+        let word = (*descriptor as usize + 4) * 4;
+        let offset = bytes.get(word..word + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_le_bytes);
+        let offset = offset.ok_or_else(|| JobError::new(ErrorCode::Internal, "runtime map descriptor outside the texture buffer"))?;
+        shared.insert(texture.identity(), (offset, *size));
+        return Ok((offset, *size));
     }
     let failed = |e: solidcraft_render::texture_input::TextureError| {
         if cancel.is_cancelled() { JobError::new(ErrorCode::Cancelled, "graph texture decoding cancelled") } else { invalid(e.to_string()) }
@@ -215,15 +225,16 @@ pub(super) fn append(
     graphs: &GraphMaterials,
     origin: Vec3,
     cancel: &CancelToken,
-    shared: &mut BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
+    runtime: &BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
     policy: &ResidentPolicy,
 ) -> Result<Records> {
+    let mut shared = BTreeMap::new();
     let mut references = Vec::with_capacity(graphs.materials().len());
     for material in graphs.materials() {
         let mut refs = Vec::with_capacity(material.textures().len());
         for texture in material.textures() {
             let (offset, size) = match texture {
-                Some(texture) => pixels(bytes, texture, policy, cancel, shared)?,
+                Some(texture) => pixels(bytes, texture, policy, cancel, runtime, &mut shared)?,
                 None => (0, [0; 2]),
             };
             refs.push([offset, size[0], size[1], 0]);

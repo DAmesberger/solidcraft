@@ -648,7 +648,7 @@ fn preview(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<OpaqueSurface
     let height = (width * 0.45).clamp(t.control_height * 2.0, t.control_height * 5.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     crate::scenario::publish_rect("appearance:graph_swatch", rect);
-    swatch::paint(ui, ui.id().with("graph_swatch"), rect, sample);
+    swatch::paint(ui, ui.scope_id().with("graph_swatch"), rect, sample);
     ui.painter().rect_stroke(rect, t.control_radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
 }
 
@@ -706,7 +706,7 @@ fn summary(ui: &mut egui::Ui, loaded: &Loaded, reason: &str) {
 /// "Edit as JSON": the whole graph, replaced with `appearance.graph.set`.
 fn json_editor(ui: &mut egui::Ui, ed: &Editor, loaded: &Loaded, out: &mut Vec<Action>) {
     ui_kit::section(ui, "ap_graph_json", tr("appearance.graph.json"), false, |ui| {
-        let id = egui::Id::new(("ap_graph_json", &loaded.id, ed.synced));
+        let id = egui::Id::unique(("ap_graph_json", &loaded.id, ed.synced));
         let mut text = ui.data_mut(|d| d.get_temp_mut_or_insert_with(id, || serde_json::to_string_pretty(&loaded.graph).unwrap_or_default()).clone());
         ui_kit::text_area(ui, tr("appearance.graph.json"), id.with("text"), &mut text, 12, JSON_LIMIT);
         ui.data_mut(|d| d.insert_temp(id, text.clone()));

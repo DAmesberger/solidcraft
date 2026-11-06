@@ -219,6 +219,8 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
     let none = || Arc::new(Mutex::new(None));
     let e = camera.eye().to_f32();
     let cb = ViewportCallback(Frame {
+        moving: None,
+        preview_bounds: None,
         hatch: Default::default(),
         product_lights: shot.lights,
         product_look: Some(shot.look),

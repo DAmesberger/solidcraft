@@ -126,7 +126,7 @@ fn reading_a_file_written_that_way_runs_the_steps_it_is_missing() {
         if !listed.is_empty() {
             written["format_pending"] = listed.clone().into();
         }
-        f.check("design", n, (!listed.is_empty()).then_some(listed.as_slice())).unwrap();
+        assert!(f.newer(n, (!listed.is_empty()).then_some(listed.as_slice())).is_none());
         assert!(open(written).is_ok());
     }
 }
