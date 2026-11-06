@@ -23,6 +23,17 @@ pub type TextureSet = [Option<TextureKey>; TEXTURE_SLOTS];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GraphMaterial(u32);
 
+/// Where a material lives, for a draw of placed meshes ([`GraphScene::placed_material`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlacedMaterial {
+    pub shape: ShapeKey,
+    pub page: u32,
+    pub textures: u32,
+    pub object: bool,
+    pub blended: bool,
+    pub record: u32,
+}
+
 /// Why a material cannot join a scene.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum GraphSceneError {
@@ -224,6 +235,20 @@ impl GraphScene {
                 v.extend_from_slice(&x.to_le_bytes());
             }
         }
+    }
+
+    /// Where material `m` lives.
+    pub(crate) fn placed_material(&self, m: GraphMaterial) -> Option<PlacedMaterial> {
+        let entry = usize::try_from(m.0).ok().and_then(|i| self.materials.get(i))?;
+        let draw = self.draws.get(entry.draw)?;
+        Some(PlacedMaterial {
+            shape: draw.shape,
+            page: draw.page,
+            textures: draw.textures,
+            object: draw.object,
+            blended: draw.blended,
+            record: entry.record,
+        })
     }
 
     fn set_of(&mut self, textures: &TextureSet) -> u32 {

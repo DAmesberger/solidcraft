@@ -1540,7 +1540,7 @@ impl Instances {
                 };
                 self.meshes.push((
                     mesh.clone(),
-                    crate::gpu::InstancedMesh { key: key as u64, tris, instances: Vec::new(), look, levels, closed: b.is_closed() },
+                    crate::gpu::InstancedMesh { graph: None, key: key as u64, tris, instances: Vec::new(), look, levels, closed: b.is_closed() },
                 ));
                 self.by_mesh.insert((key, look), self.meshes.len() - 1);
                 self.meshes.len() - 1
@@ -4174,6 +4174,7 @@ impl HighlightInstances {
                     .or_else(|| taken_shared_tris(&mesh));
                 let Some(tris) = tris else { return false };
                 self.meshes.push(crate::gpu::InstancedMesh {
+                    graph: None,
                     key: key as u64,
                     tris,
                     instances: Vec::new(),

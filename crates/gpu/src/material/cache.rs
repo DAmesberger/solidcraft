@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use solidcraft_render::material_graph::ir::{Ir, ShapeKey};
 
-use super::scene::{GraphScene, TextureSet};
+use super::scene::{GraphMaterial, GraphScene, TextureSet};
 use super::textures::ResidentTextures;
 use super::{CACHE_SHAPES, COMPILES_PER_FRAME, FRAME_BUDGET_MS, OBJECT_VERTEX_SIZE, PAGE_BYTES, VERTEX_SIZE};
 use crate::view::ibl::{StudioPreset, Studios};
@@ -46,6 +46,12 @@ pub(crate) fn vertex_layout(object: bool) -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
+/// A placed mesh's material record, per placement (location 7, beside the placement's rows).
+pub(crate) fn placed_record_layout() -> wgpu::VertexBufferLayout<'static> {
+    const A: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Uint32];
+    wgpu::VertexBufferLayout { array_stride: 4, step_mode: wgpu::VertexStepMode::Instance, attributes: &A }
+}
+
 pub(crate) fn vertex_entry(object: bool) -> &'static str {
     if object { "vs_mat_object" } else { "vs_mat" }
 }
@@ -57,6 +63,8 @@ pub(crate) enum Variant {
     Opaque,
     Far,
     Near,
+    /// An instanced mesh's placements, over its opaque faces.
+    Placed,
 }
 
 impl Variant {
@@ -178,19 +186,23 @@ impl Materials {
 
     fn pipeline(&self, device: &wgpu::Device, label: &str, source: String, object: bool, variant: Variant) -> wgpu::RenderPipeline {
         let (cull, blend) = match variant {
-            Variant::Opaque => (None, None),
+            Variant::Opaque | Variant::Placed => (None, None),
             Variant::Far => (Some(wgpu::Face::Front), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
             Variant::Near => (Some(wgpu::Face::Back), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
         };
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let plain = [Some(vertex_layout(object))];
+        let placed = [Some(crate::view::shared_layout()), Some(crate::view::instance_layout()), Some(placed_record_layout())];
+        let (entry, buffers): (&str, &[Option<wgpu::VertexBufferLayout<'_>>]) =
+            if variant == Variant::Placed { ("vs_mat_placed", &placed) } else { (vertex_entry(object), &plain) };
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&self.layout),
             vertex: wgpu::VertexState {
                 module: &module,
-                entry_point: Some(vertex_entry(object)),
-                buffers: &[Some(vertex_layout(object))],
+                entry_point: Some(entry),
+                buffers,
                 compilation_options: Default::default(),
             },
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: cull, ..Default::default() },
@@ -226,14 +238,14 @@ impl Materials {
         self.frame += 1;
         let frame = self.frame;
         self.textures.next_frame();
-        for draw in &scene.draws {
-            for key in scene.set(draw.set).iter().flatten() {
+        for set in scene.draws.iter().map(|d| d.set).chain(scene.placed.values().map(|p| p.set)) {
+            for key in scene.set(set).iter().flatten() {
                 self.textures.touch(key);
             }
         }
         self.stats = MaterialStats { failed: u32::try_from(self.failed.len()).unwrap_or(u32::MAX), ..MaterialStats::default() };
         self.decode(device, queue, scene);
-        if scene.draws.is_empty() {
+        if scene.draws.is_empty() && scene.placed.is_empty() {
             self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
             return;
         }
@@ -265,7 +277,21 @@ impl Materials {
                 }
             }
         }
+        for p in scene.placed.values() {
+            if !self.fallback.contains_key(&(p.object, Variant::Placed)) {
+                let pipeline = self.pipeline(device, "sc_material_base", super::fallback_source(), p.object, Variant::Placed);
+                self.fallback.insert((p.object, Variant::Placed), pipeline);
+            }
+        }
         let mut wanted: Vec<((ShapeKey, Variant), &Arc<Ir>)> = Vec::new();
+        for p in scene.placed.values() {
+            let key = (p.shape, Variant::Placed);
+            match self.shapes.get_mut(&key) {
+                Some(Pipeline::Ready { used, .. }) => *used = frame,
+                None if !self.failed.contains(&p.shape) && !wanted.iter().any(|(k, _)| *k == key) => wanted.push((key, &p.ir)),
+                None => {}
+            }
+        }
         for draw in &scene.draws {
             for variant in Variant::of(draw.blended && !self.blends_off()) {
                 let key = (draw.shape, *variant);
@@ -404,11 +430,22 @@ struct DrawGpu {
     vertices: u32,
 }
 
+/// A material that instanced meshes are shaded with ([`GraphBatches::place`]).
+struct PlacedGpu {
+    shape: ShapeKey,
+    ir: Arc<Ir>,
+    object: bool,
+    page: usize,
+    set: u32,
+}
+
 /// One scene's material surfaces on the GPU: its pages, its draws and their group-3 binds.
 #[derive(Default)]
 pub(crate) struct GraphBatches {
     pages: Vec<PageGpu>,
     draws: Vec<DrawGpu>,
+    /// The materials of the scene's instanced meshes.
+    placed: HashMap<GraphMaterial, PlacedGpu>,
     /// The scene's texture sets (index 0 binds none).
     sets: Vec<TextureSet>,
     /// The latest scene's texture bytes, by key.
@@ -505,6 +542,37 @@ impl GraphBatches {
         (pages_written, written)
     }
 
+    /// The materials instanced meshes are shaded with ([`Self::take`]'s scene's): their shapes
+    /// join the pipelines to make and their pages the binds. What a material needs per placement
+    /// is its record, which comes back; a see-through or unknown material draws no overlay.
+    pub(crate) fn place(&mut self, scene: &GraphScene, material: GraphMaterial) -> Option<u32> {
+        let m = scene.placed_material(material).filter(|m| !m.blended)?;
+        let ir = scene.shape(&m.shape)?.clone();
+        let page = usize::try_from(m.page).ok()?;
+        self.placed.insert(material, PlacedGpu { shape: m.shape, ir, object: m.object, page, set: m.textures });
+        Some(m.record)
+    }
+
+    /// Forget the placed materials before a new scene's ([`Self::place`]).
+    pub(crate) fn clear_placed(&mut self) {
+        self.placed.clear();
+    }
+
+    /// Set the pipeline and bind group of `material`'s placements. False until they can draw.
+    pub(crate) fn begin_placed(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &Materials, material: GraphMaterial) -> bool {
+        let Some(p) = self.placed.get(&material) else { return false };
+        let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&p.shape, p.object, Variant::Placed), self.binds.get(&(p.page, p.set)))
+        else {
+            return false;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(3, bind, &[]);
+        if fallback {
+            pipelines.fallback_draws.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        true
+    }
+
     /// Texture set `i` (none past the scene's).
     fn set(&self, i: u32) -> &TextureSet {
         static NONE: TextureSet = [None, None, None, None];
@@ -515,22 +583,23 @@ impl GraphBatches {
     /// the studio, the pages or the resident textures changed. A texture not resident yet binds
     /// the 1 × 1 stand-in, so its `image` nodes draw their `default`.
     pub(crate) fn bind(&mut self, device: &wgpu::Device, materials: &Materials, studios: &Studios, preset: Option<StudioPreset>) {
-        let Some(blank) = materials.blank.as_ref().filter(|_| !self.draws.is_empty()) else { return };
+        let Some(blank) = materials.blank.as_ref().filter(|_| !self.draws.is_empty() || !self.placed.is_empty()) else { return };
         let want = (preset, studios.generation(), self.pages.len(), materials.textures.generation());
         if self.bound != Some(want) {
             self.binds.clear();
         }
         let samplers = [&materials.samplers[0], &materials.samplers[1], &materials.samplers[2]];
-        for draw in &self.draws {
-            if self.binds.contains_key(&(draw.page, draw.set)) {
+        let wanted: Vec<(usize, u32)> = self.draws.iter().map(|d| (d.page, d.set)).chain(self.placed.values().map(|p| (p.page, p.set))).collect();
+        for (page_index, set_index) in wanted {
+            if self.binds.contains_key(&(page_index, set_index)) {
                 continue;
             }
-            let Some(page) = self.pages.get(draw.page) else { continue };
-            let set = self.set(draw.set);
+            let Some(page) = self.pages.get(page_index) else { continue };
+            let set = self.set(set_index);
             let view = |i: usize| set.get(i).and_then(Option::as_ref).and_then(|k| materials.textures.view(k)).unwrap_or(blank);
             let textures = [view(0), view(1), view(2), view(3)];
             let bind = studios.material_bind(device, &materials.group3, preset, &page.buffer, textures, samplers);
-            self.binds.insert((draw.page, draw.set), bind);
+            self.binds.insert((page_index, set_index), bind);
         }
         self.bound = Some(want);
     }

@@ -312,3 +312,56 @@ fn a_dark_coated_face_has_no_channel_noise_at_grazing_angles() {
         }
     }
 }
+
+/// An instanced mesh shaded through a material draws what the same world triangles in the material
+/// stream draw, from its smooth triangles and from a flat level, whose corners carry no normal.
+#[test]
+fn a_placed_mesh_shades_as_the_material_stream_does() {
+    let graph = surface(json!([]), json!({"base_color": [0.7, 0.3, 0.2], "specular_roughness": 0.45}));
+    let Some(stream) = draw(&graph, 41) else { return gpu_required() };
+    let Some((_, device, queue)) = crate::open_headless().ok() else { return gpu_required() };
+    let valid = validate(&graph).unwrap_or_else(|e| panic!("{e}"));
+    let ir = std::sync::Arc::new(lower(&valid).unwrap_or_else(|e| panic!("{e}")));
+    let base = base_sample(&valid).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    for (k, normal) in [[0.0f32, 0.0, 1.0], [0.0, 0.0, 0.0]].into_iter().enumerate() {
+        let mut scene = GpuScene::default();
+        let material = scene.graphs.material(&ir, &words, &base).unwrap_or_else(|e| panic!("{e}"));
+        let mut tris = crate::view::SharedTris { bounds: [[-17.0, -12.0, 0.0], [7.0, 12.0, 0.0]], flat: k == 1, ..Default::default() };
+        for [x, y] in [[-17.0f32, -12.0f32], [7.0, -12.0], [7.0, 12.0], [-17.0, 12.0]] {
+            for v in [x, y, 0.0].into_iter().chain(normal) {
+                tris.vertices.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        tris.indices = vec![0, 1, 2, 0, 2, 3];
+        let mut mesh = crate::view::InstancedMesh {
+            key: 1,
+            tris: std::sync::Arc::new(tris),
+            instances: Vec::new(),
+            look: crate::view::InstanceLook::Opaque,
+            levels: Vec::new(),
+            closed: true,
+            graph: Some(material),
+        };
+        mesh.place([[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], crate::view::PaletteIndex(0));
+        scene.instanced.push(mesh);
+        let target =
+            GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(&device, true)), samples: 1, tess: false, oit: false };
+        let mut r = Renderer::new(&device, target, None);
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+        r.materials_mut().no_time_budget = true;
+        let frame = Frame { key: 42 + k as u64, product_look: Some(ProductLook::default()), ..test_frame(scene, 1.0) };
+        let mut placed = render_frame(&mut r, &device, &queue, &frame, true);
+        for _ in 0..16 {
+            if r.material_stats().pending == 0 {
+                break;
+            }
+            placed = render_frame(&mut r, &device, &queue, &frame, true);
+        }
+        assert_eq!(r.material_stats().fallback_draws, 0, "drawn by its own pipeline");
+        let (a, b) = (middle(&stream), middle(&placed));
+        for channel in 0..3 {
+            assert!((a[channel] - b[channel]).abs() < 2.0, "level {k}: {a:?} against {b:?}");
+        }
+    }
+}

@@ -83,7 +83,11 @@ pub(super) fn guide_pipeline(context: &Context, source: &str) -> Result<wgpu::Co
         layout: Some(&guide_layout),
         module: &guide_shader,
         entry_point: Some("denoise_guides"),
-        compilation_options: wgpu::PipelineCompilationOptions { constants: &[("HAS_TEXTURES", 1.0)], ..Default::default() },
+        // A graph job's shader has the value in its source (`graph_source`).
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants: if source.contains("override HAS_TEXTURES") { &[("HAS_TEXTURES", 1.0)] } else { &[] },
+            ..Default::default()
+        },
         cache: None,
     });
     checked(error_scopes)?;

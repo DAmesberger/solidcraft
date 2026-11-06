@@ -466,6 +466,10 @@ pub struct InstancedMesh {
     pub levels: Vec<(Arc<SharedTris>, f32)>,
     /// The triangles enclose a volume (see [`PlannedBody::closed`]).
     pub closed: bool,
+    /// Every opaque placement also shaded through this material of [`GpuScene::graphs`], over its
+    /// opaque faces as the scene's other material surfaces are, from the same shared triangles
+    /// and levels. A see-through material draws no overlay.
+    pub graph: Option<crate::material::GraphMaterial>,
 }
 
 impl InstancedMesh {
@@ -1373,6 +1377,10 @@ struct LevelDraw {
 /// while they come back), and the placements in view, each drawn from its level.
 struct InstancedDraw {
     look: InstanceLook,
+    /// Its material overlay ([`InstancedMesh::graph`]).
+    graph: Option<crate::material::GraphMaterial>,
+    /// That material's record for each placement.
+    records: Option<wgpu::Buffer>,
     /// Its triangles enclose a volume ([`InstancedMesh::closed`]).
     closed: bool,
     /// The full triangles first, then coarser ones.
@@ -1885,6 +1893,12 @@ impl Batches {
             let (pages, vertices) = self.graphs.take(device, queue, &sc.graphs);
             self.uploads.material_pages = pages;
             self.uploads.material_vertices = vertices;
+            self.graphs.clear_placed();
+            for draw in &mut self.instanced {
+                let Some(record) = draw.graph.and_then(|graph| self.graphs.place(&sc.graphs, graph)) else { continue };
+                let bytes: Vec<u8> = std::iter::repeat_n(record.to_le_bytes(), draw.placements.len() / INSTANCE_SIZE).flatten().collect();
+                draw.records = buffer_init(device, "sc_placed_records", &bytes, wgpu::BufferUsages::VERTEX);
+            }
             let mut own = |label: &str, data: &[u8], stride: usize| {
                 geometry += data.len() as u64;
                 upload(device, label, data, stride)
@@ -1982,7 +1996,7 @@ impl Batches {
                 self.instanced_tris.insert(key, gpu);
             }
             if !levels.is_empty() {
-                out.push(InstancedDraw { look: m.look, closed: m.closed, levels, bounds: m.tris.bounds, placements, shown: None });
+                out.push(InstancedDraw { look: m.look, graph: m.graph, records: None, closed: m.closed, levels, bounds: m.tris.bounds, placements, shown: None });
             }
         }
         out
@@ -2565,13 +2579,13 @@ fn planned_layout() -> wgpu::VertexBufferLayout<'static> {
 }
 
 /// An instanced mesh's vertices ([`SHARED_SIZE`]).
-fn shared_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn shared_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
     wgpu::VertexBufferLayout { array_stride: SHARED_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
 /// An instanced mesh's placements ([`INSTANCE_SIZE`]), one per instance.
-fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Uint32];
     wgpu::VertexBufferLayout { array_stride: INSTANCE_SIZE as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &A }
 }
@@ -4249,6 +4263,15 @@ impl Renderer {
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         tris(pass, &res.pbr, &m.pbr);
         m.graphs.draw(pass, &res.materials, tally);
+        for d in m.instanced.iter().filter(|d| d.look == InstanceLook::Opaque) {
+            let (Some(graph), Some(records)) = (d.graph, &d.records) else { continue };
+            if m.graphs.begin_placed(pass, &res.materials, graph) {
+                pass.set_vertex_buffer(2, records.slice(..));
+                for level in &d.levels {
+                    level.draw(pass, tally);
+                }
+            }
+        }
         // The material draws set group 3 to their own layout; the pipelines below read the studio's.
         pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(res.drawn_look(cb).map(|look| look.studio)), &[]);
         if !cb.product {
@@ -6208,6 +6231,7 @@ pub(crate) mod glass_tests {
                         let rear = control.color([255, 0, 0, 255]);
                         let ignored_color = control.color([0, 0, 255, 255]);
                         let mut instances = InstancedMesh {
+                            graph: None,
                             key: 1,
                             tris: shared,
                             instances: Vec::new(),

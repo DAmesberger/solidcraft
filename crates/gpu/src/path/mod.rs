@@ -72,6 +72,15 @@ macro_rules! path_shader {
 const PATH_SOURCE: &str = path_source!(16);
 const SHADER: &str = path_shader!(16);
 const SINGLE_MEDIUM_SHADER: &str = path_shader!(1);
+/// The path shader of a job with material graphs, with its generated `evaluators`. Its constants
+/// are written into the source: naga's pipeline-override pass refuses some generated evaluators
+/// (`ExpressionAlreadyInScope`), and a module without overrides skips that pass.
+fn graph_source(evaluators: &str) -> String {
+    format!("{PATH_SOURCE}\n{evaluators}\n{}", include_str!("photons_disabled.wgsl"))
+        .replace("override OPAQUE_SCENE: bool = false;", "const OPAQUE_SCENE: bool = false;")
+        .replace("override HAS_TEXTURES: bool = false;", "const HAS_TEXTURES: bool = true;")
+        .replace("override GLASS_DELTA_LIGHTS: bool=false;", "const GLASS_DELTA_LIGHTS: bool = false;")
+}
 /// Graph pipelines a device keeps, by shape set (most recently used first).
 const GRAPH_PIPELINES: usize = 4;
 const MAX_TRIANGLES: u64 = MAX_GPU_PATH_TRIANGLES;
@@ -269,7 +278,7 @@ impl Context {
                 return Ok(pipelines);
             }
         }
-        let source = format!("{PATH_SOURCE}\n{}\n{}", material::source(graphs)?, include_str!("photons_disabled.wgsl"));
+        let source = graph_source(&material::source(graphs)?);
         let main = checked_creation(&self.device, || {
             let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("gpu-path graphs"),
@@ -280,10 +289,7 @@ impl Context {
                 layout: Some(&self.pipeline_layout),
                 module: &shader,
                 entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("OPAQUE_SCENE", 0.0), ("HAS_TEXTURES", 1.0)],
-                    ..Default::default()
-                },
+                compilation_options: Default::default(),
                 cache: None,
             }))
         })?;

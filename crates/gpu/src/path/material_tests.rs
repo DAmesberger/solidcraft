@@ -12,7 +12,7 @@ use solidcraft_render::material_graph::{Constant, MaterialGraph, base_response, 
 use solidcraft_render::surface::OpaqueSurface;
 use solidcraft_render::{Camera, ProductMesh, ProductScene, StandardView};
 
-use super::super::{Executor, PATH_SOURCE, Task, admission, open_headless};
+use super::super::{Executor, Task, admission, open_headless};
 use crate::material::textures::ResidentPolicy;
 
 const COPPER: &str = include_str!("../../../render/tests/fixtures/material_graph/pbr-copper.json");
@@ -234,7 +234,7 @@ fn the_generated_module_validates() {
     let (coated, _) = graph(COATED);
     let (epoxy, _) = graph(FIXTURES[0].1);
     let graphs = GraphMaterials::new(vec![material(&copper), material(&coated), material(&epoxy)], vec![binding(0)]).unwrap();
-    let source = format!("{PATH_SOURCE}\n{}", super::source(&graphs).unwrap());
+    let source = super::super::graph_source(&super::source(&graphs).unwrap());
     let module = match naga::front::wgsl::parse_str(&source) {
         Ok(m) => m,
         Err(e) => panic!("{}", e.emit_to_string(&source)),
@@ -377,7 +377,7 @@ fn graph_probe(@builtin(global_invocation_id) gid: vec3<u32>) {{
         fields.join(", "),
         total = count * n,
     );
-    let shader = format!("{PATH_SOURCE}\n{}\n{entry}", super::source(&graphs).unwrap());
+    let shader = format!("{}\n{entry}", super::super::graph_source(&super::source(&graphs).unwrap()));
     let context = &executor.context;
     let module = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader.into()) });
     let pipeline = context.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

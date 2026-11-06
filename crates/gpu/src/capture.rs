@@ -719,6 +719,7 @@ mod tests {
             assert_eq!(tris.flat, k == 0);
             let placed_at = |[x, y, z]: [f32; 3]| {
                 let mut inst = crate::view::InstancedMesh {
+                    graph: None,
                     key: 1,
                     tris: tris.clone(),
                     instances: Vec::new(),

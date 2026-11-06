@@ -26,17 +26,22 @@ fn mat_base_response(r: u32, n: vec3<f32>) -> sc_Surface {
 // `material_eval` is straight-line.
 @fragment
 fn fs_mat(i: MatOut) -> @location(0) vec4<f32> {
-    let f = pbr_fragment(i.pos, i.wp, i.n);
+    let wx = dpdx(i.wp);
+    let wy = dpdy(i.wp);
+    // The corners of a flat level of an instanced mesh carry no normal (`SharedTris::flat`): the
+    // fragment takes its triangle's, facing the eye.
+    let toward = select(u.back.xyz, u.eye.xyz - i.wp, u.eye.w > 0.5);
+    let facet = cross(wx, wy);
+    let shading_n = select(i.n, select(facet, -facet, dot(facet, toward) < 0.0), dot(i.n, i.n) < 1e-12);
+    let f = pbr_fragment(i.pos, i.wp, shading_n);
     let mm = 1.0 / max(u.units.x, 1e-30);
-    let wx = dpdx(i.wp) * mm;
-    let wy = dpdy(i.wp) * mm;
     let ox = dpdx(i.op) * mm;
     let oy = dpdy(i.op) * mm;
     let fw = f.footprint * mm;
     // Under a section the face it shades is cut away: so is its shading.
     if (clipped(i.wp)) { discard; }
-    let frame = sc_object_frame(wx, wy, ox, oy);
-    let n = sc_unit(i.n);
+    let frame = sc_object_frame(wx * mm, wy * mm, ox, oy);
+    let n = sc_unit(shading_n);
     let n_object = sc_unit(transpose(frame.to_world) * n);
     // The geometric tangent is the object's, carried into world space (the reference's placed
     // point): a rotated occurrence keeps its patterns' orientation.
