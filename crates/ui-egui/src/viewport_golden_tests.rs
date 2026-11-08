@@ -32,8 +32,8 @@ use solidcraft_engine::geom::prelude::*;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
-use solidcraft_engine::Session;
 use solidcore_record::Vec3;
+use solidcraft_engine::Session;
 use solidcraft_engine::render::ProductScene;
 use solidcraft_engine::render::surface::OpaqueSurface;
 

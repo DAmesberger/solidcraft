@@ -313,15 +313,11 @@ pub(super) fn flatten_with_graphs(
         }
         vector(
             &mut materials,
-            Vec3::new(
-                scatter.map_or(0.0, |s| s.scattering_per_mm),
-                scatter.map_or(0.0, |s| s.anisotropy),
-                {
-                    let stage = scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/"));
-                    // A graph's record takes the flags' place: only a mapped scalar face reads the other flag.
-                    if stage || t.graph == 0.0 { (u32::from(stage) | (u32::from(t.scalar_face) << 1)) as f64 } else { f64::from(t.graph) }
-                },
-            ),
+            Vec3::new(scatter.map_or(0.0, |s| s.scattering_per_mm), scatter.map_or(0.0, |s| s.anisotropy), {
+                let stage = scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/"));
+                // A graph's record takes the flags' place: only a mapped scalar face reads the other flag.
+                if stage || t.graph == 0.0 { (u32::from(stage) | (u32::from(t.scalar_face) << 1)) as f64 } else { f64::from(t.graph) }
+            }),
             parent_triangle as f32,
         );
         if model_bytes > 0 {

@@ -86,11 +86,15 @@ fn format_5_xz_design_opens_where_it_was_saved() {
     ];
     expect(&bodies(&mut old), &want);
 
-    // Saving the migrated design writes the current format and keeps the geometry.
+    // Saving the migrated design writes the oldest current format that holds it (a pending
+    // change it does not use is skipped) and keeps the geometry.
     let resaved = dir.join("resaved.solidcraft");
     run(&mut old, "file.save_as", json!({"path": resaved.to_string_lossy(), "format": "json"}));
     let text = std::fs::read_to_string(&resaved).unwrap();
-    assert!(text.contains(&format!("\"solidcraft/{}\"", solidcraft_doc::format::FORMAT)), "resaved at the current format");
+    let saved: Value = serde_json::from_str(&text).unwrap();
+    let (written, _) = solidcraft_doc::format::DESIGN.written_for(&saved);
+    assert!(written > 5, "migrated past format 5");
+    assert_eq!(saved["format"], Value::from(solidcraft_doc::format::format_string(written)), "resaved at the current format");
     let mut again = Session::default();
     run(&mut again, "doc.open", json!({"path": resaved.to_string_lossy()}));
     expect(&bodies(&mut again), &want);

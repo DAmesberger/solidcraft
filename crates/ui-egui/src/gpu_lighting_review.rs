@@ -16,8 +16,8 @@ use solidcraft_engine::geom::prelude::*;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
-use solidcraft_engine::Session;
 use solidcore_record::Vec3;
+use solidcraft_engine::Session;
 use solidcraft_engine::render::{Camera, ProductScene, surface::OpaqueSurface};
 
 use super::{Frame, ProductLook, Renderer, StudioEnvironment, StudioPreset, ViewportCallback};

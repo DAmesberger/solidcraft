@@ -345,8 +345,13 @@ fn a_placed_mesh_shades_as_the_material_stream_does() {
         };
         mesh.place([[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], crate::view::PaletteIndex(0));
         scene.instanced.push(mesh);
-        let target =
-            GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(&device, true)), samples: 1, tess: false, oit: false };
+        let target = GpuTarget {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            depth: Some(crate::depth_format(&device, true)),
+            samples: 1,
+            tess: false,
+            oit: false,
+        };
         let mut r = Renderer::new(&device, target, None);
         r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
         r.materials_mut().no_time_budget = true;

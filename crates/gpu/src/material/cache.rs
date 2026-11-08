@@ -199,12 +199,7 @@ impl Materials {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&self.layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some(entry),
-                buffers,
-                compilation_options: Default::default(),
-            },
+            vertex: wgpu::VertexState { module: &module, entry_point: Some(entry), buffers, compilation_options: Default::default() },
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: cull, ..Default::default() },
             depth_stencil: self.depth.clone(),
             multisample: wgpu::MultisampleState { count: self.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },

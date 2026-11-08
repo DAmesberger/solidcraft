@@ -168,9 +168,9 @@ fn material_reply(cmd: &str, m: &UserMaterial) -> Result<MaterialReply> {
     Ok(out)
 }
 
-/// [`material_reply`] as JSON, for `material.list` (`cmd/inspect.rs`), which isn't converted yet.
-pub(super) fn material_json(m: &UserMaterial) -> Result<Value> {
-    reply("material.list", material_reply("material.list", m)?)
+/// [`material_reply`] for `material.list` (`cmd/inspect.rs`).
+pub(super) fn listed_material(m: &UserMaterial) -> Result<MaterialReply> {
+    material_reply("material.list", m)
 }
 
 fn reply(cmd: &str, reply: impl serde::Serialize) -> Result<Value> {
@@ -241,8 +241,12 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if s.doc.user_materials.len() >= MAX_USER_MATERIALS {
         return Err(bad(cmd, format!("a design defines at most {MAX_USER_MATERIALS} materials")));
     }
-    let material =
-        UserMaterial { density: density(cmd, p)?, appearance: look(cmd, p, &name, &s.doc)?.flatten(), name, physical_card: physical_card(cmd, p)?.flatten() };
+    let material = UserMaterial {
+        density: density(cmd, p)?,
+        appearance: look(cmd, p, &name, &s.doc)?.flatten(),
+        name,
+        physical_card: physical_card(cmd, p)?.flatten(),
+    };
     let out = reply(cmd, material_reply(cmd, &material)?)?;
     s.doc_mut().user_materials.push(material);
     Ok(out)

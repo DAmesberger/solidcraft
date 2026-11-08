@@ -2004,7 +2004,16 @@ impl Batches {
                 self.instanced_tris.insert(key, gpu);
             }
             if !levels.is_empty() {
-                out.push(InstancedDraw { look: m.look, graph: m.graph, records: None, closed: m.closed, levels, bounds: m.tris.bounds, placements, shown: None });
+                out.push(InstancedDraw {
+                    look: m.look,
+                    graph: m.graph,
+                    records: None,
+                    closed: m.closed,
+                    levels,
+                    bounds: m.tris.bounds,
+                    placements,
+                    shown: None,
+                });
             }
         }
         out
@@ -3796,7 +3805,11 @@ impl Renderer {
         match &cb.moving {
             Some(mv) => {
                 res.moving.sort_glass(queue, local_direction(&mv.transform, cb.back));
-                queue.write_buffer(&res.moving_uniform, 0, &uniform_bytes_moved(cb, res.drawn_look(cb), res.linear_out, res.target.reversed_depth(), mv.transform));
+                queue.write_buffer(
+                    &res.moving_uniform,
+                    0,
+                    &uniform_bytes_moved(cb, res.drawn_look(cb), res.linear_out, res.target.reversed_depth(), mv.transform),
+                );
                 res.moving_on = true;
             }
             // The drag is over: its buffers go.

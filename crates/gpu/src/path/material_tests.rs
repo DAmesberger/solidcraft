@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use solidcore_record::Vec3;
-use solidcraft_geom::{Mesh};
+use solidcraft_geom::Mesh;
 use solidcraft_render::job::graphs::{GraphBinding, GraphMaterial, GraphMaterials};
 use solidcraft_render::job::{CancelToken, ImageRequest, ImageWork, JobOptions, TaskPoll};
 use solidcraft_render::material_graph::{Constant, MaterialGraph, base_response, ir::Ir, lower, validate};

@@ -1927,6 +1927,7 @@ mod tests {
             opacity: 0.5,
             flip: false,
             visible: true,
+            locked: false,
             component: 0,
         });
         doc
@@ -2370,7 +2371,8 @@ mod tests {
             let bytes = write_design_container_with_compression(&doc, policy).unwrap();
             let mut entries = parts(&bytes);
             let mut metadata: Value = serde_json::from_slice(&entries["document.json"]).unwrap();
-            assert_eq!(metadata["format"], solidcraft_doc::format::format_string(solidcraft_doc::format::FORMAT));
+            // The oldest format that holds the design (solidcraft_doc::format::write_oldest_format).
+            assert_eq!(metadata["format"], doc.in_written_format().format);
             let blob = metadata["features"][0]["meshes"][0]["mesh_blob"].as_str().unwrap();
             let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
             assert_eq!(archive.by_name(blob).unwrap().compression(), method);

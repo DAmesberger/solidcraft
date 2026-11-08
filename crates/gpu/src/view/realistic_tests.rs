@@ -209,8 +209,15 @@ fn an_instanced_highlight_draws_after_material_surfaces() {
         }
     }
     tris.indices = vec![0, 1, 2, 0, 2, 3];
-    let mut selected =
-        InstancedMesh { graph: None, key: 1, tris: Arc::new(tris), instances: Vec::new(), look: InstanceLook::Opaque, levels: Vec::new(), closed: true };
+    let mut selected = InstancedMesh {
+        graph: None,
+        key: 1,
+        tris: Arc::new(tris),
+        instances: Vec::new(),
+        look: InstanceLook::Opaque,
+        levels: Vec::new(),
+        closed: true,
+    };
     selected.place([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], PaletteIndex(0));
     let highlight = GpuScene { selected_instanced: vec![selected], ..Default::default() };
     let frame = Frame {
@@ -236,4 +243,3 @@ fn an_instanced_highlight_draws_after_material_surfaces() {
     let (inside, beside) = (at(&picture, 16, 32), at(&picture, 48, 32));
     assert!(red(&inside) > red(&beside), "the highlight shows: {inside:?} against {beside:?}");
 }
-

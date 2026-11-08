@@ -1407,7 +1407,7 @@ impl Session {
         self.pending_moves = start.pending_moves;
         self.visibility = start.visibility;
         self.refresh();
-}
+    }
 
     /// Number of live-model evaluations after this session's initialization.
     /// Construction, other sessions and trial evaluations of cloned models are
@@ -1980,6 +1980,11 @@ impl Session {
                 Err(e)
             }
         };
+        // A sketch open for editing that failed (a projected edge lost by name) is still shown, its
+        // lost link marked, so it can be repaired from inside it (#12085).
+        if outermost {
+            self.model.hold_failed_sketch(&self.doc, self.active_sketch);
+        }
         if let Some((before, changed, failed)) = crash_outcome {
             // Refresh and body-name pinning can copy the shared document. Remember the final
             // document, so the next command does not mistake that work for an outside edit

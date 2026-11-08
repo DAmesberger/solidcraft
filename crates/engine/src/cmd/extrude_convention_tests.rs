@@ -261,9 +261,10 @@ fn an_older_two_sided_extrude_with_a_negative_distance_keeps_its_sides() {
     let mut base = fixture(json!({"direction":"positive","distance":"10 mm","distance2":"10 mm"}));
     run(&mut base, "parameters.add", json!({"name":"width","expression":"20 mm"}));
     let mut saved: Value = serde_json::from_str(&base.doc.to_json()).unwrap();
-    // As the last release saved it: the format before this build's pending changes.
-    let version: u32 = saved["format"].as_str().unwrap().trim_start_matches("solidcraft/").parse().unwrap();
-    saved["format"] = json!(format!("solidcraft/{}", version - 1));
+    // As the last release saved it: the format before 51, which fixed a two-sided extrude's sides
+    // (format/v51/two-sided-extrude-fixed-sides.rs). A later pending change moves this build's
+    // number past 51, so the saved number less one would already have the fix.
+    saved["format"] = json!(solidcraft_doc::format::format_string(50));
     saved.as_object_mut().unwrap().remove("format_pending");
     for (distance, lo, hi) in [("-width", -20.0, 10.0), ("-0 mm", -10.0, 0.0), ("-10 mm", -10.0, 10.0)] {
         let mut file = saved.clone();
