@@ -509,12 +509,21 @@ pub struct CreateJointParams {
     /// Leave out `dof` and `fixed` in the reply. Default: false.
     #[serde(default)]
     pub quiet: Option<bool>,
+    /// Many joints at once, instead of one: each entry the parameters of one joint as this
+    /// command takes them (without `joints`), made in order and the design solved once for all
+    /// of them. Given alone, with `quiet` at most. The reply lists the new joints' ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "joint_list_schema")]
+    pub joints: Option<Vec<CreateJointParams>>,
 }
 
+/// `type`, `a` and `b`, or `joints`.
 fn create_required(schema: &mut Schema) {
-    require(schema, "type");
-    require(schema, "a");
-    require(schema, "b");
+    schema.insert("anyOf".into(), json!([{"required": ["type", "a", "b"]}, {"required": ["joints"]}]));
+}
+
+fn joint_list_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({"type": "array", "minItems": 1, "maxItems": 10000, "items": {"type": "object"}})
 }
 
 impl<'de> Deserialize<'de> for CreateJointParams {
@@ -542,6 +551,15 @@ impl<'de> Deserialize<'de> for CreateJointParams {
             angle,
             name: text(&m, "name")?,
             quiet: flag(&m, "quiet")?,
+            joints: match m.get("joints") {
+                None | Some(Value::Null) => None,
+                Some(Value::Array(list)) => Some(
+                    list.iter()
+                        .map(|item| CreateJointParams::deserialize(item).map_err(|e| D::Error::custom(whole(format!("`joints`: {e}")))))
+                        .collect::<Result<_, _>>()?,
+                ),
+                Some(_) => return Err(D::Error::custom(whole("`joints` must list 1..10000 joints"))),
+            },
         })
     }
 }
