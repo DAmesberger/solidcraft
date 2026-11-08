@@ -171,8 +171,11 @@ pub(crate) fn navigation_button(ui: &mut Ui, rect: Rect, button: NavigationButto
 /// Realistic view).
 pub(crate) fn navigation_menu_badge(ui: &Ui, rect: Rect) {
     let t = Tokens::get();
-    let metrics =
-        NavigationMetrics::for_size(if rect.height() < NavigationMetrics::for_size(NavigationSize::Regular).button { NavigationSize::Compact } else { NavigationSize::Regular });
+    let metrics = NavigationMetrics::for_size(if rect.height() < NavigationMetrics::for_size(NavigationSize::Regular).button {
+        NavigationSize::Compact
+    } else {
+        NavigationSize::Regular
+    });
     let icon = Rect::from_center_size(pos2(rect.left() + NAV_MENU_LEFT + metrics.icon / 2.0, rect.center().y), vec2(metrics.icon, metrics.icon));
     let radius = (metrics.icon / 7.0).max(2.0);
     ui.painter().circle(icon.right_top() + vec2(-radius * 0.5, radius * 0.5), radius, t.form_primary, egui::Stroke::new(1.0, t.dialog_body));

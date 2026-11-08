@@ -34,9 +34,9 @@ use model::{Drive, GraphEntry, KindSpec, ParamKind, PortSpec, TextureEntry, Unit
 pub(crate) use swatch::SwatchTargets;
 
 use crate::SolveApp;
-use solidcraft_ui_text::{format, tr};
 use crate::theme::Tokens;
 use crate::ui_kit;
+use solidcraft_ui_text::{format, tr};
 
 /// Bytes the "Edit as JSON" box holds.
 const JSON_LIMIT: usize = 1 << 20;
