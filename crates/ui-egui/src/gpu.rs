@@ -85,7 +85,7 @@ pub(crate) fn paint_background_picture(app: &mut crate::SolveApp, painter: &egui
             let options = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
             picture.texture = Some(ctx.load_texture("background-picture", image, options));
         }
-        Some(Err(error)) => app.set_status(format!("{}: {error}", crate::i18n::tr("prefs.background_unreadable")), true),
+        Some(Err(error)) => app.set_status(format!("{}: {error}", solidcraft_ui_text::tr("prefs.background_unreadable")), true),
         None => {}
     }
     if let Some(texture) = &picture.texture {
@@ -542,7 +542,7 @@ impl egui_wgpu::CallbackTrait for ProductHighlightCallback {
 }
 
 /// The shader's analysis colours and flags for the theme's colours.
-pub fn analysis_colors(c: &crate::theme::AnalysisColors) -> [f32; 36] {
+pub fn analysis_colors(c: &solidcraft_color::AnalysisColors) -> [f32; 36] {
     solidcraft_gpu::view::analysis_colors(c)
 }
 
@@ -654,6 +654,7 @@ pub(crate) fn render_offscreen(
         size,
         Offscreen {
             tess,
+            product_lights: None,
             product: false,
             srgb: false,
             analysis,
@@ -674,6 +675,7 @@ pub(crate) fn render_product_offscreen(
     eye: [f32; 4],
     size: u32,
     srgb: bool,
+    product_lights: Option<Vec<[f32; 16]>>,
 ) -> Option<Vec<u8>> {
     offscreen(
         scene,
@@ -684,6 +686,7 @@ pub(crate) fn render_product_offscreen(
         size,
         Offscreen {
             tess: None,
+            product_lights,
             product: true,
             srgb,
             analysis: [0.0; 8],
@@ -698,6 +701,9 @@ pub(crate) fn render_product_offscreen(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 struct Offscreen<'a> {
     tess: Option<&'a str>,
+    /// The Render workspace's analytic preview lights (`Frame::product_lights`); `None` draws the
+    /// product without them.
+    product_lights: Option<Vec<[f32; 16]>>,
     product: bool,
     srgb: bool,
     analysis: [f32; 8],
@@ -726,6 +732,7 @@ pub(crate) fn render_ao_offscreen(
         size,
         Offscreen {
             tess,
+            product_lights: None,
             product: false,
             srgb: false,
             analysis: [0.0; 8],
@@ -756,6 +763,7 @@ pub(crate) fn render_offscreen_ssaa(
         size,
         Offscreen {
             tess: None,
+            product_lights: None,
             product: false,
             srgb: false,
             analysis: [0.0; 8],
@@ -786,7 +794,17 @@ pub(crate) fn render_offscreen_ao(
         back,
         eye,
         size,
-        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius, ao_samples },
+        Offscreen {
+            tess: None,
+            product_lights: None,
+            product: false,
+            srgb: false,
+            analysis: [0.0; 8],
+            analysis_colors: [0.0; 36],
+            ssaa: 1.0,
+            ao_radius,
+            ao_samples,
+        },
     )
 }
 
@@ -800,7 +818,7 @@ fn offscreen(
     size: u32,
     options: Offscreen<'_>,
 ) -> Option<Vec<u8>> {
-    let Offscreen { tess, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples } = options;
+    let Offscreen { tess, product_lights, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples } = options;
     let (adapter, device, queue) = offscreen_device()?;
     eprintln!("offscreen adapter: {:?}", adapter.get_info().backend);
     let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
@@ -811,7 +829,7 @@ fn offscreen(
     resources.insert(Renderer::new(&device, target, compute));
     let none = || Arc::new(Mutex::new(None));
     let cb = ViewportCallback(Frame {
-        product_lights: None,
+        product_lights,
         product_look: None,
         units_per_mm: 1.0,
         product,

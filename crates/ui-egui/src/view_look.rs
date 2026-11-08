@@ -39,7 +39,7 @@ pub(crate) fn current(app: &SolveApp, view: &str) -> u8 {
 
 /// Why Realistic can't be switched on here, if it can't: it needs the GPU viewport.
 pub(crate) fn unavailable(app: &SolveApp) -> Option<String> {
-    app.viewport.gpu.is_none().then(|| crate::i18n::tr("view.look.no_gpu").to_owned())
+    app.viewport.gpu.is_none().then(|| solidcraft_ui_text::tr("view.look.no_gpu").to_owned())
 }
 
 /// Make a `view.look` request explicit before the engine checks it: the active view when it names
@@ -177,7 +177,7 @@ mod tests {
         assert!(app.viewport.gpu.is_none());
         for params in [json!({}), json!({"look": "realistic"}), json!({"look": "realistic", "view": "render_preview"})] {
             let error = app.run("view.look", params.clone()).err().unwrap_or_default();
-            assert_eq!(error, crate::i18n::tr("view.look.no_gpu"), "{params}");
+            assert_eq!(error, solidcraft_ui_text::tr("view.look.no_gpu"), "{params}");
         }
         assert_eq!((app.ui.view_look, app.ui.render_preview_look), (STANDARD, STANDARD));
         assert_eq!(app.run("view.look", json!({"look": "standard"})).ok(), Some(json!({"look": "standard", "view": "model"})));
@@ -194,7 +194,7 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.step(&json!({"key": "P", "shift": true})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(h.app.ui.view_look, STANDARD, "no GPU: refused");
-        assert_eq!(h.app.status.as_ref().map(|s| s.0.as_str()), Some(crate::i18n::tr("view.look.no_gpu")));
+        assert_eq!(h.app.status.as_ref().map(|s| s.0.as_str()), Some(solidcraft_ui_text::tr("view.look.no_gpu")));
         h.step(&json!({"click": {"handle": "nav:slot:visual_style"}})).unwrap_or_else(|e| panic!("{e}"));
         h.step(&json!({"click": {"handle": "nav:style:realistic"}})).ok();
         assert_eq!(h.app.ui.view_look, STANDARD, "the row is disabled without a GPU");

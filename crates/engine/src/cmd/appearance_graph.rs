@@ -284,7 +284,7 @@ fn display_color(cmd: &str, graph: &MaterialGraph, values: &BTreeMap<String, Con
     }
     let validated = mg::validate(&graph).map_err(|e| invalid(cmd, "the look's graph", &e))?;
     let base = mg::base_response(&validated).map_err(|e| invalid(cmd, "the look's graph", &e))?.base_color();
-    Ok([base.x, base.y, base.z].map(solidcraft_geom::srgb::encode8))
+    Ok([base.x, base.y, base.z].map(solidcraft_color::srgb::encode8))
 }
 
 /// Make a look that names a graph whole before it is assigned: the graph is in the design, its

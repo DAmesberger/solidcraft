@@ -400,7 +400,7 @@ impl DecodedTexture {
         let bpp = layout.bytes_per_pixel() as usize;
         let mut out = zeroed((dw * dh * bpp) as u64)?;
         let srgb = self.info.interpretation == Interpretation::Srgb;
-        let decode: [f32; 256] = std::array::from_fn(|c| if srgb { solidcraft_geom::srgb::decode8(c as u8) as f32 } else { c as f32 / 255.0 });
+        let decode: [f32; 256] = std::array::from_fn(|c| if srgb { solidcraft_color::srgb::decode8(c as u8) as f32 } else { c as f32 / 255.0 });
         let channels = if layout == PixelLayout::Rgba8 { 4 } else { 1 };
         let read = |x: usize, y: usize, c: usize| -> f32 {
             let i = (y * sw + x) * bpp;
@@ -439,7 +439,7 @@ impl DecodedTexture {
                     PixelLayout::Rgba8 => {
                         for (c, a) in acc.iter().enumerate() {
                             let v = (a / area).clamp(0.0, 1.0);
-                            let code = if c < 3 && srgb { solidcraft_geom::srgb::encode8(v) } else { (v * 255.0).round() as u8 };
+                            let code = if c < 3 && srgb { solidcraft_color::srgb::encode8(v) } else { (v * 255.0).round() as u8 };
                             if let Some(slot) = out.get_mut(o + c) {
                                 *slot = code;
                             }

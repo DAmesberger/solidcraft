@@ -232,7 +232,7 @@ fn the_gpu_mip_chain_matches_its_analytic_levels() {
         let k = colour.key.clone();
         r.install(&device, &queue, colour).unwrap();
         assert_eq!(r.size(&k), Some([8, 4, 4]));
-        let grey = solidcraft_geom::srgb::encode8(0.5);
+        let grey = solidcraft_color::srgb::encode8(0.5);
         for (i, (w, h)) in [(4, 2), (2, 1), (1, 1)].into_iter().enumerate() {
             let (gw, gh, bytes) = level(&r, &device, &queue, &k, i as u32 + 1);
             assert_eq!((gw, gh), (w, h));

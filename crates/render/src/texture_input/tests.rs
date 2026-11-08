@@ -202,7 +202,7 @@ fn halving_averages_srgb_in_linear_light_and_data_as_stored() {
     let colour = decoded(4, 2, MapRole::BaseColor, checker).halve(|| false).unwrap().unwrap();
     assert_eq!((colour.info().width, colour.info().height, colour.info().decoded_bytes), (2, 1, 8));
     // Half black, half white is linear 0.5: sRGB code 188. Alpha averages as stored.
-    let half = solidcraft_geom::srgb::encode8(0.5);
+    let half = solidcraft_color::srgb::encode8(0.5);
     assert_eq!(half, 188);
     assert_eq!(colour.rgba(), [half, half, half, 128, half, half, half, 128]);
     let data = decoded(4, 2, MapRole::Roughness, checker).halve(|| false).unwrap().unwrap();

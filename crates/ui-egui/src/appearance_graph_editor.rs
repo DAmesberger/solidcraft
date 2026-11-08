@@ -34,7 +34,7 @@ use model::{Drive, GraphEntry, KindSpec, ParamKind, PortSpec, TextureEntry, Unit
 pub(crate) use swatch::SwatchTargets;
 
 use crate::SolveApp;
-use crate::i18n::{format, tr};
+use solidcraft_ui_text::{format, tr};
 use crate::theme::Tokens;
 use crate::ui_kit;
 

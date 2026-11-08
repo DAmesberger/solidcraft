@@ -496,6 +496,7 @@ fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
         [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
         size,
         false,
+        None,
     ) else {
         eprintln!("skipping: no GPU adapter");
         return;
@@ -731,6 +732,7 @@ fn the_swatch_draws_a_graph_with_its_coat() {
         [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
         size,
         false,
+        None,
     ) else {
         eprintln!("skipping: no GPU adapter");
         return;
