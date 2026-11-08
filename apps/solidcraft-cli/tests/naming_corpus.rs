@@ -363,6 +363,8 @@ const UNSTABLE: [(&str, &str); 1] = [(
 
 #[test]
 fn corpus_designs_name_alike_every_build_and_fail_where_a_reference_is_gone() {
+    // Scripts name files from the repository root, as `solidcraft-cli run examples/…` reads them.
+    std::env::set_current_dir(root()).unwrap();
     let designs = designs();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(Vec::new());
