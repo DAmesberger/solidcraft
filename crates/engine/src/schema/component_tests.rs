@@ -51,7 +51,10 @@ fn schemas_and_the_key_check_agree() {
     assert_keys(input_schema_for::<CapturePositionParams>(), &[]);
     assert_keys(input_schema_for::<RevertPositionParams>(), &["occurrences"]);
     assert_keys(input_schema_for::<GroundParams>(), &["grounded", "occurrence", "path"]);
-    assert_keys(input_schema_for::<CopyParams>(), &["component", "in_place", "occurrence", "parent", "parent_path", "path", "translate", "translations"]);
+    assert_keys(
+        input_schema_for::<CopyParams>(),
+        &["component", "in_place", "occurrence", "parent", "parent_path", "path", "translate", "translations"],
+    );
     assert_keys(input_schema_for::<PasteNewParams>(), &["component", "in_place", "occurrence", "parent", "parent_path", "path", "translate"]);
     assert_keys(
         input_schema_for::<MoveParams>(),

@@ -521,7 +521,7 @@ fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
 #[test]
 fn the_dialog_shows_the_stack_editor_in_both_themes() {
     use std::collections::HashMap;
-    let previous = crate::theme::is_dark();
+    let previous = solidcraft_theme::is_dark();
     for dark in [false, true] {
         let mut h = crate::scenario::Harness::new();
         h.app.home.open = false;
@@ -540,7 +540,7 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
         }
         h.ctx = egui::Context::default();
         crate::fonts::setup_fonts(&h.ctx);
-        crate::theme::apply(&h.ctx);
+        solidcraft_theme::apply(&h.ctx);
         let mut textures: HashMap<egui::TextureId, egui::ColorImage> = HashMap::new();
         let mut output = None;
         for _ in 0..10 {
@@ -569,7 +569,7 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
             image.save(std::path::Path::new(&dir).join(format!("graph-editor-{}.png", if dark { "dark" } else { "light" }))).unwrap();
         }
     }
-    crate::theme::set_dark(previous);
+    solidcraft_theme::set_dark(previous);
 }
 
 /// A driver is one `edit`: its nodes are added and the input is connected with the value it had
