@@ -332,35 +332,58 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     sorted[i.min(sorted.len() - 1)]
 }
 
-/// What each B-rep face is: its mean normal, whether it is planar, and its triangle count.
-fn faces(scene: &ProductScene) -> std::collections::BTreeMap<u32, (Vec3, bool)> {
-    let mut normals: std::collections::BTreeMap<u32, Vec<Vec3>> = Default::default();
+/// What each B-rep face is: its mean normal, whether it is planar, its width (twice its area over
+/// its perimeter) over the scene's extent B (the room the studio is fitted to), and its surface's
+/// metalness and base-colour luminance.
+struct FaceKind {
+    normal: Vec3,
+    planar: bool,
+    width: f64,
+    metallic: Option<f64>,
+    albedo: Option<f64>,
+}
+
+fn faces(scene: &ProductScene) -> std::collections::BTreeMap<u32, FaceKind> {
+    use crate::gpu::realistic_bar::{luminance, width};
+    let size = scene.bounds.size();
+    let extent = size.x.max(size.y).max(size.z).max(1e-9);
+    let mut out = std::collections::BTreeMap::new();
     for body in &scene.meshes {
+        let mut seen: std::collections::BTreeMap<u32, (Vec<Vec3>, Vec<Vec3>)> = Default::default();
         for (index, triangle) in body.mesh.triangles.iter().enumerate() {
             let face = body.mesh.tri_face.get(index).copied().unwrap_or(0);
-            let entry = normals.entry(face).or_default();
+            let entry = seen.entry(face).or_default();
             for i in triangle {
-                if let Some(n) = body.mesh.normals.get(*i as usize) {
-                    entry.push(n.normalized().unwrap_or(Vec3::Z));
+                if let (Some(n), Some(p)) = (body.mesh.normals.get(*i as usize), body.mesh.positions.get(*i as usize)) {
+                    entry.0.push(n.normalized().unwrap_or(Vec3::Z));
+                    entry.1.push(*p);
                 }
             }
         }
+        for (face, (ns, ps)) in seen {
+            let normal = ns.iter().fold(Vec3::ZERO, |a, n| a + *n).normalized().unwrap_or(Vec3::Z);
+            let planar = ns.iter().all(|n| n.dot(normal) > 0.9995);
+            let surface = body.faces.iter().find(|f| f.face == face).and_then(|f| f.surface).or(body.surface);
+            out.insert(
+                face,
+                FaceKind {
+                    normal,
+                    planar,
+                    width: width(&ps) / extent,
+                    metallic: surface.map(|s| s.metallic()),
+                    albedo: surface.map(|s| luminance(s.base_color())),
+                },
+            );
+        }
     }
-    normals
-        .into_iter()
-        .map(|(face, ns)| {
-            let sum = ns.iter().fold(Vec3::ZERO, |a, n| a + *n);
-            let mean = sum.normalized().unwrap_or(Vec3::Z);
-            let planar = ns.iter().all(|n| n.dot(mean) > 0.9995);
-            (face, (mean, planar))
-        })
-        .collect()
+    out
 }
 
-/// The frame's metrics against the acceptance bar: per part (the whole body) the clipped and
-/// crushed shares, and per face (eroded by a pixel, at least 400 pixels) the median, 5th and 95th
-/// percentiles and their span.
-fn metrics(beauty: &[u8], mask: &[u8], scene: &ProductScene) -> Value {
+/// The frame's metrics in the bar's shape (`realistic_bar`): the part (the whole body, named
+/// `part`) with its clipped and crushed shares and percentiles, and per face (eroded by a pixel,
+/// at least 400 pixels) the median, 5th and 95th percentiles, their span, planarity, width,
+/// metalness and albedo; then the bar's failures.
+fn metrics(beauty: &[u8], mask: &[u8], scene: &ProductScene, part_name: &str) -> Value {
     let digits = digit_bytes();
     let n = SIZE as usize;
     let ids: Vec<Option<u32>> = mask.chunks(4).map(|p| decode(p, &digits)).collect();
@@ -388,20 +411,24 @@ fn metrics(beauty: &[u8], mask: &[u8], scene: &ProductScene) -> Value {
             continue;
         }
         values.sort_by(f64::total_cmp);
-        let (normal, planar) = kinds.get(&face).copied().unwrap_or((Vec3::Z, false));
+        let Some(kind) = kinds.get(&face) else { continue };
         let (p5, p50, p95) = (percentile(&values, 0.05), percentile(&values, 0.5), percentile(&values, 0.95));
-        let rounded = [normal.x, normal.y, normal.z].map(|v| (v * 1000.0).round() / 1000.0);
+        let rounded = [kind.normal.x, kind.normal.y, kind.normal.z].map(|v| (v * 1000.0).round() / 1000.0);
         face_rows.push(json!({
-            "face": face, "pixels": values.len(), "planar": planar,
-            "normal": rounded,
+            "part": part_name, "face": face, "pixels": values.len(), "planar": kind.planar,
+            "normal": rounded, "width": kind.width, "metallic": kind.metallic, "albedo": kind.albedo,
             "median": p50, "p5": p5, "p95": p95, "span": p95 - p5,
         }));
     }
-    json!({
-        "pixels": part.len(), "clipped": clipped, "crushed": crushed,
-        "median": percentile(&part, 0.5), "p5": percentile(&part, 0.05), "p95": percentile(&part, 0.95),
+    let (median, p5, p95, p99) = (percentile(&part, 0.5), percentile(&part, 0.05), percentile(&part, 0.95), percentile(&part, 0.99));
+    let mut m = json!({
+        "pixels": part.len(), "clipped": clipped, "crushed": crushed, "median": median, "p5": p5, "p95": p95, "p99": p99,
+        "parts": [{"part": part_name, "pixels": part.len(), "clipped": clipped, "crushed": crushed, "median": median, "p5": p5, "p95": p95, "p99": p99}],
         "faces": face_rows,
-    })
+    });
+    let bar = crate::gpu::realistic_bar::failures(&m);
+    m["bar"] = json!(bar);
+    m
 }
 
 #[test]
@@ -417,12 +444,13 @@ fn lighting_review() {
     };
     eprintln!("lighting review on {:?} ({})", adapter.get_info().backend, adapter.get_info().name);
     let started = std::time::Instant::now();
-    // `LIGHTING_REVIEW_STUDIO=soft|contrast` draws the set in another preset (the brightness
-    // comparison); the default studio otherwise.
+    // `LIGHTING_REVIEW_STUDIO=product|soft|contrast` draws the set in that preset (the
+    // brightness comparison); the default studio otherwise.
     let preset = match std::env::var("LIGHTING_REVIEW_STUDIO").as_deref() {
         Ok("soft") => StudioPreset::Soft,
         Ok("contrast") => StudioPreset::Contrast,
-        _ => StudioPreset::Product,
+        Ok("product") => StudioPreset::Product,
+        _ => StudioPreset::default(),
     };
     let studio = Arc::new(StudioEnvironment::bake(preset));
     // `LIGHTING_REVIEW_INTENSITY=<scale>`: the studio's radiance scaled (a moodier variant).
@@ -499,7 +527,9 @@ fn lighting_review() {
                 let name = format!("{tag}-{scene_name}-{}-{pose}", material.name);
                 let path = out.join(format!("{name}.png"));
                 image::save_buffer(&path, &beauty, SIZE, SIZE, image::ColorType::Rgba8).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-                let m = metrics(&beauty, &mask, &scene);
+                // The Sample Plate goes by its name, so the bar's plate rule finds it.
+                let part_name = if scene_name == "sample-plate" { "Sample Plate" } else { scene_name };
+                let m = metrics(&beauty, &mask, &scene, part_name);
                 let digits = digit_bytes();
                 let part = beauty.chunks(4).zip(mask.chunks(4)).map(|(b, k)| decode(k, &digits).map(|_| [b[0], b[1], b[2]])).collect();
                 parts.push(((scene_name, material.name, pose), part));

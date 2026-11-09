@@ -6026,10 +6026,10 @@ pub(crate) mod glass_tests {
             // bakes one (that would stall the window).
             frame.product_look = Some(ProductLook::default());
             let unlit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
-            assert!(!r.has_studio_environment(StudioPreset::Product), "prepare bakes no studio");
+            assert!(!r.has_studio_environment(StudioPreset::default()), "prepare bakes no studio");
             assert!(unlit.iter().zip(&pixels).all(|(a, b)| close(*a, *b, 1)), "without its studio the look is the lights alone");
             // Installed, the studio adds its light.
-            r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+            r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
             let lit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
             r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
             let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
@@ -6139,7 +6139,7 @@ pub(crate) mod glass_tests {
                 Frame { key: number, ao_radius: radius, product_lights: Some(lights), product_look: Some(look), ..test_frame(scene.clone(), 1.0) };
             render_frame(r, &device, &queue, &frame, true)
         };
-        r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
         let open = draw(&mut r, 60, 0.0, Vec::new(), ProductLook::default());
         let shut = draw(&mut r, 61, 4.0, Vec::new(), ProductLook::default());
         let sum = |p: [u8; 3]| p.iter().map(|&c| u32::from(c)).sum::<u32>();

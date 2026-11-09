@@ -1026,8 +1026,24 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   - split-sum prefiltering, SH irradiance and multiple-scattering compensation;
   - the white-furnace tests.
 
-  The `Product`, `Soft` and `Contrast` presets are re-tuned under the new model. `Product`
-  becomes the Realistic default.
+  The `Product`, `Soft` and `Contrast` presets are re-tuned under the new model.
+- **Default (founder, 4 November 2026): moodier, `Contrast` (`STU-005`).** The first default,
+  `Product` with a high-key cyclorama, read metal tops near-white (lid 247, plate 245). The
+  default is now `Contrast`: two tall strips and a low front fill, with a cyclorama under the
+  default's old surround and a darker ceiling, so metals read as metal and dark materials may go
+  darker on faces turned away from the light. `Product` (mid) and `Soft` (bright) remain as
+  presets, ordered by surround brightness; every preset keeps the radiance floor and the
+  per-preset exposure calibration.
+- **Soft top light (founder, 9 November 2026).** `STU-005`'s strips sit about 10° high, so a
+  flat metal face seen from above or from the default three-quarter view mirrored only the dim
+  ceiling or wall and read dull (a gold pad read olive). The default studio adds its own light
+  after the exported rig's: a soft overhead scrim nearly the room's width (3.9 B square, 1.3 B
+  above the centre), graded over 70 % of its half size. A neutral polished metal seen from
+  straight above reads light (about 0.63 scene-referred, against 0.24 before) without reaching
+  the tone curve's shoulder. The graded edge falls off between about 60° and 34° of elevation,
+  so a top face seen from the default view mirrors a gradient instead of the flat wall, while
+  the walls below stay dark and the room moody. Metals keep their measured F0; the look comes
+  from the light, not from brighter materials.
 
 Track L builds this, and the acceptance frames (§5.9) judge it.
 
@@ -1061,11 +1077,27 @@ values for the founder to confirm, O15):
 |---|---|
 | Clipped pixels | ≤ 1 % of each part's pixels at display luminance ≥ 254/255 (small highlights allowed) |
 | Crushed pixels | ≤ 1 % of each part's pixels at ≤ 5/255, cavities (AO term < 0.5) excluded |
-| Faces read as faces | every planar metal face spans ≥ 12/255 of luminance across itself (a gradient, not a flat fill); every visible face's median lies in [20, 235]/255 |
+| Faces read as faces | every planar metal face at least 0.2 B wide (narrowest extent in its plane, B the studio room's extent) spans ≥ 12/255 of luminance across itself (a gradient, not a flat fill); every visible face's median lies in [20, 235]/255, except for dark materials (below) |
+| Dark materials | a dielectric whose base colour has a linear luminance under 0.05 (about sRGB 63) is judged against its own albedo, not by the face median's floor of 20: no crushed pixels (the crushed row above), a visible coat or specular highlight (the part's 99th percentile ≥ 24/255 above its median), faces that read apart (the face medians spread ≥ 6/255 when two or more are in view), and medians ≤ 235 |
 | Materials distinguishable | brushed vs polished metal, coated vs uncoated plastic: mean colour difference ≥ 6/255, or a visibly different highlight footprint |
 | Sample Plate regression | top and side medians of the metal plate both in [40, 220]/255 (today: 255 and about 10) |
 | WebGL2 matches native | browser frames of the same scene: mean channel error ≤ 2/255, 99th percentile ≤ 8/255 |
 | Standard look untouched | standard-look frames bit-identical to the build before the package |
+
+**Why the two exceptions (founder, 4 November 2026).**
+
+- *Dark materials.* PBR Neutral's toe maps scene values under about 0.016 to nearly black. A
+  dark dielectric's faces turned from the light reflect only its 4 % Fresnel of the
+  surroundings, so a floor of 20/255 for them would force a near-uniform, high-key studio. The
+  dark rule asks what makes a dark part read instead: no crushing, a highlight, and faces that
+  differ.
+- *Narrow metal faces.* A flat mirror reflects a patch of the studio about as wide as itself,
+  seen from the room's walls about 2 B away. A face narrower than 0.2 B sees about 6° of a
+  smooth cyclorama, which cannot hold a 12/255 gradient without hard features in the studio. Such
+  faces are judged by the clipping, crushing and median rows only.
+
+One implementation of the bar (`ui-egui/src/realistic_bar.rs`) serves both the golden-frame
+check (`GOLDEN_CHECK=1`) and the lighting review set.
 
 **Founder review gate.** The golden PNGs are shown side by side with today's frames. They
 are part of the completion evidence, and **nothing goes upstream before the founder approves

@@ -21,7 +21,8 @@
 //! Arvo 1995, "Applications of irradiance tensors to the simulation of non-Lambertian
 //! phenomena"). The rigs' positions, sizes and calibrated gains are upstream's own
 //! (`CAL-LIGHT-001`, MIT OR Apache-2.0); the test `the_bound_rigs_are_upstreams` checks them
-//! against the export.
+//! against the export. A studio may add its own lights after the exported ones ([`Rig::exported`]),
+//! each documented where it is defined.
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
@@ -158,7 +159,7 @@ impl Cyclorama {
         let pool = 1.0 + 0.6 * (1.0 - smoothstep(-42.0, -10.0, e));
         let floor = self.floor.map(|v| v * pool);
         let mut c = if e < 0.0 { mix(floor, self.wall, smoothstep(-30.0, -6.0, e)) } else { mix(self.wall, self.ceiling, smoothstep(0.0, 75.0, e)) };
-        let band = (-((e - 5.0) / 7.0).powi(2)).exp();
+        let band = (-((e - 8.0) / 12.0).powi(2)).exp();
         add(&mut c, self.band, band);
         // Linear in the direction's horizontal part: full toward the horizon, a smooth gradient
         // across the ceiling; the floor, lit from above, takes a third of it.
@@ -174,7 +175,11 @@ impl Cyclorama {
 pub(crate) struct Rig {
     /// The upstream preset it binds (`STU-*`).
     pub(crate) preset: &'static str,
+    /// The exported rig's lights, the key first, then the studio's own additions.
     pub(crate) lights: &'static [RigLight],
+    /// How many of `lights` are the export's; the rest are the studio's own.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) exported: usize,
     pub(crate) cyclorama: Cyclorama,
 }
 
@@ -191,7 +196,7 @@ const WARM: Rgb = [1.0, 0.985, 0.96];
 const COOL: Rgb = [0.96, 0.98, 1.0];
 
 /// `STU-002`, "Three-point product studio": a graded key above front-left, a fill card
-/// front-right (EV −2 of the key) and a strip rim behind (EV −0.5). The Realistic default.
+/// front-right (EV −2 of the key) and a strip rim behind (EV −0.5), in a mid-bright room.
 pub(crate) const PRODUCT: Rig = Rig {
     preset: "STU-002",
     lights: &[
@@ -226,7 +231,8 @@ pub(crate) const PRODUCT: Rig = Rig {
             grade: 0.3,
         },
     ],
-    cyclorama: Cyclorama { floor: tint(WARM, 1.05), wall: grey(1.3), band: grey(1.1), ceiling: tint(COOL, 0.75), spill: 0.4 },
+    exported: 3,
+    cyclorama: Cyclorama { floor: tint(WARM, 0.9), wall: grey(1.05), band: grey(0.8), ceiling: tint(COOL, 0.6), spill: 0.4 },
 };
 
 /// `STU-004`, "Black housing with broad side reflections": two broad side panels (the right at
@@ -255,11 +261,19 @@ pub(crate) const SOFT: Rig = Rig {
             grade: 0.5,
         },
     ],
+    exported: 2,
     cyclorama: Cyclorama { floor: tint(WARM, 1.35), wall: grey(1.9), band: grey(0.6), ceiling: tint(COOL, 1.4), spill: 0.15 },
 };
 
 /// `STU-005`, "Mirror-metal vertical strips": two tall strips either side (the right at EV −1)
-/// and a low front fill (EV −3) in a darker room. Crisp highlights on metal.
+/// and a low front fill (EV −3) in a darker room. Crisp highlights on metal. The Realistic default.
+///
+/// The studio's own addition is a broad, soft overhead scrim ([`TOP_SCRIM`]): the strips sit
+/// about 10° high, so without it a flat metal face seen from above, or from the default
+/// three-quarter view, mirrors only the dim ceiling or wall and reads dull (gold reads olive).
+/// The scrim fills the room's top, and its long graded edge falls off between about 60° and
+/// 34° of elevation, so top faces seen from three-quarter views mirror a gradient, while the
+/// walls below stay dark and the room moody.
 pub(crate) const CONTRAST: Rig = Rig {
     preset: "STU-005",
     lights: &[
@@ -293,8 +307,26 @@ pub(crate) const CONTRAST: Rig = Rig {
             radiance: grey(40.6801806776),
             grade: 0.4,
         },
+        TOP_SCRIM,
     ],
-    cyclorama: Cyclorama { floor: tint(WARM, 1.0), wall: grey(1.1), band: grey(0.8), ceiling: tint(COOL, 0.6), spill: 0.45 },
+    exported: 3,
+    cyclorama: Cyclorama { floor: tint(WARM, 0.9), wall: grey(0.9), band: grey(0.75), ceiling: tint(COOL, 0.6), spill: 0.2 },
+};
+
+/// A soft overhead scrim, 3.9 B square (nearly the room's width), 1.3 B above the studio's
+/// centre, facing down, graded over 70 % of its half size. Its radiance is set so that a neutral
+/// polished metal seen from straight above reads light (about 0.63 scene-referred, against 0.24
+/// under the ceiling alone) without reaching the tone curve's shoulder; along the default view's
+/// mirror direction (about 35° high) it gives about 0.3, falling off downward.
+const TOP_SCRIM: RigLight = RigLight {
+    id: "top_scrim",
+    centre: [0.0, 0.0, 1.3],
+    width_axis: [1.0, 0.0, 0.0],
+    height_axis: [0.0, -1.0, 0.0],
+    half_width: 1.95,
+    half_height: 1.95,
+    radiance: grey(14.0),
+    grade: 0.7,
 };
 
 impl Rig {

@@ -43,7 +43,7 @@ fn draw_tilted(graph: &MaterialGraph, key: u64, slope: f32, lights: Option<Vec<[
     let target =
         GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(&device, true)), samples: 1, tess: false, oit: false };
     let mut r = Renderer::new(&device, target, None);
-    r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
     r.materials_mut().no_time_budget = true;
     r.materials_mut().unblended = true;
     let frame = Frame { key, product_look: Some(ProductLook::default()), product_lights: lights, ..test_frame(scene, 1.0) };
@@ -183,7 +183,7 @@ fn draw_into_tilted(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat
     }
     let depth = crate::depth_format(&device, true);
     let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
-    r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
     r.materials_mut().no_time_budget = true;
     let frame = Frame { key, product_look: Some(ProductLook { exposure, ..ProductLook::default() }), ..test_frame(scene, 1.0) };
     let texture = |format, usage| {
@@ -353,7 +353,7 @@ fn a_placed_mesh_shades_as_the_material_stream_does() {
             oit: false,
         };
         let mut r = Renderer::new(&device, target, None);
-        r.set_studio_environment(&device, &queue, &studio(StudioPreset::Product));
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
         r.materials_mut().no_time_budget = true;
         let frame = Frame { key: 42 + k as u64, product_look: Some(ProductLook::default()), ..test_frame(scene, 1.0) };
         let mut placed = render_frame(&mut r, &device, &queue, &frame, true);

@@ -40,12 +40,13 @@ const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StudioPreset {
     /// `STU-002`, three-point product studio: a graded key above front-left, a fill card
-    /// front-right and a strip rim behind. The Realistic default.
-    #[default]
+    /// front-right and a strip rim behind, in a mid-bright room.
     Product,
     /// `STU-004`: two broad side panels and a bright cyclorama: low contrast, soft highlights.
     Soft,
-    /// `STU-005`: two tall strips and a low front fill in a darker room: crisp highlights on metal.
+    /// `STU-005`: two tall strips and a low front fill in a darker room: crisp highlights on metal,
+    /// dark materials darker on faces turned from the light. The Realistic default.
+    #[default]
     Contrast,
 }
 
@@ -143,7 +144,7 @@ pub struct ProductLook {
 
 impl Default for ProductLook {
     fn default() -> Self {
-        ProductLook { exposure: 1.0, studio: StudioPreset::Product, rotation: 0.0, intensity: 1.0, room: None }
+        ProductLook { exposure: 1.0, studio: StudioPreset::default(), rotation: 0.0, intensity: 1.0, room: None }
     }
 }
 

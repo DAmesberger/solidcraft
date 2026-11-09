@@ -82,34 +82,49 @@ fn decode(pixel: &[u8], digits: &[f64; 7]) -> Option<u32> {
 }
 
 /// A face of the product scene: its body's name, the face id, mean normal, whether it is planar,
-/// and the body's (or face's) PBR surface if it has one.
+/// its width (twice its area over its perimeter) over the scene's extent B (the studio's room), and the
+/// metalness and base-colour luminance of the body's (or face's) PBR surface if it has one.
 struct FaceInfo {
     part: String,
     face: u32,
     normal: Vec3,
     planar: bool,
+    width: f64,
     metallic: Option<f64>,
+    albedo: Option<f64>,
 }
 
 /// The faces of `scene`, numbered 1.. (0 is the background); at most 342 (three base-7 digits).
 fn faces(scene: &ProductScene) -> Vec<FaceInfo> {
+    use crate::gpu::realistic_bar::{luminance, width};
+    let size = scene.bounds.size();
+    let extent = size.x.max(size.y).max(size.z).max(1e-9);
     let mut out: Vec<FaceInfo> = Vec::new();
     for body in &scene.meshes {
-        let mut normals: std::collections::BTreeMap<u32, Vec<Vec3>> = Default::default();
+        let mut seen: std::collections::BTreeMap<u32, (Vec<Vec3>, Vec<Vec3>)> = Default::default();
         for (index, triangle) in body.mesh.triangles.iter().enumerate() {
             let face = body.mesh.tri_face.get(index).copied().unwrap_or(0);
-            let entry = normals.entry(face).or_default();
+            let entry = seen.entry(face).or_default();
             for i in triangle {
-                if let Some(n) = body.mesh.normals.get(*i as usize) {
-                    entry.push(n.normalized().unwrap_or(Vec3::Z));
+                if let (Some(n), Some(p)) = (body.mesh.normals.get(*i as usize), body.mesh.positions.get(*i as usize)) {
+                    entry.0.push(n.normalized().unwrap_or(Vec3::Z));
+                    entry.1.push(*p);
                 }
             }
         }
-        for (face, ns) in normals {
+        for (face, (ns, ps)) in seen {
             let mean = ns.iter().fold(Vec3::ZERO, |a, n| a + *n).normalized().unwrap_or(Vec3::Z);
             let planar = ns.iter().all(|n| n.dot(mean) > 0.9995);
             let surface = body.faces.iter().find(|f| f.face == face).and_then(|f| f.surface).or(body.surface);
-            out.push(FaceInfo { part: body.name.clone(), face, normal: mean, planar, metallic: surface.map(|s| s.metallic()) });
+            out.push(FaceInfo {
+                part: body.name.clone(),
+                face,
+                normal: mean,
+                planar,
+                width: width(&ps) / extent,
+                metallic: surface.map(|s| s.metallic()),
+                albedo: surface.map(|s| luminance(s.base_color())),
+            });
         }
     }
     out
@@ -304,7 +319,7 @@ fn summary(mut values: Vec<f64>) -> Value {
         "pixels": values.len(),
         "clipped": values.iter().filter(|v| **v >= 254.0).count() as f64 / n,
         "crushed": values.iter().filter(|v| **v <= 5.0).count() as f64 / n,
-        "median": percentile(&values, 0.5), "p5": percentile(&values, 0.05), "p95": percentile(&values, 0.95),
+        "median": percentile(&values, 0.5), "p5": percentile(&values, 0.05), "p95": percentile(&values, 0.95), "p99": percentile(&values, 0.99),
         "span": percentile(&values, 0.95) - percentile(&values, 0.05),
     })
 }
@@ -353,6 +368,8 @@ fn metrics(beauty: &[u8], mask: &[u8], [w, h]: [u32; 2], infos: &[FaceInfo]) -> 
             o.insert("planar".into(), json!(info.planar));
             o.insert("normal".into(), json!(n));
             o.insert("metallic".into(), json!(info.metallic));
+            o.insert("albedo".into(), json!(info.albedo));
+            o.insert("width".into(), json!(info.width));
         }
         face_rows.push(row);
     }
@@ -371,47 +388,15 @@ fn metrics(beauty: &[u8], mask: &[u8], [w, h]: [u32; 2], infos: &[FaceInfo]) -> 
     json!({"parts": part_rows, "faces": face_rows})
 }
 
-/// The acceptance bar of §5.9 on one frame's metrics: each failure as a line. Faces of at least
-/// 400 pixels count; the Sample Plate's top (normal +Z) and largest side face (normal ⊥ Z) when
-/// they are in view.
+/// The acceptance bar of §5.9 on one frame's metrics (`gpu::realistic_bar`, shared with the
+/// lighting review): each failure as a line.
 fn bar_failures(frame: &str, m: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    let empty = Vec::new();
-    for p in m["parts"].as_array().unwrap_or(&empty) {
-        let part = p["part"].as_str().unwrap_or("?");
-        for (key, limit) in [("clipped", 0.01), ("crushed", 0.01)] {
-            let v = p[key].as_f64().unwrap_or(0.0);
-            if v > limit {
-                out.push(format!("{frame}: {part} {key} {:.2} % (bar ≤ 1 %)", 100.0 * v));
-            }
-        }
-    }
-    let faces = m["faces"].as_array().unwrap_or(&empty);
-    for f in faces {
-        let (part, face, median) = (f["part"].as_str().unwrap_or("?"), &f["face"], f["median"].as_f64().unwrap_or(0.0));
-        if !(20.0..=235.0).contains(&median) {
-            out.push(format!("{frame}: {part} face {face} median {median:.0} (bar 20–235)"));
-        }
-        let metal = f["metallic"].as_f64().unwrap_or(0.0) >= 0.5;
-        let span = f["span"].as_f64().unwrap_or(0.0);
-        if metal && f["planar"].as_bool() == Some(true) && span < 12.0 {
-            out.push(format!("{frame}: {part} planar metal face {face} spans {span:.0} (bar ≥ 12)"));
-        }
-    }
-    let plate: Vec<&Value> = faces.iter().filter(|f| f["part"] == "Sample Plate").collect();
-    let largest = |want: fn(f64) -> bool| {
-        plate
-            .iter()
-            .filter(|f| want(f["normal"][2].as_f64().unwrap_or(0.0)))
-            .max_by_key(|f| f["pixels"].as_u64().unwrap_or(0))
-            .and_then(|f| f["median"].as_f64())
-    };
-    for (name, median) in [("top", largest(|z| z > 0.99)), ("side", largest(|z| z.abs() < 0.05))] {
-        if let Some(median) = median.filter(|m| !(40.0..=220.0).contains(m)) {
-            out.push(format!("{frame}: Sample Plate {name} median {median:.0} (bar 40–220)"));
-        }
-    }
-    out
+    crate::gpu::realistic_bar::failures(m)
+        .iter()
+        .map(|f| {
+            format!("{frame}: {} {} {}", f["part"].as_str().unwrap_or("?"), f["check"].as_str().unwrap_or("?"), f["detail"].as_str().unwrap_or(""))
+        })
+        .collect()
 }
 
 fn slug(s: &str) -> String {
@@ -437,7 +422,8 @@ fn golden_frames() {
     let studio = env("GOLDEN_STUDIO").map(|s| match s.as_str() {
         "soft" => StudioPreset::Soft,
         "contrast" => StudioPreset::Contrast,
-        _ => StudioPreset::Product,
+        "product" => StudioPreset::Product,
+        _ => StudioPreset::default(),
     });
     let intensity: Option<f32> = env("GOLDEN_INTENSITY").and_then(|s| s.parse().ok());
     let Some((adapter, device, queue)) = crate::gpu::offscreen_device() else { panic!("no GPU adapter") };

@@ -1207,6 +1207,10 @@ impl OffscreenFrames {
 #[path = "gpu_lighting_review.rs"]
 mod lighting_review;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "realistic_bar.rs"]
+pub(crate) mod realistic_bar;
+
 #[cfg(test)]
 mod tests {
     /// The product look's studio is baked off the window thread and installed by a later frame's
@@ -1222,7 +1226,7 @@ mod tests {
         assert!(resources.get::<super::StudioBaking>().is_none(), "no look, no bake");
         let look = Some(super::ProductLook::default());
         let installed = |resources: &egui_wgpu::CallbackResources| {
-            resources.get::<super::Renderer>().is_some_and(|r| r.has_studio_environment(super::StudioPreset::Product))
+            resources.get::<super::Renderer>().is_some_and(|r| r.has_studio_environment(super::StudioPreset::default()))
         };
         super::bake_studio(&device, &queue, &mut resources, look);
         assert!(!installed(&resources) && !super::studio_ready(), "the first frame only starts the bake");

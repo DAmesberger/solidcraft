@@ -526,7 +526,7 @@ fn realistic(scene: GpuScene, key: u64, units_per_mm: f32) -> Frame {
 
 fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
     let mut r = Renderer::new(device, target(device), None);
-    r.set_studio_environment(device, queue, &studio(StudioPreset::Product));
+    r.set_studio_environment(device, queue, &studio(StudioPreset::default()));
     r.materials_mut().no_time_budget = true;
     r
 }

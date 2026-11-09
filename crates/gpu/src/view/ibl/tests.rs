@@ -755,8 +755,8 @@ fn the_bound_rigs_are_upstreams() {
         let item = items.iter().find(|i| i["preset_id"] == rig.preset).unwrap_or_else(|| panic!("{} is exported", rig.preset));
         assert_eq!(item["state"], "authored_numeric_unbound", "{}: a complete numeric rig", rig.preset);
         let lights = item["lights"].as_array().cloned().unwrap_or_default();
-        assert_eq!(lights.len(), rig.lights.len(), "{}: every light bound", rig.preset);
-        assert!(rig.lights.len() <= rig::MAX_LIGHTS);
+        assert_eq!(lights.len(), rig.exported, "{}: every light bound", rig.preset);
+        assert!(rig.exported <= rig.lights.len() && rig.lights.len() <= rig::MAX_LIGHTS);
         let extent = item["fixture_extent_mm"].as_f64().unwrap_or(f64::NAN);
         for (light, exported) in rig.lights.iter().zip(&lights) {
             let name = format!("{} {}", rig.preset, light.id);
@@ -772,7 +772,32 @@ fn the_bound_rigs_are_upstreams() {
             assert!(close(light.radiance, vector(&exported["emission"]["rgb"]), 1e-9), "{name}: radiance");
             assert!(rig::ROOM.contains(light.centre), "{name}: inside the room");
         }
+        // The studio's own lights: inside the room, whole, and facing the subject.
+        for light in &rig.lights[rig.exported..] {
+            let name = format!("{} {}", rig.preset, light.id);
+            assert!(lights.iter().all(|l| l["id"] != light.id), "{name}: not an exported id");
+            assert!(light.corners().iter().all(|c| rig::ROOM.contains(*c)), "{name}: inside the room");
+            assert!(dot(light.centre, light.normal()) < 0.0, "{name}: faces the subject");
+        }
     }
+}
+
+/// The default studio reads a flat metal face from above as light, by its soft overhead scrim:
+/// straight up it is light yet below 0.9 scene-referred (a metal's F0 keeps the reflection off
+/// the tone curve's top), and toward the default three-quarter view's mirror direction (about
+/// 35° high) the scrim's graded edge falls off, so top faces mirror a gradient, not a flat wall.
+#[test]
+fn the_default_studio_lights_tops_softly_from_above() {
+    let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let env = StudioEnvironment::bake(StudioPreset::default());
+    let at = |elevation: f64| {
+        let e = elevation.to_radians();
+        luminance(env.source([e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.sin()]))
+    };
+    let up = luminance(env.source([0.0, 0.0, 1.0]));
+    assert!((0.5..0.9).contains(&up), "straight up {up}");
+    let (low, high) = (at(29.0), at(41.0));
+    assert!(high > 1.3 * low && high < up, "three-quarter mirror directions: 29° {low}, 41° {high}, up {up}");
 }
 
 /// A light's graded profile keeps its calibrated mean: the radiance falls off toward the edges and

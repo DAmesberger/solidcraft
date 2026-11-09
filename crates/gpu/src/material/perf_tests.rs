@@ -279,7 +279,7 @@ fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
     let target =
         GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(device, true)), samples: 1, tess: false, oit: false };
     let mut r = Renderer::new(device, target, None);
-    r.set_studio_environment(device, queue, &studio(StudioPreset::Product));
+    r.set_studio_environment(device, queue, &studio(StudioPreset::default()));
     r.materials_mut().no_time_budget = true;
     r
 }
