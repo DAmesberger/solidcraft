@@ -249,11 +249,11 @@ With the look, the PBR shader:
 - adds a **studio** to the product lights, built from one of upstream's starter lighting
   rigs (`assets/render/starter/lighting/exports/rigs.json`, bound as exported and checked
   against it by a test): `Product` binds `STU-002` (a graded key above front-left, a fill
-  card front-right at EV −2, a strip rim behind at EV −0.5), `Soft` binds `STU-004` (two
-  broad side panels) and `Contrast` binds `STU-005` (two tall strips and a low front fill;
-  the Realistic default). A studio may add its own lights after the exported ones:
+  card front-right at EV −2, a strip rim behind at EV −0.5; the Realistic default), `Soft`
+  binds `STU-004` (two broad side panels) and `Contrast` binds `STU-005` (two tall strips
+  and a low front fill). A studio may add its own lights after the exported ones:
   `Contrast` adds a soft overhead scrim, so flat metal seen from above reads light while
-  the room stays dark (docs/material-graph.md, the default studio). The rig's rectangular lights sit in multiples of the subject's
+  the room stays dark (docs/material-graph.md, studio-added lights). The rig's rectangular lights sit in multiples of the subject's
   extent B about it, inside a room 4 B across with its floor at the ground
   (`ProductLook::room`; without a room the studio is at infinity). Around them runs a
   cyclorama: a floor with a pool of light under the subject sweeping up into the walls, a

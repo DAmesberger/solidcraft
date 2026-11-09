@@ -1027,23 +1027,23 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   - the white-furnace tests.
 
   The `Product`, `Soft` and `Contrast` presets are re-tuned under the new model.
-- **Default (founder, 4 November 2026): moodier, `Contrast` (`STU-005`).** The first default,
-  `Product` with a high-key cyclorama, read metal tops near-white (lid 247, plate 245). The
-  default is now `Contrast`: two tall strips and a low front fill, with a cyclorama under the
-  default's old surround and a darker ceiling, so metals read as metal and dark materials may go
-  darker on faces turned away from the light. `Product` (mid) and `Soft` (bright) remain as
-  presets, ordered by surround brightness; every preset keeps the radiance floor and the
-  per-preset exposure calibration.
-- **Soft top light (founder, 9 November 2026).** `STU-005`'s strips sit about 10° high, so a
-  flat metal face seen from above or from the default three-quarter view mirrored only the dim
-  ceiling or wall and read dull (a gold pad read olive). The default studio adds its own light
-  after the exported rig's: a soft overhead scrim nearly the room's width (3.9 B square, 1.3 B
-  above the centre), graded over 70 % of its half size. A neutral polished metal seen from
-  straight above reads light (about 0.63 scene-referred, against 0.24 before) without reaching
-  the tone curve's shoulder. The graded edge falls off between about 60° and 34° of elevation,
-  so a top face seen from the default view mirrors a gradient instead of the flat wall, while
-  the walls below stay dark and the room moody. Metals keep their measured F0; the look comes
-  from the light, not from brighter materials.
+- **A moodier preset, `Contrast` (`STU-005`).** `Product` stays the Realistic default. With
+  its high-key cyclorama, it can read metal tops near-white (lid 247, plate 245). `Contrast` is
+  the moodier choice: two tall strips and a low front fill, with a cyclorama under `Product`'s
+  surround (wall 0.9, spill 0.2) and a wider horizon band, so metals read as metal and dark
+  materials may go darker on faces turned away from the light. `Product` (mid), `Soft` (bright)
+  and `Contrast` are ordered by surround brightness. Every preset keeps the radiance floor and
+  the per-preset exposure calibration. An app selects one through `ProductLook::studio`.
+- **Studio-added lights; `Contrast`'s soft top light.** A studio may add its own lights after
+  the exported rig's (`Rig::exported`). `STU-005`'s strips sit about 10° high, so a flat metal
+  face seen from above or from a three-quarter view mirrored only the dim ceiling or wall and
+  read dull (gold read olive). `Contrast` therefore adds a soft overhead scrim nearly the room's
+  width (3.9 B square, 1.3 B above the centre), graded over 70 % of its half size.
+  - A neutral polished metal seen from straight above reads light (about 0.63 scene-referred,
+    against 0.24 without the scrim) without reaching the tone curve's shoulder.
+  - The graded edge falls off between about 60° and 34° of elevation, so a top face seen from a
+    three-quarter view mirrors a gradient instead of the flat wall. The walls below stay dark.
+  - Metals keep their measured F0: the look comes from the light, not from brighter materials.
 
 Track L builds this, and the acceptance frames (§5.9) judge it.
 
@@ -1084,7 +1084,7 @@ values for the founder to confirm, O15):
 | WebGL2 matches native | browser frames of the same scene: mean channel error ≤ 2/255, 99th percentile ≤ 8/255 |
 | Standard look untouched | standard-look frames bit-identical to the build before the package |
 
-**Why the two exceptions (founder, 4 November 2026).**
+**Why the two exceptions.**
 
 - *Dark materials.* PBR Neutral's toe maps scene values under about 0.016 to nearly black. A
   dark dielectric's faces turned from the light reflect only its 4 % Fresnel of the

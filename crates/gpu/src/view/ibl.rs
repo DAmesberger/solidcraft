@@ -40,13 +40,14 @@ const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StudioPreset {
     /// `STU-002`, three-point product studio: a graded key above front-left, a fill card
-    /// front-right and a strip rim behind, in a mid-bright room.
+    /// front-right and a strip rim behind, in a mid-bright room. The Realistic default.
+    #[default]
     Product,
     /// `STU-004`: two broad side panels and a bright cyclorama: low contrast, soft highlights.
     Soft,
     /// `STU-005`: two tall strips and a low front fill in a darker room: crisp highlights on metal,
-    /// dark materials darker on faces turned from the light. The Realistic default.
-    #[default]
+    /// dark materials darker on faces turned from the light, and a soft overhead scrim so flat
+    /// metal seen from above reads light.
     Contrast,
 }
 

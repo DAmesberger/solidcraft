@@ -782,14 +782,14 @@ fn the_bound_rigs_are_upstreams() {
     }
 }
 
-/// The default studio reads a flat metal face from above as light, by its soft overhead scrim:
+/// The moody studio (`Contrast`) reads a flat metal face from above as light, by its soft overhead scrim:
 /// straight up it is light yet below 0.9 scene-referred (a metal's F0 keeps the reflection off
 /// the tone curve's top), and toward the default three-quarter view's mirror direction (about
 /// 35° high) the scrim's graded edge falls off, so top faces mirror a gradient, not a flat wall.
 #[test]
-fn the_default_studio_lights_tops_softly_from_above() {
+fn the_moody_studio_lights_tops_softly_from_above() {
     let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    let env = StudioEnvironment::bake(StudioPreset::default());
+    let env = StudioEnvironment::bake(StudioPreset::Contrast);
     let at = |elevation: f64| {
         let e = elevation.to_radians();
         luminance(env.source([e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.sin()]))

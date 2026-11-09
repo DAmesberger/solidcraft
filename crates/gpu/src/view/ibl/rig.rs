@@ -196,7 +196,8 @@ const WARM: Rgb = [1.0, 0.985, 0.96];
 const COOL: Rgb = [0.96, 0.98, 1.0];
 
 /// `STU-002`, "Three-point product studio": a graded key above front-left, a fill card
-/// front-right (EV −2 of the key) and a strip rim behind (EV −0.5), in a mid-bright room.
+/// front-right (EV −2 of the key) and a strip rim behind (EV −0.5), in a mid-bright room. The
+/// Realistic default.
 pub(crate) const PRODUCT: Rig = Rig {
     preset: "STU-002",
     lights: &[
@@ -266,7 +267,7 @@ pub(crate) const SOFT: Rig = Rig {
 };
 
 /// `STU-005`, "Mirror-metal vertical strips": two tall strips either side (the right at EV −1)
-/// and a low front fill (EV −3) in a darker room. Crisp highlights on metal. The Realistic default.
+/// and a low front fill (EV −3) in a darker room. Crisp highlights on metal: the moodier preset.
 ///
 /// The studio's own addition is a broad, soft overhead scrim ([`TOP_SCRIM`]): the strips sit
 /// about 10° high, so without it a flat metal face seen from above, or from the default
