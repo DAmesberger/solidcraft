@@ -10,7 +10,7 @@ use egui::Color32;
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::pbr_appearance::PbrParameters;
-use solidcraft_engine::render::material_graph::Constant as GraphConstant;
+use solidcraft_viewport::material_graph::Constant as GraphConstant;
 
 use crate::SolveApp;
 use crate::dialogs::{Kind, combo};

@@ -26,8 +26,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use solidcraft_engine::render::material_graph::{Constant, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
-use solidcraft_engine::render::surface::OpaqueSurface;
+use solidcraft_viewport::material_graph::{Constant, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
+use solidcraft_viewport::surface::OpaqueSurface;
 
 pub(crate) use model::{Catalogue, Driver, Loaded, Stack};
 use model::{Drive, GraphEntry, KindSpec, ParamKind, PortSpec, TextureEntry, Unit, Validation};
@@ -411,7 +411,7 @@ impl Editor {
     /// Use texture `sha` as `use_` says.
     pub(crate) fn use_texture(&mut self, c: &mut dyn Commands, sha: &str, use_: TextureUse) {
         let Some(loaded) = self.graph().cloned() else { return };
-        let texture = Constant::Texture(solidcraft_engine::render::material_graph::graph::TextureRef { texture: sha.into() });
+        let texture = Constant::Texture(solidcraft_viewport::material_graph::graph::TextureRef { texture: sha.into() });
         match use_ {
             TextureUse::File { node, port } => {
                 let proposed = model::with_input(&loaded.graph, &node, &port, &texture);
@@ -995,7 +995,7 @@ impl View<'_> {
             self.findings(ui, &n.id, None);
             self.params(ui, n, kind, out);
             for spec in &kind.inputs {
-                let wired = matches!(n.inputs.get(&spec.name), Some(solidcraft_engine::render::material_graph::InputValue::Connection(_)));
+                let wired = matches!(n.inputs.get(&spec.name), Some(solidcraft_viewport::material_graph::InputValue::Connection(_)));
                 if wired || matches!(spec.ty, PortType::Texcoord | PortType::Surface | PortType::Normal) {
                     continue;
                 }

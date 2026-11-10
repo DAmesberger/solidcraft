@@ -9,7 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+solidcraft-viewport-gpu = { workspace = true }
+solidcraft-viewport = { workspace = true }
 solidcore-record = { workspace = true }
+solidcore-tess = { workspace = true }
 robust = "1.2"
 solidcraft-color = { workspace = true }
 solidcraft-geom = { workspace = true }
@@ -18,9 +21,6 @@ wgpu = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-# Material-graph shapes are validated before a pipeline is made: a failure is a value (§5.1).
-naga = { workspace = true, features = ["wgsl-in"] }
-web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 robust = { workspace = true }
@@ -36,8 +36,5 @@ solidcraft-kernel = { workspace = true }
 solidcraft-engine = { workspace = true, features = ["bundled-render-library"] }
 solidcraft-io = { workspace = true }
 serde_json = { workspace = true }
-# The HLSL the D3D12 backend compiles (tests check it suits FXC), and the GLSL ES of WebGL2.
-naga = { workspace = true, features = ["wgsl-in", "hlsl-out", "glsl-out"] }
-# The material graph's f64 reference interpreter: the oracle both back ends' tests compare their
-# readbacks with. Test-only; `cargo xtask layers` refuses it anywhere but a dev-dependency.
-solidcraft-render = { workspace = true, features = ["test-reference"] }
+# The HLSL the D3D12 backend compiles (tests check it suits FXC).
+naga = { workspace = true, features = ["wgsl-in", "hlsl-out"] }

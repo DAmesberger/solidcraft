@@ -1,15 +1,12 @@
-//! One read-only storage buffer: body lookup, planar records and linear RGBA mip chains, then the
-//! job's material-graph table (`material.rs`), whose images share the top levels by identity.
-//! Word 1 of the header is the graph table's first word (0: none).
+//! Body lookup, planar records and linear mip chains. The quality policy packs
+//! original RGBA8 source texels and linear RGBA16_UNORM mip tails.
 use solidcore_record::Vec3;
 use solidcraft_geom::prelude::*;
-
-use crate::material::textures::ResidentPolicy;
 use solidcraft_render::job::{
     CancelToken, ErrorCode, JobError, Result,
-    graphs::GraphMaterials,
-    textures::{BaseColorMode, RuntimeTextures, TextureMap},
+    textures::{BaseColorMode, RuntimeTextures, TextureMap, normal_direction_variance, unit_normal_texel},
 };
+use solidcraft_render::texture_input::MapRole;
 use solidcraft_render::texture_sampling::{
     TextureView,
     mips::{MAX_MIP_TAIL_BYTES, MipChain},
@@ -25,10 +22,11 @@ fn write_word(bytes: &mut [u8], word: usize, value: u32) -> Result<()> {
         .copy_from_slice(&value.to_le_bytes());
     Ok(())
 }
-pub(super) fn pixels(
+fn pixels(
     bytes: &mut Vec<u8>,
     map: Option<&TextureMap>,
     cancel: &CancelToken,
+    quality: bool,
     shared: &mut std::collections::BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
 ) -> Result<(u32, [u32; 2])> {
     let Some(map) = map else {
@@ -38,13 +36,23 @@ pub(super) fn pixels(
     if let Some(record) = shared.get(&map.identity()) {
         return Ok(*record);
     }
-    let rgba = map.decode(cancel)?;
+    let (encoded, mut rgba) = map.decode_with_source(cancel)?;
+    let normal_variance = quality && map.role() == MapRole::NormalOpenGl;
+    if normal_variance {
+        for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if index % 1024 == 0 {
+                cancel.check()?;
+            }
+            let normal = unit_normal_texel([pixel[0], pixel[1], pixel[2]]);
+            pixel[..3].copy_from_slice(&normal);
+        }
+    }
     let view = TextureView::new(&rgba, map.dimensions()).map_err(|error| JobError::new(ErrorCode::InvalidRequest, error.to_string()))?;
     // Decode roles before averaging: reflectance is linear sRGB; scalar and
     // tangent-normal channels remain linear data. Alpha never participates.
-    // Existing temporary and saved built-in maps keep their level-zero sampler.
-    // Do not generate or retain an unused tail for those legacy inputs.
-    let mips = if map.gpu_mip_filtering() {
+    // Portable inputs already use mips. The explicit quality policy also
+    // filters legacy inputs, without altering their scalar-face precedence.
+    let mips = if quality || map.gpu_mip_filtering() {
         Some(MipChain::prepare(view, MAX_MIP_TAIL_BYTES, || cancel.is_cancelled()).map_err(|error| {
             JobError::new(if cancel.is_cancelled() { ErrorCode::Cancelled } else { ErrorCode::InvalidRequest }, error.to_string())
         })?)
@@ -71,49 +79,47 @@ pub(super) fn pixels(
         write_word(bytes, descriptor, pixel_offset)?;
         write_word(bytes, descriptor + 1, dimensions[0])?;
         write_word(bytes, descriptor + 2, dimensions[1])?;
-        for (index, value) in pixels.rgba().iter().enumerate() {
-            if index % 4096 == 0 {
-                cancel.check()?;
+        if quality {
+            if level == 0 {
+                let encoding = match map.role() {
+                    MapRole::BaseColor => 1,
+                    MapRole::NormalOpenGl => 4,
+                    _ => 2,
+                };
+                write_word(bytes, descriptor + 3, encoding)?;
+                bytes.extend_from_slice(encoded.rgba());
+            } else {
+                write_word(bytes, descriptor + 3, if normal_variance { 5 } else { 3 })?;
+                for (index, pixel) in pixels.rgba().as_chunks::<4>().0.iter().enumerate() {
+                    if index % 1024 == 0 {
+                        cancel.check()?;
+                    }
+                    let [r, g, b, alpha] = pixel.map(f64::from);
+                    // Recover the mean length independently of direction quantization.
+                    // This alpha lane has no material-opacity meaning.
+                    let alpha = if normal_variance { normal_direction_variance([r, g, b]) } else { alpha };
+                    for value in [r, g, b, alpha] {
+                        bytes.extend_from_slice(&((value.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes());
+                    }
+                }
             }
-            bytes.extend_from_slice(&value.to_le_bytes());
+        } else {
+            for (index, value) in pixels.rgba().iter().enumerate() {
+                if index % 4096 == 0 {
+                    cancel.check()?;
+                }
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
         }
     }
     let record = (u32::try_from(offset).map_err(|_| JobError::new(ErrorCode::LimitExceeded, "texture buffer offset overflow"))?, map.dimensions());
     shared.insert(map.identity(), record);
     Ok(record)
 }
-#[cfg(test)]
 pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, origin: Vec3, cancel: &CancelToken) -> Result<Vec<u8>> {
-    flatten_with_graphs(resources, None, body_count, origin, cancel, &ResidentPolicy::path(u64::MAX)).map(|(bytes, _)| bytes)
-}
-/// The texture buffer with the job's graph table after the runtime maps, and where each graph
-/// binding's record starts.
-pub(super) fn flatten_with_graphs(
-    resources: Option<&RuntimeTextures>,
-    graphs: Option<&GraphMaterials>,
-    body_count: usize,
-    origin: Vec3,
-    cancel: &CancelToken,
-    policy: &ResidentPolicy,
-) -> Result<(Vec<u8>, super::material::Records)> {
-    let mut shared = std::collections::BTreeMap::new();
-    let mut bytes = match resources {
-        Some(resources) => runtime(resources, body_count, origin, cancel, &mut shared)?,
-        None => vec![0; 16],
+    let Some(resources) = resources else {
+        return Ok(vec![0; 16]);
     };
-    let records = match graphs {
-        Some(graphs) => super::material::append(&mut bytes, graphs, origin, cancel, &shared, policy)?,
-        None => Default::default(),
-    };
-    Ok((bytes, records))
-}
-fn runtime(
-    resources: &RuntimeTextures,
-    body_count: usize,
-    origin: Vec3,
-    cancel: &CancelToken,
-    shared: &mut std::collections::BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
-) -> Result<Vec<u8>> {
     let header = (4 + body_count + 1).next_multiple_of(4);
     let record_words = resources.bindings().len() * 24;
     let capacity = usize::try_from(packed_bytes(resources, body_count))
@@ -121,6 +127,8 @@ fn runtime(
     let mut bytes = super::scene::reserved(capacity)?;
     bytes.resize((header + record_words) * 4, 0);
     write_word(&mut bytes, 0, (body_count + 1) as u32)?;
+    write_word(&mut bytes, 1, u32::from(resources.filtering()))?;
+    let mut shared = std::collections::BTreeMap::new();
     for (index, binding) in resources.bindings().iter().enumerate() {
         cancel.check()?;
         let record = header + index * 24;
@@ -136,10 +144,10 @@ fn runtime(
                 write_word(&mut bytes, record + offset + k, (c as f32).to_bits())?;
             }
         }
-        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, shared)?;
-        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, shared)?;
-        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, shared)?;
-        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, shared)?;
+        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, resources.filtering(), &mut shared)?;
+        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, resources.filtering(), &mut shared)?;
+        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, resources.filtering(), &mut shared)?;
+        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, resources.filtering(), &mut shared)?;
         let roles = if metallic != 0 {
             4
         } else if roughness != 0 {
@@ -171,6 +179,9 @@ fn runtime(
         }
     }
     cancel.check()?;
+    if bytes.len() != capacity {
+        return Err(JobError::new(ErrorCode::Internal, "GPU texture packing disagrees with its admitted size"));
+    }
     Ok(bytes)
 }
 
@@ -178,6 +189,7 @@ fn runtime(
 /// Count each content/role/policy once, including only level zero for legacy maps.
 pub(super) fn packed_bytes(resources: &RuntimeTextures, body_count: usize) -> u64 {
     let bindings = resources.bindings().len() as u64;
+    let quality = resources.filtering();
     let mut bytes = 4 * ((5 + body_count as u64).next_multiple_of(4) + bindings * 24);
     let mut seen = std::collections::BTreeSet::new();
     for binding in resources.bindings() {
@@ -187,16 +199,16 @@ pub(super) fn packed_bytes(resources: &RuntimeTextures, body_count: usize) -> u6
             }
             let [mut width, mut height] = map.dimensions().map(u64::from);
             let mut levels = 1;
-            let mut pixels = width * height;
-            if map.gpu_mip_filtering() {
+            let mut pixel_bytes = width * height * if quality { 4 } else { 16 };
+            if quality || map.gpu_mip_filtering() {
                 while width > 1 || height > 1 {
                     width = (width / 2).max(1);
                     height = (height / 2).max(1);
-                    pixels += width * height;
+                    pixel_bytes += width * height * if quality { 8 } else { 16 };
                     levels += 1;
                 }
             }
-            bytes += (4 + levels * 4) * 4 + pixels * 16;
+            bytes += (4 + levels * 4) * 4 + pixel_bytes;
         }
     }
     bytes

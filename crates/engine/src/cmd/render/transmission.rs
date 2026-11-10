@@ -3,11 +3,9 @@
 use crate::{Result, params::bad};
 use serde::Deserialize;
 use solidcore_record::Vec3;
-use solidcraft_render::{
-    ProductScene,
-    surface::{OpaqueSurface, srgb8_to_linear},
-    transmission::Transmission,
-};
+use solidcraft_geom::MeshGeom;
+use solidcraft_render::{ProductScene, transmission::Transmission};
+use solidcraft_viewport::surface::{OpaqueSurface, srgb8_to_linear};
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Raytrace {
@@ -15,17 +13,13 @@ pub(super) struct Raytrace {
     pub dielectrics: Vec<Override>,
     pub clear_coats: Vec<super::clear_coat::Override>,
     pub textures: Vec<super::textures::Override>,
-    /// Runtime material graph interface values (docs/material-graph.md §7.3); never saved.
-    pub graph_values: Vec<super::graphs::Override>,
-    /// Base64 PNG or JPEG images that `graph_values` name by SHA-256; never saved.
-    pub graph_textures: Vec<String>,
 }
 fn bounded_dielectrics<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<Override>, D::Error> {
     struct Inputs;
     impl<'de> serde::de::Visitor<'de> for Inputs {
         type Value = Vec<Override>;
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("at most 32 disjoint dielectric body overrides")
+            f.write_str("at most 128 dielectric body overrides")
         }
         fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
             let mut result = Vec::new();
@@ -78,7 +72,7 @@ impl TryFrom<String> for Boundary {
 }
 pub(super) fn apply(scene: &mut ProductScene, overrides: &[Override], command: &str) -> Result<()> {
     if overrides.len() > solidcraft_render::job::MAX_GPU_DIELECTRICS {
-        return Err(bad(command, "at most 32 runtime dielectric overrides are supported"));
+        return Err(bad(command, "at most 128 runtime dielectric overrides are supported"));
     }
     let mut ordinals = std::collections::BTreeSet::new();
     for input in overrides {

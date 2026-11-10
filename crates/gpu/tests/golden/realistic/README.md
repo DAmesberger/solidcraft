@@ -41,7 +41,7 @@ The lighting review set (the Sample Plate and simple shapes, per material and po
 
 `cargo xtask render-parity --base REV [--realistic-base REV]` draws a fixed set of small viewport
 frames in this tree and in a worktree of `REV` on the same GPU. The set is
-`crates/gpu/src/view/parity_frames*.rs`: PBR, scalar, line, occlusion, sky, section, analysis,
+`crates/viewport-gpu/src/view/parity_frames*.rs`: PBR, scalar, line, occlusion, sky, section, analysis,
 highlight, see-through and product-preview paths, and in the Realistic set every studio preset,
 the room, and graph looks with coats, coat colour, anisotropy and patterns.
 

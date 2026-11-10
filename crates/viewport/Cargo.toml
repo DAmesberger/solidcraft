@@ -1,0 +1,38 @@
+[package]
+name = "solidcraft-viewport"
+description = "The viewport renderer the Craft apps share: orbit camera, projection and picking rays, the description of a headless picture and its CPU rasterizer, the surface shading models and section hatches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The parts of the shading models and texture sources only the CPU ray tracer uses
+# (the ray tracer's crate turns it on).
+raytrace-cpu = []
+# Test-only f64 references for the GPU back ends' tests: the material-graph interpreter
+# (`material_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only
+# dev-dependencies may enable it: `cargo xtask layers` refuses a normal or build dependency, or a
+# feature, that does.
+test-reference = ["dep:serde_json"]
+
+[dependencies]
+image = { workspace = true, features = ["jpeg"] }
+# Texture input: PNG metadata and ICC profiles before any codec runs.
+moxcms = { workspace = true }
+png = { workspace = true }
+serde = { workspace = true }
+# The material graph's reference interpreter reads graphs as JSON (feature `test-reference`).
+serde_json = { workspace = true, optional = true }
+# A material graph's texture names its image by SHA-256.
+sha2 = { workspace = true }
+solidcore-record = { workspace = true }
+solidcore-tess = { workspace = true }
+solidcraft-color = { workspace = true }
+
+[dev-dependencies]
+flate2 = "1"
+serde_json = { workspace = true }

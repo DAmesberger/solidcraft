@@ -75,7 +75,7 @@ fn designs_without_graphs_save_as_a_build_without_the_change_does() {
 
 #[test]
 fn a_design_with_a_graph_takes_the_new_number_until_its_last_graph_is_deleted() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../render/tests/fixtures/material_graph/pbr-copper.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewport/tests/fixtures/material_graph/pbr-copper.json");
     let graph = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut doc = Document::new("Graphs");
     doc.appearances.tables.graphs.insert(solidcraft_doc::appearance_graph::GraphId::new("copper").unwrap(), graph);

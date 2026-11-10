@@ -10,27 +10,32 @@ workspace = true
 
 [features]
 default = []
-raytrace-cpu = ["dep:robust"]
-# Test-only f64 references for the GPU back ends' tests: the material-graph interpreter
-# (`material_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only dev-dependencies may enable it: `cargo xtask layers` refuses a
-# normal or build dependency, or a feature, that does.
-test-reference = []
+raytrace-cpu = ["dep:rayon", "solidcraft-viewport/raytrace-cpu"]
 
 [dependencies]
 solidcore-record = { workspace = true }
+solidcore-tess = { workspace = true }
 solidcraft-color = { workspace = true }
+solidcraft-viewport = { workspace = true }
 solidcraft-geom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 image = { workspace = true, features = ["jpeg"] }
 moxcms = { workspace = true }
 png = { workspace = true }
-robust = { workspace = true, optional = true }
+robust = { workspace = true }
 sha2 = { workspace = true }
 web-time = { workspace = true }
 weezl = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true, optional = true }
+sysinfo = { workspace = true }
+
 [dev-dependencies]
+# Texture sources' storage checks for the job tests (test-only; `cargo xtask layers` refuses it
+# anywhere but a dev-dependency).
+solidcraft-viewport = { workspace = true, features = ["test-reference"] }
 flate2 = "1"
 
 [[example]]

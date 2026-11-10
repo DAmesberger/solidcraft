@@ -164,7 +164,7 @@ fn this_build_writes_appearance_graphs_only_for_designs_with_graphs() {
     let mut graphs = plain.clone();
     graphs.appearances.tables.graphs.insert(
         crate::appearance_graph::GraphId::new("copper").unwrap(),
-        serde_json::from_str(include_str!("../../render/tests/fixtures/material_graph/pbr-copper.json")).unwrap(),
+        serde_json::from_str(include_str!("../../viewport/tests/fixtures/material_graph/pbr-copper.json")).unwrap(),
     );
     let mut written = serde_json::to_value(&graphs).unwrap();
     write_oldest_format(&mut written);

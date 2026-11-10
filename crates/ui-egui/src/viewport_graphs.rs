@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use solidcraft_engine::doc::appearance_graph::Constant;
-use solidcraft_engine::render::material_graph::{self as mg, Ir, MaterialGraph, SurfaceSample};
+use solidcraft_viewport::material_graph::{self as mg, Ir, MaterialGraph, SurfaceSample};
 
 use crate::gpu::GpuScene;
 
@@ -150,8 +150,8 @@ pub(crate) fn add_body(
 ) -> usize {
     let graphs = &doc.appearances.tables.graphs;
     let body_look = doc.model_body_look(b);
-    let mut materials: HashMap<usize, solidcraft_gpu::material::GraphMaterial> = HashMap::new();
-    let mut by_look: HashMap<u64, Option<solidcraft_gpu::material::GraphMaterial>> = HashMap::new();
+    let mut materials: HashMap<usize, solidcraft_viewport_gpu::material::GraphMaterial> = HashMap::new();
+    let mut by_look: HashMap<u64, Option<solidcraft_viewport_gpu::material::GraphMaterial>> = HashMap::new();
     for face in 0..b.body.face_count() {
         let Some(look) = face_looks.get(&face).or(body_look.as_ref()) else { continue };
         if !drawn(face) {
@@ -180,7 +180,7 @@ pub(crate) fn add_body(
             let mut values: BTreeMap<String, Constant> =
                 graph.interface.iter().filter_map(|i| i.default.clone().map(|d| (i.name.clone(), d))).collect();
             values.extend(look.values.iter().map(|(k, v)| (k.clone(), v.clone())));
-            let set = solidcraft_gpu::material::texture_keys(&l.ir, &values);
+            let set = solidcraft_viewport_gpu::material::texture_keys(&l.ir, &values);
             for k in set.iter().flatten() {
                 if !sc.graphs.texture_sources().contains_key(k)
                     && let Some(bytes) = looks.texture_bytes(doc, &k.sha256)

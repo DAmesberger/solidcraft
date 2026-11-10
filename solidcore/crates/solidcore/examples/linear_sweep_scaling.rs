@@ -1,4 +1,4 @@
-//! Scaling probe for #1951: times `create_linear_sweep` of one planar profile against its
+//! Scaling probe for #13844: times `create_linear_sweep` of one planar profile against its
 //! side-face count. The profile is a regular N-gon of line segments, or (`holes`) a square
 //! outline with N/4 square holes; both make one body of about N side faces.
 //! Run: `cargo run --release -p solidcore --example linear_sweep_scaling -- [holes] [all] 250 1000 4000`

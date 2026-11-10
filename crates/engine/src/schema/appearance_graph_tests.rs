@@ -5,9 +5,9 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::schema::ParamCheck;
 
-const COPPER: &str = include_str!("../../../render/tests/fixtures/material_graph/pbr-copper.json");
-const ETCHED: &str = include_str!("../../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
-const BRUSHED: &str = include_str!("../../../render/tests/fixtures/material_graph/brushed-nickel-silver.json");
+const COPPER: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-copper.json");
+const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
+const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/brushed-nickel-silver.json");
 
 /// A real 2×1 RGBA PNG (original test data, as in the doc crate's tests).
 const PNG_2X1: &[u8] = &[

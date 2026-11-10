@@ -42,7 +42,7 @@ fn viewport_frame_costs() {
     let mut app = SolveApp::new(Session::default(), Services::default());
     app.run("doc.open", json!({"path": design})).unwrap_or_else(|e| panic!("{e}"));
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-    let depth = solidcraft_gpu::depth_format(&device, true);
+    let depth = solidcraft_viewport_gpu::depth_format(&device, true);
     app.viewport.gpu = Some(crate::gpu::GpuTarget { format, depth: None, samples: 1, tess: false, oit: false });
     let target = crate::gpu::GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false };
     let texture = |format, usage| {
@@ -61,7 +61,7 @@ fn viewport_frame_costs() {
     };
     let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let depth_view = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
-    let reversed = solidcraft_gpu::view::reversed_depth(Some(depth));
+    let reversed = solidcraft_viewport_gpu::view::reversed_depth(Some(depth));
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
     for view in ["Showcase: isometric front-left", "Showcase: low back three-quarter"] {
         app.run("view.apply", json!({"view": view})).unwrap_or_else(|e| panic!("{e}"));
@@ -119,7 +119,7 @@ fn viewport_frame_costs() {
                         outline: matches!(app.ui.visual_style, 0 | 3),
                         eye: [e[0], e[1], e[2], if proj.cam.fov > 0.0 { 1.0 } else { 0.0 }],
                         ao_radius: super::ao_radius(&app),
-                        ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+                        ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
                         ssaa,
                         sky: [0.0; 4],
                         hover_tint: [0.0; 3],

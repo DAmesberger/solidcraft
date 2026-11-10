@@ -1,0 +1,14 @@
+{
+ "name": "Gloss paint, orange peel",
+ "interface": [{"name": "color", "type": "color3", "default": [0.6, 0.05, 0.04]}],
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 1]}},
+  {"id": "peel_a", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 2.4, "seed": 1}},
+  {"id": "peel_b", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.9, "seed": 2}},
+  {"id": "peel_b6", "kind": "multiply", "inputs": {"a": {"from": "peel_b"}, "b": 0.1667}},
+  {"id": "peel", "kind": "add", "inputs": {"a": {"from": "peel_a"}, "b": {"from": "peel_b6"}}},
+  {"id": "coat_n", "kind": "normal.from_height", "inputs": {"height": {"from": "peel"}, "relief_mm": 0.006}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"interface": "color"}, "specular_roughness": 0.5, "specular_ior": 1, "coat_weight": 1, "coat_roughness": 0.08, "coat_ior": 1.5, "geometry_coat_normal": {"from": "coat_n"}}}
+ ],
+ "output": "surface"
+}
