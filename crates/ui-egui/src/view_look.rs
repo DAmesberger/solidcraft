@@ -98,7 +98,7 @@ pub(crate) fn product_look(app: &SolveApp, view: &str) -> Option<crate::gpu::Pro
 /// stand about the subject and reflections are box-projected (`StudioRoom::around`). An empty box
 /// leaves the studio at infinity.
 pub(crate) fn product_look_around(app: &SolveApp, view: &str, bounds: &solidcraft_engine::geom::Aabb3) -> Option<crate::gpu::ProductLook> {
-    let room = (!bounds.is_empty()).then(|| solidcraft_gpu::view::StudioRoom::around(bounds.min.to_f32(), bounds.max.to_f32())).flatten();
+    let room = (!bounds.is_empty()).then(|| solidcraft_viewport_gpu::view::StudioRoom::around(bounds.min.to_f32(), bounds.max.to_f32())).flatten();
     product_look(app, view).map(|look| crate::gpu::ProductLook { room, ..look })
 }
 

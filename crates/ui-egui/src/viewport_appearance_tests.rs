@@ -638,7 +638,7 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
     let counts = |app: &SolveApp| {
         let sc = build_scene(app);
         let draws = sc.graphs.draws().to_vec();
-        let vertices = draws.iter().map(|d| d.vertices.len() / solidcraft_gpu::material::GraphScene::stride(d.object)).sum::<usize>();
+        let vertices = draws.iter().map(|d| d.vertices.len() / solidcraft_viewport_gpu::material::GraphScene::stride(d.object)).sum::<usize>();
         (draws, vertices, sc.graphs.pages().to_vec(), sc.tris.len() + sc.blocks.len())
     };
     let (draws, vertices, _, _) = counts(&app);
@@ -651,7 +651,7 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
     assert!(faces_drawn > 0, "the faces are still drawn as the scene's own triangles");
     let mesh = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.mesh()).unwrap_or_default();
     assert_eq!(vertices, mesh.triangles.len() * 3, "every face is shaded by a graph");
-    let top: usize = draws.iter().filter(|d| !d.object).map(|d| d.vertices.len() / solidcraft_gpu::material::VERTEX_SIZE).sum();
+    let top: usize = draws.iter().filter(|d| !d.object).map(|d| d.vertices.len() / solidcraft_viewport_gpu::material::VERTEX_SIZE).sum();
     assert!(top > 0 && top < vertices, "the top face has its own graph");
     // A value edit: the same shapes and vertices, another page.
     app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "graph": "plain", "values": {"tint": [0.9, 0.2, 0.3]}})).unwrap();
@@ -696,7 +696,7 @@ fn a_see_through_graph_look_is_drawn_blended() {
 fn screenshot_graph_looks_in_the_realistic_view() {
     let Ok(dir) = std::env::var("C1_APP_SHOTS") else { return };
     let fixture = |name: &str| -> serde_json::Value {
-        let path = format!("{}/../render/tests/fixtures/material_graph/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../viewport/tests/fixtures/material_graph/{name}.json", env!("CARGO_MANIFEST_DIR"));
         serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default()).unwrap_or_default()
     };
     let mut app = SolveApp::new(Session::default(), Services::default());
@@ -717,7 +717,7 @@ fn screenshot_graph_looks_in_the_realistic_view() {
     app.ui.ground_shadow = false;
     const SIZE: u32 = 1024;
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
-    let (yaw, pitch) = solidcraft_engine::render::StandardView::Iso.angles();
+    let (yaw, pitch) = solidcraft_viewport::StandardView::Iso.angles();
     for (name, distance) in [("iso", 200.0), ("close", 45.0)] {
         for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
             app.ui.view_look = look;
@@ -786,7 +786,7 @@ fn screenshot_a_design_in_both_looks() {
     let bounds = super::shown_body_bounds(&app);
     let center = (bounds.min + bounds.max) * 0.5;
     let size = bounds.diagonal();
-    for (view, factor) in [(solidcraft_engine::render::StandardView::Iso, 1.3), (solidcraft_engine::render::StandardView::Front, 1.1)] {
+    for (view, factor) in [(solidcraft_viewport::StandardView::Iso, 1.3), (solidcraft_viewport::StandardView::Front, 1.1)] {
         let (yaw, pitch) = view.angles();
         app.cam = crate::Camera { target: center, yaw, pitch: pitch.max(0.35), roll: 0.0, distance: size * factor, fov: 0.0, ..Default::default() };
         for (name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
@@ -838,7 +838,7 @@ fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
     // constant graph of the same look.
     const SIZE: u32 = 256;
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
-    let (yaw, pitch) = solidcraft_engine::render::StandardView::Iso.angles();
+    let (yaw, pitch) = solidcraft_viewport::StandardView::Iso.angles();
     app.cam = crate::Camera { target: Vec3::new(20.0, 15.0, 10.0), yaw, pitch, roll: 0.0, distance: 60.0, fov: 0.0, ..Default::default() };
     let render = |app: &SolveApp| {
         let proj = super::projection(app, rect);

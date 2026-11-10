@@ -4,18 +4,18 @@
 
 use serde_json::{Value, json};
 use solidcraft_engine::Session;
-use solidcraft_engine::render::material_graph::{Constant, InputValue, MaterialGraph};
+use solidcraft_viewport::material_graph::{Constant, InputValue, MaterialGraph};
 
 use super::model::{self, Driver};
 use super::{Action, Commands, Editor, Link, LookContext, Next, Outcome, Pending, TextureUse};
 
 const FIXTURES: &[(&str, &str, usize)] = &[
-    ("black-epoxy-clear-coat", include_str!("../../../render/tests/fixtures/material_graph/black-epoxy-clear-coat.json"), 1),
-    ("brushed-nickel-silver", include_str!("../../../render/tests/fixtures/material_graph/brushed-nickel-silver.json"), 1),
-    ("electrolytic-sleeve", include_str!("../../../render/tests/fixtures/material_graph/electrolytic-sleeve.json"), 2),
-    ("laser-etched-nickel-silver", include_str!("../../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json"), 2),
-    ("pbr-copper", include_str!("../../../render/tests/fixtures/material_graph/pbr-copper.json"), 1),
-    ("solder-mask-over-copper", include_str!("../../../render/tests/fixtures/material_graph/solder-mask-over-copper.json"), 1),
+    ("black-epoxy-clear-coat", include_str!("../../../viewport/tests/fixtures/material_graph/black-epoxy-clear-coat.json"), 1),
+    ("brushed-nickel-silver", include_str!("../../../viewport/tests/fixtures/material_graph/brushed-nickel-silver.json"), 1),
+    ("electrolytic-sleeve", include_str!("../../../viewport/tests/fixtures/material_graph/electrolytic-sleeve.json"), 2),
+    ("laser-etched-nickel-silver", include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json"), 2),
+    ("pbr-copper", include_str!("../../../viewport/tests/fixtures/material_graph/pbr-copper.json"), 1),
+    ("solder-mask-over-copper", include_str!("../../../viewport/tests/fixtures/material_graph/solder-mask-over-copper.json"), 1),
 ];
 
 /// A real 2×1 RGBA PNG (original test data).
@@ -111,7 +111,7 @@ fn no_look() -> LookContext {
 #[test]
 fn the_catalogue_reply_reads_every_kind_and_port() {
     let c = catalogue();
-    assert_eq!(c.nodes.len(), solidcraft_engine::render::material_graph::CATALOGUE.len());
+    assert_eq!(c.nodes.len(), solidcraft_viewport::material_graph::CATALOGUE.len());
     let roughness = c.port("standard_surface", "specular_roughness").unwrap();
     assert_eq!(roughness.default, model::PortDefault::Float(0.3));
     assert!(roughness.range.is_some_and(|(lo, hi)| lo > 0.0 && hi == 1.0));
@@ -158,8 +158,8 @@ fn graphs_the_stack_cannot_show_are_named_not_drawn() {
     assert!(model::stack(&g).is_err());
 }
 
-fn model_connection(from: &str) -> solidcraft_engine::render::material_graph::Connection {
-    solidcraft_engine::render::material_graph::Connection { from: from.into(), fallback: None }
+fn model_connection(from: &str) -> solidcraft_viewport::material_graph::Connection {
+    solidcraft_viewport::material_graph::Connection { from: from.into(), fallback: None }
 }
 
 #[test]
@@ -220,8 +220,8 @@ fn a_refused_edit_leaves_the_replies_and_shows_why() {
     assert_eq!(ed.loaded, before);
 }
 
-fn model_param(text: &str) -> solidcraft_engine::render::material_graph::ParamValue {
-    solidcraft_engine::render::material_graph::ParamValue::Text(text.into())
+fn model_param(text: &str) -> solidcraft_viewport::material_graph::ParamValue {
+    solidcraft_viewport::material_graph::ParamValue::Text(text.into())
 }
 
 #[test]
@@ -395,7 +395,7 @@ fn values_read_srgb_constants_defaults_and_clamp_to_range() {
         let id = model::fresh_id(&g, "Base Colour.Range!");
         assert!(id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'), "{id}");
         assert!(model::node(&g, &id).is_none());
-        g.nodes.push(solidcraft_engine::render::material_graph::Node {
+        g.nodes.push(solidcraft_viewport::material_graph::Node {
             id,
             kind: "constant".into(),
             params: Default::default(),
@@ -478,7 +478,7 @@ fn ui_scope(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 #[test]
 fn the_swatch_is_drawn_by_the_gpu_product_pipelines() {
     use solidcore_record::Vec3;
-    use solidcraft_engine::render::surface::OpaqueSurface;
+    use solidcraft_viewport::surface::OpaqueSurface;
     let surface = OpaqueSurface::new(Vec3::new(0.8, 0.77, 0.7), 1.0, 0.35, 1.5).unwrap();
     let scene = super::swatch::scene(&super::swatch::Sample::Surface(surface));
     assert_eq!(scene.pbr.len() % crate::gpu::PBR_SIZE, 0);
@@ -606,7 +606,7 @@ fn a_refused_change_is_not_sent_and_names_its_row_and_the_cost_follows_replies()
     // A required input left without a texture: the image node's `file`.
     let c = catalogue();
     let mut bad = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
-    bad.nodes.push(solidcraft_engine::render::material_graph::Node {
+    bad.nodes.push(solidcraft_viewport::material_graph::Node {
         id: "img".into(),
         kind: "image".into(),
         params: Default::default(),

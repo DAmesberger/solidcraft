@@ -8,9 +8,9 @@ use solidcore_record::Vec3;
 use solidcraft_render::{
     ProductScene,
     job::{CancelToken, ErrorCode, JobError, Result},
-    surface::{OpaqueSurface, srgb8_to_linear},
     transmission::Transmission,
 };
+use solidcraft_viewport::surface::{OpaqueSurface, srgb8_to_linear};
 
 pub(super) struct Triangle {
     pub p: [Vec3; 3],
@@ -18,8 +18,6 @@ pub(super) struct Triangle {
     pub surface: OpaqueSurface,
     pub transmission: Option<Transmission>,
     pub medium: u32,
-    /// `interior.z` of a graph-shaded triangle: −(record + 1) (`material.rs`), else 0.
-    pub graph: f32,
     pub scalar_face: bool,
 }
 type MediumEdge = (usize, usize, i32);
@@ -73,6 +71,8 @@ pub(super) struct Upload {
     pub nodes: Vec<u8>,
     pub epsilon: f32,
     pub active_glass_model: bool,
+    pub photon_guide: Option<[f32; 4]>,
+    pub photon_bounds: Option<[f32; 6]>,
 }
 
 fn invalid(message: &str) -> JobError {
@@ -88,18 +88,7 @@ pub(super) fn reserved<T>(count: usize) -> Result<Vec<T>> {
 pub(super) fn flatten(scene: &ProductScene, origin: Vec3, cancel: &CancelToken) -> Result<Upload> {
     flatten_with_media(scene, origin, cancel, false)
 }
-#[cfg(test)]
 pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &CancelToken, nested: bool) -> Result<Upload> {
-    flatten_with_graphs(scene, origin, cancel, nested, &Default::default())
-}
-/// As [`flatten_with_media`], with each triangle naming its graph record (`material.rs`).
-pub(super) fn flatten_with_graphs(
-    scene: &ProductScene,
-    origin: Vec3,
-    cancel: &CancelToken,
-    nested: bool,
-    graphs: &super::material::Records,
-) -> Result<Upload> {
     let model_bytes = model_bytes_per_triangle(scene) as usize;
     let material_bytes = 80 + model_bytes;
     let mut material_flags = if model_bytes > 0 { 0x80000000 } else { 0 };
@@ -119,6 +108,8 @@ pub(super) fn flatten_with_graphs(
     let mut vertices = reserved(vertex_count * 32)?;
     let mut vertex_offset = 0u32;
     let mut media_bounds = reserved::<super::media_hierarchy::Region>(solidcraft_render::job::MAX_GPU_DIELECTRICS)?;
+    let mut optical_lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut optical_hi = -optical_lo;
     for (body_index, body) in scene.meshes.iter().enumerate() {
         cancel.check()?;
         let body_start = triangles.len();
@@ -141,7 +132,7 @@ pub(super) fn flatten_with_graphs(
             if !position.is_finite() || [position.x, position.y, position.z].iter().any(|x| x.abs() > 1e7) {
                 return Err(invalid("path geometry must be finite and within 1e7 mm of the camera target"));
             }
-            let normal = solidcraft_render::surface::unit_direction(*normal).map_err(|_| invalid("invalid mesh normal"))?;
+            let normal = solidcraft_viewport::surface::unit_direction(*normal).map_err(|_| invalid("invalid mesh normal"))?;
             vector(&mut vertices, position, 0.0);
             vector(&mut vertices, normal, 0.0);
         }
@@ -217,7 +208,6 @@ pub(super) fn flatten_with_graphs(
                 transmission,
                 medium: body_index as u32 + 1,
                 scalar_face: look.is_some(),
-                graph: graphs.interior(body_index, face),
             });
         }
         if authored_optical && !triangles[body_start..].iter().any(|t| t.transmission.is_some()) {
@@ -239,7 +229,7 @@ pub(super) fn flatten_with_graphs(
         let body_triangles = &triangles[body_start..];
         if body_triangles.iter().any(|t| t.transmission.is_some()) {
             if media_bounds.len() >= solidcraft_render::job::MAX_GPU_DIELECTRICS {
-                return Err(invalid("at most 32 disjoint dielectric bodies are supported"));
+                return Err(invalid("at most 128 disjoint dielectric bodies are supported"));
             }
             let closed = body_triangles.iter().any(|t| t.transmission.is_some_and(|v| v.thin_wall_thickness_mm().is_none()));
             let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
@@ -248,6 +238,10 @@ pub(super) fn flatten_with_graphs(
                 for p in t.p {
                     lo = lo.min(p);
                     hi = hi.max(p);
+                    if t.transmission.is_some() {
+                        optical_lo = optical_lo.min(p);
+                        optical_hi = optical_hi.max(p);
+                    }
                 }
             }
             media_bounds.push(super::media_hierarchy::Region {
@@ -256,6 +250,7 @@ pub(super) fn flatten_with_graphs(
                 closed,
                 triangles: body_start..triangles.len(),
                 medium: body_index as u32 + 1,
+                name: &body.name,
             });
         }
         vertex_offset = vertex_offset.checked_add(mesh.positions.len() as u32).ok_or_else(|| invalid("vertex offset overflow"))?;
@@ -313,11 +308,12 @@ pub(super) fn flatten_with_graphs(
         }
         vector(
             &mut materials,
-            Vec3::new(scatter.map_or(0.0, |s| s.scattering_per_mm), scatter.map_or(0.0, |s| s.anisotropy), {
-                let stage = scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/"));
-                // A graph's record takes the flags' place: only a mapped scalar face reads the other flag.
-                if stage || t.graph == 0.0 { (u32::from(stage) | (u32::from(t.scalar_face) << 1)) as f64 } else { f64::from(t.graph) }
-            }),
+            Vec3::new(
+                scatter.map_or(0.0, |s| s.scattering_per_mm),
+                scatter.map_or(0.0, |s| s.anisotropy),
+                (u32::from(scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/")))
+                    | (u32::from(t.scalar_face) << 1)) as f64,
+            ),
             parent_triangle as f32,
         );
         if model_bytes > 0 {
@@ -362,7 +358,28 @@ pub(super) fn flatten_with_graphs(
         }
         node_bytes.extend_from_slice(&node.count.to_le_bytes());
     }
-    Ok(Upload { geometry, nodes: node_bytes, epsilon: (extent * 1e-7).max(1e-5), active_glass_model })
+    // Exact extrema of retained f32 optical vertices, including sheets. Unlike
+    // an emission proposal, this conservative origin certificate is always used.
+    let photon_bounds = (optical_lo.is_finite() && optical_hi.is_finite()).then_some([
+        optical_lo.x as f32,
+        optical_lo.y as f32,
+        optical_lo.z as f32,
+        optical_hi.x as f32,
+        optical_hi.y as f32,
+        optical_hi.z as f32,
+    ]);
+    let center = optical_lo * 0.5 + optical_hi * 0.5;
+    let radius = (optical_hi - optical_lo).len() * 0.5;
+    let photon_guide = if center.is_finite() && radius.is_finite() && radius > 0.0 {
+        // The union already contains retained f32 optical vertices. Cover the
+        // center's conversion and the shader's projected-basis arithmetic too.
+        let margin = 32.0 * f64::from(f32::EPSILON) * (center.len() + radius);
+        let radius = ((radius + margin) as f32).next_up();
+        radius.is_finite().then_some([center.x as f32, center.y as f32, center.z as f32, radius])
+    } else {
+        None
+    };
+    Ok(Upload { geometry, nodes: node_bytes, epsilon: (extent * 1e-7).max(1e-5), active_glass_model, photon_guide, photon_bounds })
 }
 
 fn uploaded_optical_positions(source: [Vec3; 3]) -> Result<[Vec3; 3]> {

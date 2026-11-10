@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
 use solidcore_record::Vec3;
-use solidcraft_engine::render::Camera;
-use solidcraft_engine::render::surface::OpaqueSurface;
+use solidcraft_viewport::Camera;
+use solidcraft_viewport::surface::OpaqueSurface;
 
-use solidcraft_engine::render::material_graph::{self as mg, Constant, Ir, MaterialGraph, SurfaceSample};
+use solidcraft_viewport::material_graph::{self as mg, Constant, Ir, MaterialGraph, SurfaceSample};
 
 use crate::gpu::{Frame, GpuScene, GpuTarget, ProductLook, Renderer};
 
@@ -41,7 +41,7 @@ impl Material {
         let ir = mg::lower(&valid).ok()?;
         let base = mg::base_sample(&valid).ok()?;
         let words = mg::uniform_words(&ir, values).ok()?;
-        let record = solidcraft_gpu::material::base_record(&base);
+        let record = solidcraft_viewport_gpu::material::base_record(&base);
         let bytes =
             ir.shape.0.into_iter().chain(words.iter().flat_map(|w| w.to_le_bytes())).chain(record.iter().flat_map(|x| x.to_bits().to_le_bytes()));
         let key = fnv(bytes);
@@ -75,7 +75,7 @@ pub(crate) struct SwatchTargets {
 /// The swatch's own renderer and its studio bake.
 struct SwatchRenderer {
     renderer: Renderer,
-    baking: crate::gpu::StudioBaking,
+    baking: solidcraft_viewport_egui::StudioBaking,
 }
 
 /// Whether the swatch renderer's studio is installed (the window repaints until it is).
@@ -227,7 +227,7 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
         outline: false,
         eye: [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
         ao_radius: 0.0,
-        ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
         ssaa: 2.0,
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],

@@ -1,0 +1,14 @@
+{
+ "name": "Tinted gloss coat over copper",
+ "interface": [{"name": "coat_color", "type": "color3", "default": [0.1, 0.45, 0.12]}],
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"u": [1, 0, 0], "v": [0, 1, 0]}},
+  {"id": "peel_a", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 2.4, "seed": 1}},
+  {"id": "peel_b", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.9, "seed": 2}},
+  {"id": "peel_b6", "kind": "multiply", "inputs": {"a": {"from": "peel_b"}, "b": 0.1667}},
+  {"id": "peel", "kind": "add", "inputs": {"a": {"from": "peel_a"}, "b": {"from": "peel_b6"}}},
+  {"id": "coat_n", "kind": "normal.from_height", "inputs": {"height": {"from": "peel"}, "relief_mm": 0.006}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": [0.955, 0.638, 0.538], "base_metalness": 1, "specular_roughness": 0.35, "coat_weight": 1, "coat_color": {"interface": "coat_color"}, "coat_roughness": 0.12, "coat_ior": 1.52, "geometry_coat_normal": {"from": "coat_n"}}}
+ ],
+ "output": "surface"
+}

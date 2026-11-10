@@ -475,8 +475,8 @@ mod tests {
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68,
         65, 84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ];
-    const ETCHED: &str = include_str!("../../render/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
-    const COPPER: &str = include_str!("../../render/tests/fixtures/material_graph/pbr-copper.json");
+    const ETCHED: &str = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
+    const COPPER: &str = include_str!("../../viewport/tests/fixtures/material_graph/pbr-copper.json");
 
     /// Only the header: enough for the size checks, never decoded.
     fn png_header(width: u32, height: u32, depth: u8, colour: u8) -> Vec<u8> {

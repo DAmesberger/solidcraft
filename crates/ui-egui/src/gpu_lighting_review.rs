@@ -18,10 +18,12 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use solidcore_record::Vec3;
 use solidcraft_engine::Session;
-use solidcraft_engine::render::{Camera, ProductScene, surface::OpaqueSurface};
+use solidcraft_engine::render::ProductScene;
+use solidcraft_viewport::{Camera, surface::OpaqueSurface};
 
-use super::{Frame, ProductLook, Renderer, StudioEnvironment, StudioPreset, ViewportCallback};
+use super::{Frame, ProductLook, Renderer, StudioEnvironment, StudioPreset};
 use super::{GpuScene, GpuTarget, wgpu};
+use solidcraft_viewport_egui::ViewportCallback;
 
 const SIZE: u32 = 1600;
 const SSAA: f32 = 2.0;
@@ -193,7 +195,7 @@ fn ground_shadow(sc: &mut GpuScene, scene: &ProductScene) {
 // BEFORE-PATCH-START: the renderer branch's look has no room; the before build returns `look`.
 fn placed(look: ProductLook, scene: &ProductScene) -> ProductLook {
     let (min, max) = (scene.bounds.min.to_f32(), scene.bounds.max.to_f32());
-    ProductLook { room: solidcraft_gpu::view::StudioRoom::around(min, max), ..look }
+    ProductLook { room: solidcraft_viewport_gpu::view::StudioRoom::around(min, max), ..look }
 }
 // BEFORE-PATCH-END
 
@@ -208,7 +210,7 @@ struct Shot {
 
 /// Draw `shot` offscreen through the viewport's frame callback: straight RGBA, `SIZE` × `SIZE`.
 fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64, shot: Shot) -> Option<Vec<u8>> {
-    let depth = solidcraft_gpu::depth_format(device, true);
+    let depth = solidcraft_viewport_gpu::depth_format(device, true);
     let target = GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false };
     let mut resources = egui_wgpu::CallbackResources::default();
     let mut renderer = Renderer::new(device, target, None);
@@ -249,7 +251,7 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
         outline: false,
         eye: [e[0], e[1], e[2], 1.0],
         ao_radius: shot.ao_radius,
-        ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
         ssaa: SSAA,
         sky: [0.0; 4],
         hover_tint: [0.0; 3],
@@ -473,7 +475,7 @@ fn lighting_review() {
             let extent = scene.bounds.size().x.max(scene.bounds.size().y).max(scene.bounds.size().z);
             for (pose, yaw, pitch) in POSES {
                 let mut camera = Camera { fov: 0.5, yaw, pitch, ..Default::default() };
-                camera.fit(&scene.bounds);
+                camera.fit(&solidcraft_engine::render::view_bounds(&scene.bounds));
                 camera.distance *= 0.82;
                 let radius = scene.bounds.diagonal().max(10.0) + scene.bounds.center().dist(camera.target) + camera.distance;
                 let look = placed(ProductLook { studio: preset, intensity, ..ProductLook::default() }, &scene);

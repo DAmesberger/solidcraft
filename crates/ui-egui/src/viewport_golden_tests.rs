@@ -35,12 +35,13 @@ use serde_json::{Value, json};
 use solidcore_record::Vec3;
 use solidcraft_engine::Session;
 use solidcraft_engine::render::ProductScene;
-use solidcraft_engine::render::surface::OpaqueSurface;
+use solidcraft_viewport::surface::OpaqueSurface;
 
 use super::build_scene;
-use crate::gpu::{Frame, GpuScene, GpuTarget, ProductLook, Renderer, StudioEnvironment, StudioPreset, ViewportCallback};
+use crate::gpu::{Frame, GpuScene, GpuTarget, ProductLook, Renderer, StudioEnvironment, StudioPreset};
 use crate::{Services, SolveApp};
 use egui_wgpu::wgpu;
+use solidcraft_viewport_egui::ViewportCallback;
 
 /// The light theme's viewport background (sRGB), the clear colour of every beauty frame.
 const BACKGROUND: [u8; 3] = [236, 240, 245];
@@ -157,7 +158,7 @@ struct Target {
 /// frame until no material shape or texture is still pending (at most 120): straight RGBA.
 fn draw(t: &Target, format: wgpu::TextureFormat, studio: Option<StudioPreset>, clear: wgpu::Color, frame: impl Fn() -> Frame) -> Option<Vec<u8>> {
     let (device, queue, [w, h]) = (&t.device, &t.queue, t.size);
-    let depth = solidcraft_gpu::depth_format(device, true);
+    let depth = solidcraft_viewport_gpu::depth_format(device, true);
     let mut renderer = Renderer::new(device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
     if let Some(preset) = studio {
         renderer.set_studio_environment(device, queue, &StudioEnvironment::bake(preset));
@@ -180,7 +181,7 @@ fn draw(t: &Target, format: wgpu::TextureFormat, studio: Option<StudioPreset>, c
     let depth_tex = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let (color_view, depth_view) = (color.create_view(&Default::default()), depth_tex.create_view(&Default::default()));
     let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: 1.0 };
-    let reversed = solidcraft_gpu::view::reversed_depth(Some(depth));
+    let reversed = solidcraft_viewport_gpu::view::reversed_depth(Some(depth));
     for n in 0..120u32 {
         let cb = ViewportCallback(frame());
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -293,7 +294,7 @@ fn frame(
         outline,
         eye,
         ao_radius,
-        ao_samples: solidcraft_gpu::view::AO_SAMPLES,
+        ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
         ssaa,
         sky: [0.0; 4],
         hover_tint: [0.0; 3],

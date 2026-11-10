@@ -1,4 +1,4 @@
-//! `cargo xtask render-parity`: the viewport's parity frames (`crates/gpu/src/view/
+//! `cargo xtask render-parity`: the viewport's parity frames (`crates/viewport-gpu/src/view/
 //! parity_frames*.rs`) drawn by this tree and by an earlier revision, on this machine's GPU, and
 //! compared. Standard frames must be byte-identical to the base; Realistic frames must be within
 //! a tolerance of the realistic base (docs/material-graph.md §5.9, §6.3).
@@ -11,9 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const STANDARD: &str = "crates/gpu/src/view/parity_frames.rs";
-const REALISTIC: &str = "crates/gpu/src/view/parity_frames_realistic.rs";
-const VIEW: &str = "crates/gpu/src/view.rs";
+const STANDARD: &str = "crates/viewport-gpu/src/view/parity_frames.rs";
+const REALISTIC: &str = "crates/viewport-gpu/src/view/parity_frames_realistic.rs";
+const VIEW: &str = "crates/viewport-gpu/src/view.rs";
 
 struct Options {
     base: String,
@@ -89,7 +89,7 @@ fn dump(tree: &Path, out: &Path, target: &Path) -> Result<(), String> {
     c.current_dir(tree).env("CARGO_TARGET_DIR", target).env("PARITY_OUT", out).args([
         "test",
         "-p",
-        "solidcraft-gpu",
+        "solidcraft-viewport-gpu",
         "--lib",
         "parity_frames",
         "--",
@@ -97,7 +97,7 @@ fn dump(tree: &Path, out: &Path, target: &Path) -> Result<(), String> {
         "--test-threads",
         "1",
     ]);
-    eprintln!("$ (in {}) cargo test -p solidcraft-gpu --lib parity_frames -- --ignored", tree.display());
+    eprintln!("$ (in {}) cargo test -p solidcraft-viewport-gpu --lib parity_frames -- --ignored", tree.display());
     let status = c.status().map_err(|e| format!("cargo test: {e}"))?;
     if !status.success() {
         return Err(format!("parity frames in {}: cargo test exited with {status}", tree.display()));

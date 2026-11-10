@@ -3,6 +3,7 @@
 use crate::geom::Aabb3;
 use crate::render::{FaceAppearance, ProductMesh, ProductScene};
 use crate::{EngineError, Result, Session};
+use solidcraft_geom::MeshGeom;
 
 pub const MAX_PRODUCT_BODIES: usize = solidcraft_render::job::MAX_CPU_BODIES;
 
@@ -54,7 +55,7 @@ pub fn extract(s: &Session) -> Result<ProductScene> {
 /// A look's opaque response: its `pbr`, or for a look naming a material graph, the graph's base
 /// response with the look's values (docs/material-graph.md §2): what every renderer without the
 /// graph's own code draws, and what the path back end's bound bodies keep as their surface.
-fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_render::surface::OpaqueSurface>> {
+fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_viewport::surface::OpaqueSurface>> {
     let Some(id) = &look.graph else { return look.opaque_surface().map_err(|e| EngineError::Other(e.to_string())) };
     let fail = |e: solidcraft_render::material_graph::GraphError| EngineError::Other(format!("material graph `{}`: {e}", id.as_str()));
     let mut graph = s
@@ -81,6 +82,7 @@ mod tests {
     use crate::render::*;
     use serde_json::json;
     use solidcore_record::Vec3;
+    use solidcraft_viewport::{Camera, UpAxis};
     use std::sync::Arc;
 
     #[test]
@@ -133,7 +135,7 @@ mod tests {
             ("sketch.dimension", json!({"entities":["l2"],"value":15})),
             ("sketch.finish", json!({})),
             ("solid.extrude", json!({"distance":5})),
-            ("sketch.edit", json!({"sketch":"Sketch1"})),
+            ("sketch.edit", json!({"sketch":"Sketch1","restore_marker":false})),
             ("sketch.drag", json!({"entity":"l1.start","from":[5,5],"to":[4,5],"live":true})),
         ] {
             s.execute(id, &p).unwrap();

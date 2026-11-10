@@ -58,10 +58,10 @@ fn shadow_transmittance(origin: vec3<f32>, origin_low: vec3<f32>, direction: vec
             let point=surface_point_precise(t,hit.bary);
             position=point.hi; position_low=point.lo;
         }
-        let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+        let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
         let entering=dot(outward,direction)<0.0;
         let geometric=select(-outward,outward,entering);
-        var n=sc_unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
+        var n=unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
         if dot(n,geometric)<0.0 { n=-n; }
         if dot(n,-direction)<=0.0 { n=geometric; }
         if geometric_normals {n=geometric;}

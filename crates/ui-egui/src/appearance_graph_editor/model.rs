@@ -15,9 +15,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use solidcraft_engine::render::material_graph::{
-    Connection, Constant, InputValue, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits,
-};
+use solidcraft_viewport::material_graph::{Connection, Constant, InputValue, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
 
 /// Node kinds a catalogue reply may list (the v1 catalogue has 49).
 const MAX_KINDS: usize = 512;
@@ -344,7 +342,7 @@ pub fn components(c: &Constant) -> Option<Vec<f64>> {
     match c {
         Constant::Number(x) => Some(vec![*x]),
         Constant::Vector(v) => Some(v.iter().take(3).copied().collect()),
-        Constant::Srgb8(s) => Some(s.srgb8.iter().map(|b| solidcraft_engine::render::surface::srgb8_to_linear(*b)).collect()),
+        Constant::Srgb8(s) => Some(s.srgb8.iter().map(|b| solidcraft_viewport::surface::srgb8_to_linear(*b)).collect()),
         Constant::Texture(_) => None,
     }
 }
@@ -616,7 +614,7 @@ pub fn drive_with(
                 &mut g,
                 &pattern,
                 "file",
-                Constant::Texture(solidcraft_engine::render::material_graph::graph::TextureRef { texture: sha.into() }),
+                Constant::Texture(solidcraft_viewport::material_graph::graph::TextureRef { texture: sha.into() }),
             ),
             None => return Err("appearance.graph.pick_texture"),
         }

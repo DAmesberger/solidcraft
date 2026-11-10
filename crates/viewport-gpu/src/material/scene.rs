@@ -1,0 +1,312 @@
+//! The CPU side of material-graph drawing (docs/material-graph.md §5.2): uniform pages, each
+//! material's record in one, and the vertices of every (shape, page, texture set), which one draw
+//! covers. Data preparation only.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use solidcraft_viewport::material_graph::ir::{Ir, ShapeKey};
+use solidcraft_viewport::material_graph::{SurfaceSample, limits};
+
+use super::textures::TextureKey;
+use super::{BASE_VEC4, OBJECT_VERTEX_SIZE, PAGE_VEC4, VERTEX_SIZE};
+
+/// Pages one scene may hold: 16 MiB of uniforms, far above a design's 4096 graphs.
+pub const MAX_PAGES: usize = 1024;
+/// Texture bindings of one material (group 3, textures 4–7).
+pub const TEXTURE_SLOTS: usize = limits::TEXTURES_PER_GRAPH;
+
+/// The textures one draw binds, by the IR's binding index.
+pub type TextureSet = [Option<TextureKey>; TEXTURE_SLOTS];
+
+/// A material in a [`GraphScene`]: where its record is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GraphMaterial(u32);
+
+/// Where a material lives, for a draw of placed meshes ([`GraphScene::placed_material`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlacedMaterial {
+    pub shape: ShapeKey,
+    pub page: u32,
+    pub textures: u32,
+    pub object: bool,
+    pub blended: bool,
+    pub record: u32,
+}
+
+/// Why a material cannot join a scene.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum GraphSceneError {
+    #[error("the material's uniform words ({given}) do not match its graph ({expected})")]
+    Words { given: usize, expected: usize },
+    #[error("the scene holds at most {MAX_PAGES} uniform pages of materials")]
+    Pages,
+}
+
+/// One uniform page: `PAGE_VEC4` vec4s, as `u32` words (`f32` bits).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page {
+    pub words: Vec<u32>,
+    /// vec4s in use from the start.
+    used: u32,
+}
+
+/// The vertices one draw covers: every material of one shape on one page with one texture set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GraphDraw {
+    pub shape: ShapeKey,
+    pub page: u32,
+    /// The texture set ([`GraphScene::texture_set`]; 0: none).
+    pub textures: u32,
+    /// [`OBJECT_VERTEX_SIZE`] vertices (the shape reads object space), else [`VERTEX_SIZE`].
+    pub object: bool,
+    /// See-through ([`see_through`]): drawn blended, premultiplied over what lies behind.
+    pub blended: bool,
+    pub vertices: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct Entry {
+    draw: usize,
+    record: u32,
+    object: bool,
+}
+
+/// The material-graph surfaces of a scene.
+#[derive(Clone, Debug, Default)]
+pub struct GraphScene {
+    shapes: HashMap<ShapeKey, Arc<Ir>>,
+    pages: Vec<Page>,
+    draws: Vec<GraphDraw>,
+    draw_index: HashMap<(ShapeKey, u32, u32, bool), usize>,
+    materials: Vec<Entry>,
+    /// Identical records (same shape, texture set and words) share one.
+    dedup: HashMap<(ShapeKey, u32, Vec<u32>), GraphMaterial>,
+    /// Texture sets after the first (set 0 binds none).
+    sets: Vec<TextureSet>,
+    /// The encoded bytes of the textures the materials read (by key), for the renderer's decoder.
+    sources: HashMap<TextureKey, Arc<Vec<u8>>>,
+    set_index: HashMap<TextureSet, u32>,
+}
+
+/// The base response as the head of a record ([`BASE_VEC4`] vec4s, `mat_base_response`):
+/// (base colour, metalness), (roughness, IOR, coat weight, coat roughness), (coat IOR,
+/// specular weight, anisotropy, rotation), (specular colour, emission luminance), (coat colour,
+/// transmission weight), (emission colour, transmission depth), (transmission colour, opacity).
+pub fn base_record(s: &SurfaceSample) -> [f32; 4 * BASE_VEC4 as usize] {
+    let o = s.opaque;
+    let (cw, cr, ci) = o.clear_coat().map_or((0.0, 1.0, 1.0), |c| (c.weight(), c.roughness(), c.ior()));
+    let b = o.base_color();
+    let f = |x: f64| x as f32;
+    let v = |c: solidcore_record::Vec3| [f(c.x), f(c.y), f(c.z)];
+    let [sr, sg, sb] = v(s.specular_color);
+    let [cr_, cg, cb] = v(s.coat_color);
+    let [er, eg, eb] = v(s.emission_color);
+    let [tr, tg, tb] = v(s.transmission_color);
+    [
+        f(b.x),
+        f(b.y),
+        f(b.z),
+        f(o.metallic()),
+        f(o.roughness()),
+        f(o.dielectric_ior()),
+        f(cw),
+        f(cr),
+        f(ci),
+        f(s.specular_weight),
+        f(s.anisotropy),
+        f(s.rotation),
+        sr,
+        sg,
+        sb,
+        f(s.emission_luminance),
+        cr_,
+        cg,
+        cb,
+        f(s.transmission_weight),
+        er,
+        eg,
+        eb,
+        f(s.transmission_depth_mm),
+        tr,
+        tg,
+        tb,
+        f(s.opacity),
+    ]
+}
+
+/// Whether a material is see-through (its surface's colour comes back with coverage below 1): a
+/// surface layer drives `transmission_weight` or `geometry_opacity`, or holds a transmission
+/// above 0 or an opacity below 1.
+pub fn see_through(ir: &Ir, words: &[u32]) -> bool {
+    use solidcraft_viewport::material_graph::ir::Operand;
+    let value = |op: &Operand| match op {
+        Operand::Uniform { offset, .. } => usize::try_from(*offset).ok().and_then(|i| words.get(i)).map(|w| f32::from_bits(*w)),
+        _ => None,
+    };
+    let layer = |inputs: &[(&'static str, Operand)]| {
+        inputs.iter().any(|(name, op)| {
+            let driven = matches!(op, Operand::Value(_) | Operand::Geometry(_));
+            match *name {
+                "transmission_weight" => driven || value(op).is_some_and(|x| !(x <= 0.0)),
+                "geometry_opacity" => driven || value(op).is_some_and(|x| !(x >= 1.0)),
+                _ => false,
+            }
+        })
+    };
+    layer(&ir.surface) || ir.mix_layers.iter().any(|m| layer(&m.fg))
+}
+
+impl GraphScene {
+    /// Add a material of graph `ir` with its uniform `words` (`uniform_words`) and base response
+    /// `base` (`base_sample`). Equal materials share a record.
+    pub fn material(&mut self, ir: &Arc<Ir>, words: &[u32], base: &SurfaceSample) -> Result<GraphMaterial, GraphSceneError> {
+        self.textured_material(ir, words, base, &TextureSet::default())
+    }
+
+    /// [`Self::material`] reading `textures` (by the IR's binding index; `textures::texture_keys`).
+    /// Materials with other texture sets draw separately.
+    pub fn textured_material(
+        &mut self,
+        ir: &Arc<Ir>,
+        words: &[u32],
+        base: &SurfaceSample,
+        textures: &TextureSet,
+    ) -> Result<GraphMaterial, GraphSceneError> {
+        let set = self.set_of(textures);
+        let expected = usize::try_from(ir.uniform_floats).unwrap_or(usize::MAX).min(limits::UNIFORM_FLOATS);
+        if words.len() != expected {
+            return Err(GraphSceneError::Words { given: words.len(), expected });
+        }
+        let mut record: Vec<u32> = base_record(base).iter().map(|x| x.to_bits()).collect();
+        record.extend_from_slice(words);
+        record.resize(record.len().div_ceil(4) * 4, 0);
+        let key = (ir.shape, set, record);
+        if let Some(m) = self.dedup.get(&key) {
+            return Ok(*m);
+        }
+        let record = key.2.clone();
+        let vec4s = u32::try_from(record.len() / 4).unwrap_or(u32::MAX);
+        let page = match self.pages.iter().position(|p| p.used + vec4s <= PAGE_VEC4) {
+            Some(p) => p,
+            None => {
+                if self.pages.len() >= MAX_PAGES {
+                    return Err(GraphSceneError::Pages);
+                }
+                self.pages.push(Page { words: vec![0; PAGE_VEC4 as usize * 4], used: 0 });
+                self.pages.len() - 1
+            }
+        };
+        let Some(p) = self.pages.get_mut(page) else { return Err(GraphSceneError::Pages) };
+        let start = p.used;
+        for (i, w) in record.iter().enumerate() {
+            if let Some(slot) = p.words.get_mut(start as usize * 4 + i) {
+                *slot = *w;
+            }
+        }
+        p.used += vec4s;
+        self.shapes.entry(ir.shape).or_insert_with(|| ir.clone());
+        let page = u32::try_from(page).unwrap_or(u32::MAX);
+        let blended = see_through(ir, words);
+        let draw = *self.draw_index.entry((ir.shape, page, set, blended)).or_insert_with(|| {
+            self.draws.push(GraphDraw { shape: ir.shape, page, textures: set, object: ir.object_space, blended, vertices: Vec::new() });
+            self.draws.len() - 1
+        });
+        let m = GraphMaterial(u32::try_from(self.materials.len()).unwrap_or(u32::MAX));
+        self.materials.push(Entry { draw, record: start, object: ir.object_space });
+        self.dedup.insert(key, m);
+        Ok(m)
+    }
+
+    /// One vertex of material `m`: world position and normal, and its object-space position
+    /// (read only by shapes that use object space). Triangles are three consecutive vertices of
+    /// one material.
+    pub fn vertex(&mut self, m: GraphMaterial, p: [f32; 3], n: [f32; 3], object: [f32; 3]) {
+        let Some(entry) = usize::try_from(m.0).ok().and_then(|i| self.materials.get(i)) else { return };
+        let (record, object_space) = (entry.record, entry.object);
+        let Some(draw) = self.draws.get_mut(entry.draw) else { return };
+        let v = &mut draw.vertices;
+        for x in p.into_iter().chain(n) {
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v.extend_from_slice(&record.to_le_bytes());
+        if object_space {
+            for x in object {
+                v.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+    }
+
+    /// Where material `m` lives.
+    pub(crate) fn placed_material(&self, m: GraphMaterial) -> Option<PlacedMaterial> {
+        let entry = usize::try_from(m.0).ok().and_then(|i| self.materials.get(i))?;
+        let draw = self.draws.get(entry.draw)?;
+        Some(PlacedMaterial {
+            shape: draw.shape,
+            page: draw.page,
+            textures: draw.textures,
+            object: draw.object,
+            blended: draw.blended,
+            record: entry.record,
+        })
+    }
+
+    fn set_of(&mut self, textures: &TextureSet) -> u32 {
+        if textures.iter().all(Option::is_none) {
+            return 0;
+        }
+        if let Some(i) = self.set_index.get(textures) {
+            return *i;
+        }
+        self.sets.push(textures.clone());
+        let i = u32::try_from(self.sets.len()).unwrap_or(u32::MAX);
+        self.set_index.insert(textures.clone(), i);
+        i
+    }
+
+    /// Texture set `i` of the draws (0 and unknown sets: none).
+    pub fn texture_set(&self, i: u32) -> TextureSet {
+        i.checked_sub(1).and_then(|i| usize::try_from(i).ok()).and_then(|i| self.sets.get(i)).cloned().unwrap_or_default()
+    }
+
+    /// Give the encoded bytes (PNG or JPEG) of texture `key`, which the renderer decodes on its
+    /// worker and makes resident the first time a draw reads it.
+    pub fn texture_source(&mut self, key: TextureKey, bytes: Arc<Vec<u8>>) {
+        self.sources.insert(key, bytes);
+    }
+
+    /// The textures given bytes by [`Self::texture_source`].
+    pub fn texture_sources(&self) -> &HashMap<TextureKey, Arc<Vec<u8>>> {
+        &self.sources
+    }
+
+    /// Every texture the scene's materials read, once: what a decoder is asked for.
+    pub fn textures(&self) -> Vec<TextureKey> {
+        let mut keys: Vec<TextureKey> = self.sets.iter().flatten().flatten().cloned().collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.draws.iter().all(|d| d.vertices.is_empty())
+    }
+
+    pub fn pages(&self) -> &[Page] {
+        &self.pages
+    }
+
+    pub fn draws(&self) -> &[GraphDraw] {
+        &self.draws
+    }
+
+    /// The IR of shape `key`.
+    pub fn shape(&self, key: &ShapeKey) -> Option<&Arc<Ir>> {
+        self.shapes.get(key)
+    }
+
+    /// Bytes per vertex of a draw.
+    pub fn stride(object: bool) -> usize {
+        if object { OBJECT_VERTEX_SIZE } else { VERTEX_SIZE }
+    }
+}
