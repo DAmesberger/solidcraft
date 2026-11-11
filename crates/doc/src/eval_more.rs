@@ -50,7 +50,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 }
                 let result = kernel::emboss_cylinder_at(&mb.body, at, &plane, &regions, if *deboss { -d } else { d })?;
                 if let Some(slot) = st.bodies.get_mut(i) {
-                    *slot = ModelBody::new(mb.name, result, mb.feature);
+                    *slot = ModelBody::new(mb.name.clone(), result, mb.feature);
                 }
                 return Ok(());
             }
