@@ -30,9 +30,29 @@ type JointFaces = (Body, kernel::Result<Arc<[kernel::FaceInfo]>>);
 /// were worked out on: by face, count each way and display quality.
 type IsoLines = (Option<Body>, std::collections::HashMap<(usize, usize, usize), Arc<[kernel::IsoLine]>>);
 
-/// A body in the evaluated model.
+/// A body in the evaluated model. The model keeps its state after every feature, and most
+/// features leave most bodies as they were: each state holds a body as a shared reference, and
+/// a body changed in one state is copied for it then ([`Arc::make_mut`]), so the states of a
+/// timeline of n bodies hold n bodies, not n copies of each.
 #[derive(Clone, Debug)]
-pub struct ModelBody {
+pub struct ModelBody(Arc<ModelBodyData>);
+
+impl std::ops::Deref for ModelBody {
+    type Target = ModelBodyData;
+    fn deref(&self) -> &ModelBodyData {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ModelBody {
+    fn deref_mut(&mut self) -> &mut ModelBodyData {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+/// What a [`ModelBody`] holds.
+#[derive(Clone, Debug)]
+pub struct ModelBodyData {
     pub name: String,
     /// Definition identity for a computed placement; never parsed from its display name.
     pub source_name: Option<String>,
@@ -141,8 +161,27 @@ impl ModelBody {
         Ok(left)
     }
 
+    /// Whether `a` and `b` are one body shared by two states.
+    pub(crate) fn ptr_eq(a: &ModelBody, b: &ModelBody) -> bool {
+        Arc::ptr_eq(&a.0, &b.0)
+    }
+
+    /// This body as it was before a feature: a copy only when it is not marked so already.
+    pub(crate) fn as_before(&self) -> ModelBody {
+        let mut b = self.clone();
+        b.set_before();
+        b
+    }
+
+    /// Marks the body as it was before a feature, without copying one marked so already.
+    pub(crate) fn set_before(&mut self) {
+        if !matches!(self.made, crate::lineage::Made::Before) {
+            self.made = crate::lineage::Made::Before;
+        }
+    }
+
     pub fn new(name: String, body: Body, feature: u64) -> Self {
-        ModelBody {
+        ModelBody(Arc::new(ModelBodyData {
             name,
             source_name: None,
             source_transform: crate::IDENTITY,
@@ -169,7 +208,7 @@ impl ModelBody {
             surface: Arc::new(OnceLock::new()),
             iso: Default::default(),
             cuts: Default::default(),
-        }
+        }))
     }
 
     /// A surface body: some shell does not close ([`Body::is_surface`]), worked out once.
@@ -878,6 +917,7 @@ impl ModelState {
             let olds: &[&ModelBody] = by_name.get(b.name.as_str()).map(Vec::as_slice).unwrap_or_default();
             if !matches!(f.kind, FeatureKind::BodyTransfer { .. })
                 && let Some(old) = olds.iter().find(|old| old.transferred)
+                && !(b.transferred && b.component == old.component && b.source_transform == old.source_transform)
             {
                 b.transferred = true;
                 b.component = old.component;
@@ -885,6 +925,8 @@ impl ModelState {
             }
             let kept = olds.iter().find(|x| x.body.same(&b.body));
             match kept {
+                // The body before the feature itself, shared: nothing to copy.
+                Some(x) if ModelBody::ptr_eq(b, x) => {}
                 Some(x) => {
                     b.key = x.key;
                     b.names = x.names.clone();
@@ -2551,7 +2593,7 @@ impl ModelState {
             .bodies
             .iter()
             .map(|b| match b {
-                Changed::Kept(j) => self.bodies.get(*j).map(|b| ModelBody { made: crate::lineage::Made::Before, ..b.clone() }),
+                Changed::Kept(j) => self.bodies.get(*j).map(ModelBody::as_before),
                 Changed::Made(b) => Some((**b).clone()),
             })
             .collect::<Option<Vec<_>>>()?;
@@ -2568,7 +2610,11 @@ impl ModelState {
         let mut found = 0;
         let mut bodies = Vec::with_capacity(self.bodies.len() + relative.made.len());
         for b in &self.bodies {
-            let before = || ModelBody { made: crate::lineage::Made::Before, ..b.clone() };
+            let before = || {
+                let mut kept = b.clone();
+                kept.made = crate::lineage::Made::Before;
+                kept
+            };
             match fates.get(b.name.as_str()) {
                 None => bodies.push(before()),
                 Some(fate) => {
@@ -3575,7 +3621,7 @@ impl Model {
                         next.reserved_body_names.clone_from(&reserved);
                         next.frame_bodies = Arc::downgrade(&self.frame_bodies);
                         for b in &mut next.bodies {
-                            b.made = crate::lineage::Made::Before;
+                            b.set_before();
                         }
                         (next, None)
                     }
@@ -3735,10 +3781,14 @@ impl Model {
                         }
                         for b in &mut next.bodies {
                             if !b.transferred {
-                                b.component = match doc.body_components.get(&b.name) {
+                                let component = match doc.body_components.get(&b.name) {
                                     Some(c) => *c,
                                     None => feature_component.get(&b.feature).copied().unwrap_or(0),
                                 };
+                                // Written only when it changes: a body shared with the state before stays shared.
+                                if b.component != component {
+                                    b.component = component;
+                                }
                             }
                         }
                         state = Arc::new(next);
