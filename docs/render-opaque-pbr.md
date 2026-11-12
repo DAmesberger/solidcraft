@@ -159,8 +159,10 @@ The static legacy `cpu-raster` descriptor retains its previous capabilities.
 No host gains HDRI, refraction, progressive/final rendering or EXR support.
 
 Look colors are decoded from sRGB8 to linear sRGB once in the shared document/scene
-adapter. PBR GPU vertices (48 bytes) carry linear reflectance and optical parameters;
-a coated body previews uncoated, as below. The CPU
+adapter. On the GPU, a PBR triangle is a built triangle whose palette entry names its
+material: the palette's material table holds the linear reflectance and optical
+parameters, so a material edit rewrites table rows and no vertex; a coated body
+previews uncoated, as below. The CPU
 rasterizer interpolates world position and normals with perspective correction;
 the GPU uses the corresponding fragment interpolation. Both use the original
 [opaque BRDF](render-surface.md) and three fixed neutral directional lights in Z-up
@@ -176,7 +178,8 @@ alpha blending, including when seen in front of an opaque PBR surface; that is n
 glass optics. Nondefault exposure/environment controls remain explicitly unsupported;
 the opt-in product look below lights only the real-time preview.
 
-Scene uploads keep the 128 MiB bound, accounting for the larger PBR vertices.
+Scene uploads keep the product preview's vertex bound (512 MiB on 64-bit desktop, 128 MiB
+on the web and 32-bit targets); PBR vertices are the size of other built vertices.
 CPU face-map admission accounts for retained optical descriptors. Existing immutable
 capture, ownership, cancellation, stale-result rejection and PNG export policies
 remain in effect. Invalid/nonfinite geometry or zero input normals refuse.

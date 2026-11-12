@@ -364,7 +364,7 @@ impl Catalog {
             };
             let reference = serde_json::json!({ "image_blob": blob });
             let bytes = reader.limited_blob(&reference, "image_blob", &texture.format, appearance_graph::limits::TEXTURE_BYTES)?;
-            if crate::design::digest(bytes) != *key {
+            if solidcraft_format::container::digest(bytes) != *key {
                 return Err(invalid("texture key does not match its blob hash"));
             }
             texture.data = solidcraft_doc::canvas::base64_encode(bytes);

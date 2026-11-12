@@ -53,6 +53,11 @@ fn formats(pending: &'static [Part]) -> Formats<'static> {
     Formats { hand: &JSON_STEPS, folded: FOLDED_23_25, pending }
 }
 
+/// A design family over [`formats`], for reading files back.
+fn family(pending: &'static [Part]) -> Family<'static> {
+    Family { formats: formats(pending), ..DESIGN }
+}
+
 fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
@@ -105,11 +110,12 @@ fn the_walk_stops_at_the_hand_written_formats() {
 #[test]
 fn reading_a_file_written_that_way_runs_the_steps_it_is_missing() {
     let f = formats(SAYING);
+    let family = family(SAYING);
     let open = |file: Value| {
         let mut v = file.clone();
         let (version, applied) = (version_of(v["format"].as_str().unwrap_or_default()).unwrap(), v.get("format_pending").cloned());
         let applied: Option<Vec<String>> = applied.map(|a| serde_json::from_value(a).unwrap());
-        f.upgrade("design", &mut v, version, applied.as_deref()).map(|()| v["trace"].clone())
+        family.upgrade(&mut v, version, applied.as_deref()).map(|()| v["trace"].clone())
     };
     // Written as 24: 25's step and every pending step run.
     assert_eq!(open(json!({"format": "solidcraft/24"})).unwrap(), json!(["c", "d"]));
@@ -126,7 +132,7 @@ fn reading_a_file_written_that_way_runs_the_steps_it_is_missing() {
         if !listed.is_empty() {
             written["format_pending"] = listed.clone().into();
         }
-        assert!(f.newer(n, (!listed.is_empty()).then_some(listed.as_slice())).is_none());
+        assert!(family.newer(n, (!listed.is_empty()).then_some(listed.as_slice())).is_none());
         assert!(open(written).is_ok());
     }
 }
