@@ -639,19 +639,18 @@ impl Document {
             .and_then(|n| first.checked_add(n))
             .ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
         let cname = self.components.iter().find(|c| c.id == component).map(|c| c.name.clone()).unwrap_or_default();
-        let mut next = self.occurrences.iter().filter(|o| o.component == component).count() + 1;
+        let placed = self.occurrences.iter().filter(|o| o.component == component).count();
         // Named as `add_occurrence` names each: the next number, or the first one no occurrence
         // has when that one is taken (#9738).
         let mut taken: std::collections::HashSet<String> = self.occurrences.iter().map(|o| o.name.clone()).collect();
         let ids: Vec<u64> = (first..after).collect();
         self.next_id = after;
         self.occurrences.reserve(transforms.len());
-        for (id, transform) in ids.iter().zip(transforms) {
+        for (next, (id, transform)) in (placed + 1..).zip(ids.iter().zip(transforms)) {
             let free = |k: &usize| !taken.contains(&format!("{cname}:{k}"));
             let k = std::iter::once(next).chain(1..).find(free).unwrap_or(next);
             let name = format!("{cname}:{k}");
             taken.insert(name.clone());
-            next += 1;
             self.occurrences.push(crate::Occurrence {
                 id: *id,
                 component,
