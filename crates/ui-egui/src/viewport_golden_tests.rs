@@ -282,6 +282,7 @@ fn frame(
         pv_slot: none(),
         pv_hide: false,
         view_proj,
+        turned_depth: None,
         back,
         size_px: [size[0] as f32, size[1] as f32],
         clip: [0.0; 4],

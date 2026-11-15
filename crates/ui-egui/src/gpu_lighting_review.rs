@@ -239,6 +239,7 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
         pv_slot: none(),
         pv_hide: false,
         view_proj: camera.view_proj(1.0, radius).to_f32(),
+        turned_depth: None,
         back: camera.back().to_f32(),
         size_px: [SIZE as f32; 2],
         clip: [0.0; 4],

@@ -405,11 +405,13 @@ impl Materials {
     }
 }
 
+#[derive(Clone)]
 struct PageGpu {
     buffer: wgpu::Buffer,
     words: Vec<u32>,
 }
 
+#[derive(Clone)]
 struct DrawGpu {
     shape: ShapeKey,
     /// See-through: drawn blended, after the opaque draws.
@@ -426,6 +428,7 @@ struct DrawGpu {
 }
 
 /// A material that instanced meshes are shaded with ([`GraphBatches::place`]).
+#[derive(Clone)]
 struct PlacedGpu {
     shape: ShapeKey,
     ir: Arc<Ir>,
@@ -435,7 +438,7 @@ struct PlacedGpu {
 }
 
 /// One scene's material surfaces on the GPU: its pages, its draws and their group-3 binds.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct GraphBatches {
     pages: Vec<PageGpu>,
     draws: Vec<DrawGpu>,

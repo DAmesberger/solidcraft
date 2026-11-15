@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use egui_wgpu::wgpu;
 pub use solidcraft_viewport_gpu::view::{
     AccessMap, BlockBuilder, BlockBytes, BlockTris, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuScene, GpuTarget, INSTANCE_SIZE, InstanceLook,
-    InstancedMesh, LINE_SIZE, LOD_PX, MAX_PALETTE, Material, MovingLayer, PBR_SIZE, Palette, PaletteIndex, PlannedBody, ProductLook, Renderer,
+    InstancedMesh, LINE_SIZE, LOD_PX, LitEdges, MAX_PALETTE, Material, MovingLayer, PBR_SIZE, Palette, PaletteIndex, PlannedBody, ProductLook, Renderer,
     SHARED_SIZE, SceneBlock, SceneSlot, SharedTris, StudioBake, StudioEnvironment, StudioPreset, TRI_SIZE, TriClass, UploadError, extend_runs,
-    level_for, lifted_width, placement_scale, runs_within, supersampled_size,
+    level_for, lifted_width, lit_line_style, placement_scale, runs_within, supersampled_size,
 };
 
 /// The part of a picture (as texture coordinates) that `rect` shows in a window `window`: the
@@ -814,6 +814,7 @@ pub(crate) fn render_realistic_offscreen(
             pv_slot: none(),
             pv_hide: false,
             view_proj,
+            turned_depth: None,
             back,
             size_px: [size as f32; 2],
             clip: [0.0; 4],
@@ -1261,6 +1262,9 @@ mod tests {
             app.home.open = false;
             app.preferences.ambient_occlusion = false;
             app.cpu_meshing = true;
+            // Refinement uses wall time and can change the scene between fixed-time frames.
+            // These fixtures check blur caching against stable display geometry.
+            app.viewport.suspend_refinement = true;
             app.cam.distance = 110.0;
             app.cam.target = solidcore_record::Vec3::new(20.0, 15.0, 12.5);
             let window = GpuTarget { format, depth: None, samples: 1, tess: false, oit: false };
@@ -1575,6 +1579,9 @@ mod tests {
                         "positive rendering fixtures must pass the shared app-aware capability policy"
                     );
                     assert_eq!(f.app.blur.radius(), radius);
+                    let panels = &f.app.universal_panel_frame().unwrap().layout.sections;
+                    assert!(!panels.is_empty());
+                    assert!(panels.iter().all(|panel| panel.paint_alpha == Some(180)), "the shared panels keep the ribbon's blur tint alpha");
                     assert!(f.app.blur.painted_frame().is_some(), "guard evidence comes from actual submitted visible marker work");
                     let source = f.pixels(true);
                     let resting = f.pixels(false);

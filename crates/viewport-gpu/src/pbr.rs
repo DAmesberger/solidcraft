@@ -458,6 +458,8 @@ struct PbrOut {
     @location(1) base: vec3<f32>,
     @location(2) wp: vec3<f32>,
     @location(3) parameters: vec3<f32>,
+    // 1: lit on both sides (the material's `two_sided`), 0 for one side.
+    @location(4) @interpolate(flat) two: f32,
 };
 
 // A PBR vertex (`pbr::VERTEX_SIZE`).
@@ -494,9 +496,7 @@ fn material_eval(c: MatCtx) -> Surface {
     return surface_from_opaque(c.base, c.parameters, vec3<f32>(0.0, 1.0, 1.0), sc_unit(c.frag.n));
 }
 
-// The palette's PBR materials: for palette row r, texel row 2r holds each entry's linear base
-// colour (and a PBR flag), row 2r + 1 its metallic fraction, roughness and dielectric IOR.
-@group(0) @binding(2) var pbr_materials: texture_2d<f32>;
+// `pbr_materials`, the palette's PBR materials, is declared in viewport.wgsl.
 
 // A placement of a shared smooth mesh whose palette entry names its material (the product
 // preview's instanced PBR parts): moved as `vs_tri_inst` moves it.
@@ -517,7 +517,9 @@ fn vs_pbr_inst(
     o.n = vec3<f32>(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n));
     o.base = textureLoad(pbr_materials, at, 0).xyz;
     o.wp = wp;
-    o.parameters = textureLoad(pbr_materials, at + vec2<u32>(0u, 1u), 0).xyz;
+    let optics = textureLoad(pbr_materials, at + vec2<u32>(0u, 1u), 0);
+    o.parameters = optics.xyz;
+    o.two = optics.w;
     return o;
 }
 
@@ -530,13 +532,17 @@ fn vs_pbr_palette(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @locatio
     o.n = n;
     o.base = textureLoad(pbr_materials, at, 0).xyz;
     o.wp = p;
-    o.parameters = textureLoad(pbr_materials, at + vec2<u32>(0u, 1u), 0).xyz;
+    let optics = textureLoad(pbr_materials, at + vec2<u32>(0u, 1u), 0);
+    o.parameters = optics.xyz;
+    o.two = optics.w;
     return o;
 }
 
 @fragment
 fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
-    let f = pbr_fragment(i.pos, i.wp, i.n);
+    var f = pbr_fragment(i.pos, i.wp, i.n);
+    // A two-sided material's back, seen, is lit as its front (an open sheet's other side).
+    if (i.two > 0.5 && dot(f.n, f.v) < 0.0) { f.n = -f.n; }
     return pbr_shade(material_eval(MatCtx(f, i.base, i.parameters)), f);
 }
 "#

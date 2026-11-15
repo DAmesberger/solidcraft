@@ -26,6 +26,7 @@ pub mod cutting;
 pub mod enclosing;
 pub mod local_operation;
 pub mod mirror;
+pub mod outer_shells;
 pub mod p1;
 pub mod p10;
 pub mod p2;
@@ -38,6 +39,8 @@ pub mod p8;
 pub mod p9;
 pub mod planar_section;
 pub mod sheet;
+pub mod side_extend;
+pub mod trim_extend;
 pub mod validation;
 pub mod vertex_fans;
 

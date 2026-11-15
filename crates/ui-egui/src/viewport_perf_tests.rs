@@ -107,6 +107,7 @@ fn viewport_frame_costs() {
                         pv_slot: none(),
                         pv_hide: false,
                         view_proj: proj.vp.to_f32(),
+                        turned_depth: Some(proj.vp.turned_depth_f32()),
                         back: proj.cam.back().to_f32(),
                         size_px: [SIZE[0] as f32, SIZE[1] as f32],
                         clip: [0.0; 4],
