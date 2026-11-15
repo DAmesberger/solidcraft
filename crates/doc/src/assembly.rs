@@ -652,7 +652,15 @@ impl Document {
             let name = format!("{cname}:{k}");
             taken.insert(name.clone());
             next += 1;
-            self.occurrences.push(crate::Occurrence { id: *id, component, parent, name, transform: *transform, grounded: false, expressed_moves: Vec::new() });
+            self.occurrences.push(crate::Occurrence {
+                id: *id,
+                component,
+                parent,
+                name,
+                transform: *transform,
+                grounded: false,
+                expressed_moves: Vec::new(),
+            });
         }
         Ok(ids)
     }

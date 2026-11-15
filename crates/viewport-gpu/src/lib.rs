@@ -21,8 +21,8 @@ use solidcore_tess::{EvalCurve, EvalSurface};
 
 pub mod capture;
 pub mod concurrent;
-pub mod material;
 mod environment;
+pub mod material;
 pub mod pbr;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod select;
