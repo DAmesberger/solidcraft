@@ -250,6 +250,14 @@ fn draw(t: &Target, format: wgpu::TextureFormat, studio: Option<StudioPreset>, c
     None
 }
 
+/// The modelling view's ground shadow, which the window draws with the sketch scene
+/// (`viewport::build_sketch_scene`): that scene's shadow only, without its grid, origin or
+/// sketches.
+fn ground_shadow_slot(app: &SolveApp, proj: &super::Proj) -> crate::gpu::SceneSlot {
+    let sketch = super::build_sketch_scene(app, proj);
+    Arc::new(Mutex::new(Some(GpuScene { shadow: sketch.shadow, palette: sketch.palette, ..Default::default() })))
+}
+
 /// A frame of `scene` with the window's fixed fields.
 #[allow(clippy::too_many_arguments)]
 fn frame(
@@ -471,11 +479,14 @@ fn golden_frames() {
                 ..l
             });
             let slot: crate::gpu::SceneSlot = Arc::new(Mutex::new(Some(build_scene(&app).merged())));
+            let ground = ground_shadow_slot(&app, &proj);
             let outline = matches!(app.ui.visual_style, 0 | 3);
             let (vp, back) = (proj.vp.to_f32(), proj.cam.back().to_f32());
             let ao = super::ao_radius(&app);
-            let model = draw(&target, wgpu::TextureFormat::Rgba8UnormSrgb, product.map(|l| l.studio), clear, || {
-                frame(&slot, product, None, false, vp, back, eye, size, ao, ssaa, outline)
+            let model = draw(&target, wgpu::TextureFormat::Rgba8UnormSrgb, product.map(|l| l.studio), clear, || Frame {
+                sketch_key: 1,
+                sketch_slot: ground.clone(),
+                ..frame(&slot, product, None, false, vp, back, eye, size, ao, ssaa, outline)
             });
             // The Render preview, as `render_workspace::paint_product` draws it (no supersampling
             // and no occlusion there).
@@ -535,4 +546,63 @@ fn golden_frames() {
     if env("GOLDEN_CHECK").is_some() {
         assert!(failures.is_empty(), "{} failures of the §5.9 bar (listed above)", failures.len());
     }
+}
+
+/// The Realistic modelling view draws the ground shadow under the parts, as the Standard one
+/// does: the window draws it with the sketch scene, which the Realistic look keeps. Measured as
+/// the window draws the frame, offscreen: with the shadow, floor pixels next to the box are darker
+/// than without it, and nothing is lighter. (The golden frames drew no sketch scene after the
+/// shadow moved there, upstream #2889, and so lost it.)
+#[test]
+fn the_realistic_model_view_draws_the_ground_shadow() {
+    let Some((_, device, queue)) = crate::gpu::offscreen_device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let size = [320, 200];
+    let target = Target { device, queue, size };
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.set_origin_shown(false);
+    app.ui.show_grid = false;
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap_or_else(|e| panic!("{e}"));
+    app.viewport.gpu = Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.view_look = crate::view_look::REALISTIC;
+    app.fit_view();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
+    let proj = super::projection(&app, rect);
+    let e = proj.cam.eye().to_f32();
+    let eye = [e[0], e[1], e[2], if proj.cam.fov > 0.0 { 1.0 } else { 0.0 }];
+    let studio = crate::studio_library::builtin_preset("product");
+    let look = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app))
+        .map(|l| ProductLook { studio: studio.unwrap_or(l.studio), ..l });
+    assert!(look.is_some(), "the Realistic look");
+    let clear = {
+        let [r, g, b] = BACKGROUND.map(linear);
+        wgpu::Color { r, g, b, a: 1.0 }
+    };
+    let (vp, back) = (proj.vp.to_f32(), proj.cam.back().to_f32());
+    let mut shot = |shadow: bool| {
+        app.ui.ground_shadow = shadow;
+        let slot: crate::gpu::SceneSlot = Arc::new(Mutex::new(Some(build_scene(&app).merged())));
+        let ground = ground_shadow_slot(&app, &proj);
+        draw(&target, wgpu::TextureFormat::Rgba8UnormSrgb, look.map(|l| l.studio), clear, || Frame {
+            sketch_key: 1,
+            sketch_slot: ground.clone(),
+            ..frame(&slot, look, None, false, vp, back, eye, size, 0.0, 1.0, true)
+        })
+        .unwrap_or_else(|| panic!("frame drawn"))
+    };
+    let (with, without) = (shot(true), shot(false));
+    let (mut darker, mut lighter) = (0usize, 0usize);
+    for (a, b) in with.chunks_exact(4).zip(without.chunks_exact(4)) {
+        let d = luma(a) - luma(b);
+        if d < -3.0 {
+            darker += 1;
+        } else if d > 3.0 {
+            lighter += 1;
+        }
+    }
+    let pixels = (size[0] * size[1]) as usize;
+    assert!(darker * 50 > pixels, "the shadow darkens the floor: {darker} of {pixels} pixels");
+    assert_eq!(lighter, 0, "and lightens nothing");
 }
