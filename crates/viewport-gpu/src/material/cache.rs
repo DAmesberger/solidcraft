@@ -1,8 +1,9 @@
 //! Shape pipelines and the per-scene GPU state of material graphs (docs/material-graph.md §5.2).
 //!
-//! A pipeline per shape, made from naga-validated generated WGSL, at most [`COMPILES_PER_FRAME`]
-//! new ones a frame and none once the frame has taken [`FRAME_BUDGET_MS`]; at most
-//! [`CACHE_SHAPES`] kept, least recently drawn out first, never one drawn this frame. Until its
+//! A pipeline per shape, made from naga-validated generated WGSL: on a worker thread where the
+//! device makes pipelines from any thread (`compile`), else on the frame's thread, at most
+//! [`COMPILES_PER_FRAME`] new ones a frame and none once the frame has taken [`FRAME_BUDGET_MS`];
+//! at most [`CACHE_SHAPES`] kept, least recently drawn out first, never one drawn this frame. Until its
 //! shape's pipeline exists (or when it failed, or the cache is full of shapes in use), a material
 //! draws its base response through the constant-graph pipeline: a new material never stalls a
 //! frame. A value edit rewrites only the page words that changed; nothing recompiles.
@@ -12,6 +13,7 @@ use std::sync::Arc;
 
 use solidcraft_viewport::material_graph::ir::{Ir, ShapeKey};
 
+use super::compile::{Compiler, Done, Job, PipelineSpec};
 use super::scene::{GraphMaterial, GraphScene, TextureSet};
 use super::textures::ResidentTextures;
 use super::{CACHE_SHAPES, COMPILES_PER_FRAME, FRAME_BUDGET_MS, OBJECT_VERTEX_SIZE, PAGE_BYTES, VERTEX_SIZE};
@@ -21,7 +23,7 @@ use crate::view::ibl::{StudioPreset, Studios};
 const FAILED_SHAPES: usize = 4096;
 
 /// What the material-graph drawing did in the last frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MaterialStats {
     /// Shape pipelines created this frame.
     pub compiled: u32,
@@ -33,6 +35,9 @@ pub struct MaterialStats {
     pub pending: u32,
     /// Draws this frame that used the base-response fallback.
     pub fallback_draws: u32,
+    /// The longest pipeline compile that finished this frame (ms; made on the worker where the
+    /// device allows, else on the frame's thread).
+    pub compile_ms: f64,
 }
 
 /// The material vertex layouts: [`VERTEX_SIZE`] and, for object-space shapes, [`OBJECT_VERTEX_SIZE`].
@@ -79,11 +84,16 @@ enum Pipeline {
 
 /// The renderer's material pipelines.
 pub(crate) struct Materials {
-    layout: wgpu::PipelineLayout,
+    /// The device, layout and target the pipelines are made for.
+    spec: PipelineSpec,
     group3: wgpu::BindGroupLayout,
-    format: wgpu::TextureFormat,
-    samples: u32,
-    depth: Option<wgpu::DepthStencilState>,
+    /// Makes pipelines on a worker thread where the device allows (`compile`); started on first
+    /// use, unless `threaded` is false.
+    compiler: Option<Compiler>,
+    /// Jobs sent to the worker and not finished.
+    in_flight: HashSet<Job>,
+    /// Use the worker where the device allows (tests that count compiles a frame turn it off).
+    pub(crate) threaded: bool,
     shapes: HashMap<(ShapeKey, Variant), Pipeline>,
     failed: HashSet<ShapeKey>,
     /// The constant-graph pipelines (plain and object vertices), made when a scene first has
@@ -150,11 +160,11 @@ impl Materials {
             sampler("sc_material_mirror", wgpu::AddressMode::MirrorRepeat),
         ];
         Materials {
-            layout,
+            spec: PipelineSpec { device: device.clone(), layout, format, samples, depth },
             group3,
-            format,
-            samples,
-            depth,
+            compiler: None,
+            in_flight: HashSet::new(),
+            threaded: !cfg!(test),
             shapes: HashMap::new(),
             failed: HashSet::new(),
             fallback: HashMap::new(),
@@ -181,49 +191,7 @@ impl Materials {
 
     /// Shapes of the last frame's scene are still compiling: a frame drawn now would differ.
     pub(crate) fn wants_redraw(&self) -> bool {
-        self.stats.pending > 0 || self.decoding > 0
-    }
-
-    fn pipeline(&self, device: &wgpu::Device, label: &str, source: String, object: bool, variant: Variant) -> wgpu::RenderPipeline {
-        let (cull, blend) = match variant {
-            Variant::Opaque | Variant::Placed => (None, None),
-            Variant::Far => (Some(wgpu::Face::Front), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
-            Variant::Near => (Some(wgpu::Face::Back), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
-        };
-        let module =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
-        let plain = [Some(vertex_layout(object))];
-        let placed = [Some(crate::view::shared_layout()), Some(crate::view::instance_layout()), Some(placed_record_layout())];
-        let (entry, buffers): (&str, &[Option<wgpu::VertexBufferLayout<'_>>]) =
-            if variant == Variant::Placed { ("vs_mat_placed", &placed) } else { (vertex_entry(object), &plain) };
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&self.layout),
-            vertex: wgpu::VertexState { module: &module, entry_point: Some(entry), buffers, compilation_options: Default::default() },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: cull, ..Default::default() },
-            depth_stencil: self.depth.clone(),
-            multisample: wgpu::MultisampleState { count: self.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_mat"),
-                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend, write_mask: wgpu::ColorWrites::ALL })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        })
-    }
-
-    /// Generate, validate and build a shape's pipeline; `None` (logged once) when it fails.
-    fn compile(&self, device: &wgpu::Device, ir: &Ir, variant: Variant) -> Option<wgpu::RenderPipeline> {
-        let source = match super::shape_source(ir).and_then(|s| super::validate(&s).map(|_| s)) {
-            Ok(s) => s,
-            Err(e) => {
-                log::warn!("material graph shape {:02x?}: drawn as its base response: {e}", &ir.shape.0[..4]);
-                return None;
-            }
-        };
-        Some(self.pipeline(device, "sc_material_shape", source, ir.object_space, variant))
+        self.stats.pending > 0 || self.decoding > 0 || !self.in_flight.is_empty()
     }
 
     /// Ready this frame's pipelines for `scene`: the fallback when it first has material surfaces,
@@ -263,19 +231,31 @@ impl Materials {
             );
             self.blank = Some(texture.create_view(&Default::default()));
         }
-        // The constant-graph pipelines a draw may fall back to, made the first time one is needed.
-        for draw in &scene.draws {
-            for variant in Variant::of(draw.blended && !self.blends_off()) {
-                if !self.fallback.contains_key(&(draw.object, *variant)) {
-                    let pipeline = self.pipeline(device, "sc_material_base", super::fallback_source(), draw.object, *variant);
-                    self.fallback.insert((draw.object, *variant), pipeline);
-                }
-            }
+        if self.threaded && self.compiler.is_none() {
+            self.compiler = Compiler::start(&self.spec);
+            self.threaded = self.compiler.is_some();
         }
-        for p in scene.placed.values() {
-            if !self.fallback.contains_key(&(p.object, Variant::Placed)) {
-                let pipeline = self.pipeline(device, "sc_material_base", super::fallback_source(), p.object, Variant::Placed);
-                self.fallback.insert((p.object, Variant::Placed), pipeline);
+        self.take_finished(frame);
+        // The constant-graph pipelines a draw may fall back to, made the first time one is needed.
+        let fallbacks: Vec<(bool, Variant)> = scene
+            .draws
+            .iter()
+            .flat_map(|d| Variant::of(d.blended && !self.blends_off()).iter().map(move |v| (d.object, *v)))
+            .chain(scene.placed.values().map(|p| (p.object, Variant::Placed)))
+            .collect();
+        for (object, variant) in fallbacks {
+            let job = Job::Fallback(object, variant);
+            if self.fallback.contains_key(&(object, variant)) || self.in_flight.contains(&job) {
+                continue;
+            }
+            match &self.compiler {
+                Some(c) if c.send(job, None) => {
+                    self.in_flight.insert(job);
+                }
+                _ => {
+                    let pipeline = self.spec.fallback(object, variant);
+                    self.fallback.insert((object, variant), pipeline);
+                }
             }
         }
         let mut wanted: Vec<((ShapeKey, Variant), &Arc<Ir>)> = Vec::new();
@@ -302,6 +282,24 @@ impl Materials {
             if self.failed.contains(&key.0) {
                 continue;
             }
+            let job = Job::Shape(key.0, key.1);
+            if self.in_flight.contains(&job) {
+                pending += 1;
+                continue;
+            }
+            if self.compiler.is_some() {
+                // Off the frame: queued while the cache has room for it (counting those queued).
+                let queued = self.in_flight.iter().filter(|j| matches!(j, Job::Shape(..))).count();
+                if self.shapes.len() + queued >= self.capacity.max(1) && !self.make_room(frame) {
+                    pending += 1;
+                    continue;
+                }
+                if self.compiler.as_ref().is_some_and(|c| c.send(job, Some(ir.clone()))) {
+                    self.in_flight.insert(job);
+                }
+                pending += 1;
+                continue;
+            }
             let over_time = {
                 #[cfg(test)]
                 let skip = self.no_time_budget;
@@ -313,7 +311,8 @@ impl Materials {
                 pending += 1;
                 continue;
             }
-            match self.compile(device, ir, key.1) {
+            let t = web_time::Instant::now();
+            match self.spec.shape(ir, key.1) {
                 Some(pipeline) => {
                     self.shapes.insert(key, Pipeline::Ready { pipeline, used: frame });
                 }
@@ -324,11 +323,60 @@ impl Materials {
                     self.failed.insert(key.0);
                 }
             }
+            self.stats.compile_ms = self.stats.compile_ms.max(t.elapsed().as_secs_f64() * 1e3);
             self.stats.compiled += 1;
         }
         self.stats.pending = pending;
         self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
         self.stats.failed = u32::try_from(self.failed.len()).unwrap_or(u32::MAX);
+    }
+
+    /// Keep one finished job of the worker: a shape (drawn from frame `frame` on), a failed
+    /// shape or a fallback.
+    fn keep(&mut self, done: Done, frame: u64) {
+        self.in_flight.remove(&done.job);
+        self.stats.compile_ms = self.stats.compile_ms.max(done.ms);
+        match (done.job, done.pipeline) {
+            (Job::Shape(shape, variant), Some(pipeline)) => {
+                self.shapes.insert((shape, variant), Pipeline::Ready { pipeline, used: frame });
+                self.stats.compiled += 1;
+            }
+            (Job::Shape(shape, _), None) => {
+                if self.failed.len() >= FAILED_SHAPES {
+                    self.failed.clear();
+                }
+                self.failed.insert(shape);
+                self.stats.compiled += 1;
+            }
+            (Job::Fallback(object, variant), Some(pipeline)) => {
+                self.fallback.insert((object, variant), pipeline);
+            }
+            (Job::Fallback(..), None) => {}
+        }
+    }
+
+    /// Take the worker's finished pipelines.
+    fn take_finished(&mut self, frame: u64) {
+        let finished = self.compiler.as_ref().map(Compiler::finished).unwrap_or_default();
+        for done in finished {
+            self.keep(done, frame);
+        }
+    }
+
+    /// Wait until the worker has finished every pipeline queued so far, or until `timeout` has
+    /// passed: the next frame draws what it finished. For renders that must not show a base
+    /// response, such as an offscreen image.
+    pub(crate) fn wait(&self, timeout: std::time::Duration) {
+        if let Some(c) = &self.compiler {
+            c.wait(self.in_flight.len(), timeout);
+        }
+    }
+
+    /// Wait for the worker's pipelines and keep them now (tests).
+    #[cfg(test)]
+    pub(crate) fn settle(&mut self) {
+        self.wait(std::time::Duration::from_secs(60));
+        self.take_finished(self.frame);
     }
 
     /// Ask the decoder for the scene's textures that are neither resident nor decoding, and make

@@ -4419,6 +4419,13 @@ impl Renderer {
         self.materials.wants_redraw()
     }
 
+    /// Wait, at most `timeout`, for the material-graph pipelines that compile off the frame
+    /// (docs/material-graph.md §5.2): the next frame draws them. For a client that renders until
+    /// [`Self::wants_redraw`] is false and must not spin meanwhile, such as an offscreen image.
+    pub fn wait_for_materials(&self, timeout: std::time::Duration) {
+        self.materials.wait(timeout);
+    }
+
     /// What this device keeps of material textures (docs/material-graph.md §4.3): what a
     /// [`crate::material::TextureDecoder`] for it prepares to.
     pub fn material_texture_policy(&self) -> crate::material::ResidentPolicy {

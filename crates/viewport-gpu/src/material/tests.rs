@@ -1449,3 +1449,73 @@ fn brushed_sphere_in_the_viewport() {
         stats(&plastic)
     );
 }
+
+/// A graph of a shape no driver has seen: a chain of `n` additions on a noise (so its code, and
+/// the driver's shader cache key, are new).
+fn unique_shape(n: usize) -> Lowered {
+    let mut nodes = vec![
+        json!({"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}}),
+        json!({"id": "a0", "kind": "pattern.noise", "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 2}}),
+    ];
+    for i in 1..=n {
+        nodes.push(json!({"id": format!("a{i}"), "kind": if i % 3 == 0 { "multiply" } else { "add" }, "inputs": {"a": {"from": format!("a{}", i - 1)}, "b": 0.01}}));
+    }
+    nodes.push(json!({"id": "c", "kind": "convert.float_to_color3", "inputs": {"in": {"from": format!("a{n}")}}}));
+    nodes.push(json!({"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"from": "c"}}}));
+    lowered(&graph_of(json!({"name": "unique", "nodes": nodes, "output": "s"}))).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A new shape never stalls a frame where the device makes pipelines from any thread: its
+/// pipeline is made on the worker while frames draw its base response, and the frame after it
+/// is finished draws the shape itself. The frame drawn while it compiles is measured against
+/// the compile, and against the same work on the frame's thread (`threaded` off).
+#[test]
+fn a_new_shape_compiles_off_the_frame() {
+    let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
+    let mut r = renderer(&device, &queue);
+    r.materials_mut().threaded = true;
+    // The worker and the fallback first (the fallback is made once per renderer).
+    let mut warm = GpuScene::default();
+    add_square(&mut warm, &fixture(FIXTURES[4].1), 0, 1);
+    render_frame(&mut r, &device, &queue, &realistic(warm.clone(), 1, 1.0), true);
+    r.materials_mut().settle();
+    render_frame(&mut r, &device, &queue, &realistic(warm, 2, 1.0), true);
+    // A chain length no other run has used recently, so no driver cache holds the shape.
+    let micros = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_micros());
+    let n = 20 + ((micros ^ u128::from(std::process::id())) % 60) as usize;
+    let mut scene = GpuScene::default();
+    add_square(&mut scene, &unique_shape(n), 0, 1);
+    let t = web_time::Instant::now();
+    render_frame(&mut r, &device, &queue, &realistic(scene.clone(), 3, 1.0), true);
+    let frame_ms = t.elapsed().as_secs_f64() * 1e3;
+    let during = r.material_stats();
+    if !r.materials_mut().threaded {
+        eprintln!("this device makes pipelines on the frame's thread only: nothing to measure");
+        return;
+    }
+    assert_eq!(during.fallback_draws, 1, "the base response draws while the shape compiles: {during:?}");
+    assert!(r.wants_redraw(), "and the frame asks for another");
+    r.materials_mut().settle();
+    let worker_ms = r.material_stats().compile_ms;
+    render_frame(&mut r, &device, &queue, &realistic(scene, 4, 1.0), true);
+    let after = r.material_stats();
+    assert_eq!(after.fallback_draws, 0, "then the shape draws itself: {after:?}");
+    // The same kind of new shape on the frame's thread.
+    let mut s = renderer(&device, &queue);
+    let mut warm = GpuScene::default();
+    add_square(&mut warm, &fixture(FIXTURES[4].1), 0, 1);
+    render_frame(&mut s, &device, &queue, &realistic(warm, 1, 1.0), true);
+    let mut scene = GpuScene::default();
+    add_square(&mut scene, &unique_shape(n + 41), 0, 1);
+    let t = web_time::Instant::now();
+    render_frame(&mut s, &device, &queue, &realistic(scene, 2, 1.0), true);
+    let sync_ms = t.elapsed().as_secs_f64() * 1e3;
+    let sync = s.material_stats();
+    eprintln!(
+        "a new shape ({n}-node chain): frame while it compiles off the frame {frame_ms:.1} ms (its compile {:.1} ms on the worker); \
+         the same on the frame's thread {sync_ms:.1} ms (compile {:.1} ms)",
+        worker_ms.max(after.compile_ms).max(during.compile_ms),
+        sync.compile_ms
+    );
+    assert!(frame_ms < sync_ms, "the frame does not wait for the compile: {frame_ms:.1} ms against {sync_ms:.1} ms");
+}

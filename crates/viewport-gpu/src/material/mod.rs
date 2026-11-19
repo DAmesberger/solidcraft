@@ -9,14 +9,16 @@
 //!   response, then its slots) and the per-draw vertices, which carry the record's vec4 offset.
 //! - [`textures`]: the decode worker, the resident size, GPU mips by render passes and the
 //!   sampling the raster target's `image` calls.
-//! - [`cache`]: pipelines by shape key (at most [`CACHE_SHAPES`], LRU), compiled within a per-frame
-//!   budget; a shape not compiled yet draws its base response through the always-built fallback.
+//! - [`cache`]: pipelines by shape key (at most [`CACHE_SHAPES`], LRU), made on a worker thread
+//!   where the device allows (`compile`), else within a per-frame budget; a shape not compiled
+//!   yet draws its base response through the constant-graph fallback.
 //!
 //! Group 3 of these pipelines is "studio + material" (`view::ibl::material_layout`), so the four
 //! bind groups WebGL2 allows stay enough.
 
 pub(crate) mod cache;
 pub mod codegen;
+mod compile;
 pub mod scene;
 pub mod textures;
 

@@ -761,12 +761,14 @@ golden GPU frames and the test-only reference;
   meshes are already in object space. Today's 48-byte `pbr_tri` vertices remain for
   embedding clients and `pbr` looks. The 64-byte detail vertices stay in the fork only,
   until track H; they are not in the package.
-- **Cache:** at most 64 live pipelines (LRU) per renderer. New shapes compile within a
-  per-frame budget (target: at most two new pipelines a frame, and none in a frame already
-  over 8 ms). Until a shape's pipeline exists, its materials draw their **base response** through the
-  constant-graph pipeline, a GPU fallback that is always compiled. A new material never
-  stalls a frame. On native, `wgpu` pipeline
-  creation is still synchronous on the device thread; the budget bounds it.
+- **Cache:** at most 64 live pipelines (LRU) per renderer. Where the device makes pipelines
+  from any thread (Vulkan, Metal, Direct3D 12 with FXC), one worker thread generates,
+  validates and builds new shapes' pipelines, and the constant-graph pipeline too, and the
+  frame takes what is finished. Elsewhere (OpenGL, WebGL2 and DXC) new shapes compile on the
+  frame's thread within a per-frame budget (target: at most two new pipelines a frame, and
+  none in a frame already over 8 ms). Until a shape's pipeline exists, its materials draw
+  their **base response** through the constant-graph pipeline; until that exists, the face
+  shows as the scene draws it underneath. A new material never stalls a frame on native.
 
 ### 5.3 WebGL2 path
 
