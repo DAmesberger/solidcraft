@@ -514,12 +514,12 @@ fn pbr_square(surface: solidcraft_viewport::surface::OpaqueSurface) -> GpuScene 
 
 /// A frame in the realistic look: the product look with its studio, and occlusion on.
 fn realistic(scene: GpuScene, key: u64, units_per_mm: f32) -> Frame {
-    Frame { key, product_look: Some(ProductLook::default()), ao_radius: 2.0, units_per_mm, ..test_frame(scene, 1.0) }
+    Frame { key, product_look: Some(ProductLook::product()), ao_radius: 2.0, units_per_mm, ..test_frame(scene, 1.0) }
 }
 
 fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
     let mut r = Renderer::new(device, target(device), None);
-    r.set_studio_environment(device, queue, &studio(StudioPreset::default()));
+    r.set_studio_environment(device, queue, &studio(StudioPreset::product()));
     r.materials_mut().no_time_budget = true;
     r
 }

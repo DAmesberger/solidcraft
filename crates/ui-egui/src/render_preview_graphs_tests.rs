@@ -1,8 +1,8 @@
 //! The Render preview's Realistic look draws graph and `pbr` looks through the material stream.
 
 use serde_json::json;
-use solidcraft_engine::Session;
 use solidcore_record::Vec3;
+use solidcraft_engine::Session;
 
 use crate::{Services, SolveApp};
 
@@ -46,7 +46,8 @@ fn checker(app: &mut SolveApp) {
         "output": "s"}}))
     .unwrap_or_else(|e| panic!("{e}"));
     let body = bodies(app).first().cloned().unwrap_or_default();
-    app.run("appearance.assign", json!({"bodies": [body], "graph": "checker", "values": {"print": {"texture": sha}}})).unwrap_or_else(|e| panic!("{e}"));
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "checker", "values": {"print": {"texture": sha}}}))
+        .unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// Bytes of the preview scene's own triangles (its blocks and any loose streams).
@@ -64,8 +65,11 @@ fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
         app.run("solid.box", json!({"corner": [x, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap_or_else(|e| panic!("{e}"));
     }
     glass(&mut app);
-    app.run("appearance.graph.create", json!({"id": "plain", "name": "Plain", "graph": {"name": "Plain", "nodes": [
-        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.6, 0.3, 0.2], "base_metalness": 1}}], "output": "s"}}))
+    app.run(
+        "appearance.graph.create",
+        json!({"id": "plain", "name": "Plain", "graph": {"name": "Plain", "nodes": [
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.6, 0.3, 0.2], "base_metalness": 1}}], "output": "s"}}),
+    )
     .unwrap_or_else(|e| panic!("{e}"));
     let names = bodies(&app);
     app.run("appearance.assign", json!({"bodies": [names[0]], "graph": "plain"})).unwrap_or_else(|e| panic!("{e}"));
@@ -80,7 +84,11 @@ fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
     let (_, realistic, _) = crate::render_workspace::preview_scene_for_evidence(&app).unwrap_or_else(|e| panic!("{e}"));
     let draws = realistic.graphs.draws();
     let vertices = |blended: bool| -> usize {
-        draws.iter().filter(|d| d.blended == blended).map(|d| d.vertices.len() / solidcraft_viewport_gpu::material::GraphScene::stride(d.object)).sum()
+        draws
+            .iter()
+            .filter(|d| d.blended == blended)
+            .map(|d| d.vertices.len() / solidcraft_viewport_gpu::material::GraphScene::stride(d.object))
+            .sum()
     };
     assert_eq!(vertices(false), 3 * (triangles[0] + triangles[1]), "the graph and the pbr body, opaque, over their faces");
     assert_eq!(vertices(true), 3 * triangles[2], "the see-through graph, blended");
@@ -98,7 +106,8 @@ fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
 /// projection: its view-projection, toward-eye direction and eye.
 fn top_view(app: &mut SolveApp, size: u32) -> (crate::viewport::Proj, [f32; 3], [f32; 4]) {
     let (yaw, pitch) = solidcraft_viewport::StandardView::Iso.angles();
-    app.cam = solidcraft_viewport::Camera { target: Vec3::new(20.0, 15.0, 10.0), yaw, pitch, roll: 0.0, distance: 120.0, fov: 0.0, ..Default::default() };
+    app.cam =
+        solidcraft_viewport::Camera { target: Vec3::new(20.0, 15.0, 10.0), yaw, pitch, roll: 0.0, distance: 120.0, fov: 0.0, ..Default::default() };
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size as f32, size as f32));
     let proj = crate::viewport::projection(app, rect);
     let back = proj.cam.back().to_f32();

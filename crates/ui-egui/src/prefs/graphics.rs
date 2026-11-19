@@ -372,6 +372,7 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                 sync_surface_analysis(app);
             }
         });
+        super::studios::section(app, ui);
         ui_kit::settings_section(ui, "computer", app.tr("prefs.general.this_computer"), |ui| {
             computer_card(ui, |ui| {
                 computer_header(app, ui);

@@ -86,20 +86,22 @@ fn presentation_editor(app: &mut SolveApp, ui: &mut egui::Ui) {
     let presentation_before = super::ribbon::presentation(app);
     let title = app.tr("render.children.tone").to_string();
     ui_kit::section(ui, "render_effects_tone", &title, true, |ui| {
-        let mut selected = usize::from(app.render_workspace.view.studio.tone_map == solidcraft_engine::render::job::ToneMap::AcesFitted);
+        use solidcraft_engine::render::job::ToneMap;
+        const TONES: [ToneMap; 3] = [ToneMap::Reinhard, ToneMap::AcesFitted, ToneMap::PbrNeutral];
+        let mut selected = TONES.iter().position(|t| *t == app.render_workspace.view.studio.tone_map).unwrap_or(0);
         let response = ui.scope(|ui| {
             ui_kit::row(ui, app.tr("render.studio_tone_map"), |ui| {
                 if ui_kit::segmented(
                     ui,
                     &mut selected,
-                    &["Reinhard", "ACES fitted"],
-                    ui_kit::Segments { compact: true, targets: &["render:tone:reinhard", "render:tone:aces"], ..Default::default() },
+                    &["Reinhard", "ACES fitted", "PBR Neutral"],
+                    ui_kit::Segments {
+                        compact: true,
+                        targets: &["render:tone:reinhard", "render:tone:aces", "render:tone:pbr_neutral"],
+                        ..Default::default()
+                    },
                 ) {
-                    app.render_workspace.view.studio.tone_map = if selected == 0 {
-                        solidcraft_engine::render::job::ToneMap::Reinhard
-                    } else {
-                        solidcraft_engine::render::job::ToneMap::AcesFitted
-                    };
+                    app.render_workspace.view.studio.tone_map = TONES.get(selected).copied().unwrap_or_default();
                 }
             });
         });

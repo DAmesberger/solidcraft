@@ -312,6 +312,34 @@ pub struct GpuJob {
     pub environment: Option<SkyEnvironment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hdr: Option<GpuHdrEnvironment>,
+    /// A studio of the studio library lighting the job by its rig (the Realistic view's lights and
+    /// cyclorama), in place of `lighting`, `environment` and `hdr`
+    /// (`format/pending/path-realistic-studio.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub studio: Option<StudioChoice>,
+}
+
+/// The studio a GPU path setup is lit by: a studio library id (a user studio's record is kept in
+/// the design, `RenderSettings::studios`, so the setup renders the same elsewhere), turned about
+/// +Z by `rotation_rad`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StudioChoice {
+    pub id: String,
+    #[serde(default)]
+    pub rotation_rad: f64,
+}
+
+impl StudioChoice {
+    pub fn validate(&self) -> Result<()> {
+        if !solidcraft_viewport::studio::valid_id(&self.id) {
+            return Err(DocError::Invalid("a studio id is 1 to 128 ASCII letters, digits, hyphens or underscores".into()));
+        }
+        if !self.rotation_rad.is_finite() || self.rotation_rad.abs() > 1e6 {
+            return Err(DocError::Invalid("studio rotation must be finite within +/-1000000 radians".into()));
+        }
+        Ok(())
+    }
 }
 
 impl Default for GpuJob {
@@ -342,6 +370,7 @@ impl Default for GpuJob {
             lighting: options.lighting,
             environment: None,
             hdr: None,
+            studio: None,
         }
     }
 }
@@ -370,6 +399,12 @@ impl GpuJob {
         }
         if let Some(environment) = self.environment {
             environment.validate()?;
+        }
+        if let Some(studio) = &self.studio {
+            studio.validate()?;
+            if self.environment.is_some() || self.hdr.is_some() || self.lighting.is_some() {
+                return Err(DocError::Invalid("a studio replaces saved lighting and an environment; choose one".into()));
+            }
         }
         let options = JobOptions {
             texture_filtering: self.texture_filtering,

@@ -14,6 +14,7 @@ pub(super) fn catalog(kind: &str) -> Option<&'static str> {
         "scenes" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/catalog/scene-presets.json"))),
         "selene_appearances" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/selene/materials/appearance-pack.json"))),
         "selene_shots" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/selene/scenes/shots.json"))),
+        "studios" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/catalog/studios.json"))),
         "surface_manifest" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/starter/materials/manifest.json"))),
         "surfaces" => Some(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/render/starter/materials/source/recipes.json"))),
         _ => None,

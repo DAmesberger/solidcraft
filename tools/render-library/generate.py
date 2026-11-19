@@ -23,6 +23,7 @@ CATALOGS = {
     "scenes": "docs/render-materials/scene-presets.json",
     "quality": "docs/render-materials/quality-presets.json",
     "capabilities": "docs/render-materials/capabilities.json",
+    "studios": "assets/render/catalog/studios.json",
 }
 ROLES = ("base_color", "normal_open_gl", "roughness", "metallic")
 

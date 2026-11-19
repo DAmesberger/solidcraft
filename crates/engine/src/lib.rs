@@ -626,6 +626,9 @@ pub struct Session {
     pub sketch_clipboard: Option<cmd::sketch_clipboard::SketchClip>,
     /// Resolved appearance copied by appearance.copy; transient, outside design/history.
     pub appearance_clipboard: Option<solidcraft_doc::appearance::Look>,
+    /// The user's studios and the Realistic default (`render.studio.*`): settings of the user, not
+    /// of the design. The host keeps them between runs.
+    pub studios: cmd::render::studios::StudioLibrary,
     /// What was copied in another design, to paste here (`component.paste_from_design`). The
     /// host puts it here; each design's own copies stay in its own clipboard.
     pub foreign_copy: Option<Arc<ForeignCopy>>,
@@ -970,6 +973,7 @@ impl Session {
             clipboard: Vec::new(),
             sketch_clipboard: None,
             appearance_clipboard: None,
+            studios: Default::default(),
             foreign_copy: None,
             section: None,
             section_hatch: true,
@@ -2244,6 +2248,7 @@ impl Session {
             active_sketch: self.active_sketch,
             sketch_entry: None,
             feature_edit_sketch: self.feature_edit_sketch,
+            studios: self.studios.clone(),
             selection: self.selection.clone(),
             path: None,
             uid: self.uid,

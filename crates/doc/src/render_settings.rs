@@ -256,6 +256,10 @@ pub struct RenderSettings {
     pub resources: crate::render_resources::HdrResources,
     #[serde(skip_serializing_if = "crate::render_texture_resources::TextureResources::is_empty")]
     pub texture_resources: crate::render_texture_resources::TextureResources,
+    /// User studios the setups name (`job.options.studio`), kept so the design renders the same
+    /// on another machine; built-in studios are not copied (`format/pending/path-realistic-studio.rs`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub studios: BTreeMap<String, solidcraft_viewport::studio::Studio>,
 }
 
 #[derive(Default, Deserialize)]
@@ -264,12 +268,13 @@ struct UncheckedSettings {
     setups: BTreeMap<String, RenderSetup>,
     resources: crate::render_resources::HdrResources,
     texture_resources: crate::render_texture_resources::TextureResources,
+    studios: BTreeMap<String, solidcraft_viewport::studio::Studio>,
 }
 
 impl TryFrom<UncheckedSettings> for RenderSettings {
     type Error = DocError;
     fn try_from(value: UncheckedSettings) -> Result<Self> {
-        let settings = Self { setups: value.setups, resources: value.resources, texture_resources: value.texture_resources };
+        let settings = Self { setups: value.setups, resources: value.resources, texture_resources: value.texture_resources, studios: value.studios };
         settings.validate()?;
         Ok(settings)
     }
@@ -277,7 +282,7 @@ impl TryFrom<UncheckedSettings> for RenderSettings {
 
 impl RenderSettings {
     pub fn is_empty(&self) -> bool {
-        self.setups.is_empty() && self.resources.is_empty() && self.texture_resources.is_empty()
+        self.setups.is_empty() && self.resources.is_empty() && self.texture_resources.is_empty() && self.studios.is_empty()
     }
 
     pub fn validate_name(name: &str) -> Result<()> {
@@ -290,6 +295,15 @@ impl RenderSettings {
     pub fn validate(&self) -> Result<()> {
         if self.setups.len() > MAX_RENDER_SETUPS {
             return Err(DocError::Invalid("too many render setups (maximum 32)".into()));
+        }
+        if self.studios.len() > MAX_RENDER_SETUPS {
+            return Err(DocError::Invalid("too many studios kept in the design (maximum 32)".into()));
+        }
+        for (id, studio) in &self.studios {
+            if *id != studio.id {
+                return Err(DocError::Invalid(format!("the design's studio {id} names itself {}", studio.id)));
+            }
+            studio.validate().map_err(|e| DocError::Invalid(format!("studio {id}: {e}")))?;
         }
         for (name, setup) in &self.setups {
             Self::validate_name(name)?;

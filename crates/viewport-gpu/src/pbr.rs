@@ -115,7 +115,7 @@ fn pbr_edge(a: vec3<f32>, b: vec3<f32>, n: vec3<f32>) -> f32 {
 
 // The irradiance over unit radiance a rectangle (corners `v`, relative to the surface point)
 // gives a surface with unit normal `n`: the rectangle clipped to the upper half-space, then
-// ½ |Σ θᵢ (n · γ̂ᵢ)| (`ibl::rig::polygon_irradiance` on the CPU).
+// ½ |Σ θᵢ (n · γ̂ᵢ)| (`solidcraft_viewport::studio::polygon_irradiance` on the CPU).
 fn pbr_rect_irradiance(v: array<vec3<f32>, 4>, n: vec3<f32>) -> f32 {
     var poly: array<vec3<f32>, 5>;
     var count = 0u;

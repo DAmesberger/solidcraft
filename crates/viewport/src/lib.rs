@@ -20,6 +20,7 @@ pub mod material_graph;
 mod pick;
 mod raster;
 mod scene;
+pub mod studio;
 pub mod surface;
 pub mod texture_input;
 pub mod vec;

@@ -4134,6 +4134,7 @@ fn clicked_setup_save_reload_and_switch_keep_gpu_numeric_intent_without_a_host()
                 denoise_diagnostics: false,
                 supersampling: 1,
                 lens: Some(ThinLens { aperture_radius_mm: 0.5, focus_distance_mm: 123.0 }),
+                studio: None,
                 lighting: Some(StudioLighting {
                     punctual_lights: Default::default(),
                     directional_lights: solidcraft_engine::render::job::DirectionalLights::new(&[

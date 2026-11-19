@@ -5,7 +5,7 @@
 //! the Standard and the Realistic look. Evidence, not a check (`--ignored`):
 //!
 //! ```sh
-//! GOLDEN_DESIGN=<file> GOLDEN_OUT=<dir> [GOLDEN_TAG=product] [GOLDEN_STUDIO=product|soft|contrast] \
+//! GOLDEN_DESIGN=<file> GOLDEN_OUT=<dir> [GOLDEN_TAG=product] [GOLDEN_STUDIO=product|soft|contrast|<studio id>] \
 //!     [GOLDEN_SIZE=1600x1000] [GOLDEN_SSAA=2] \
 //!     cargo test --release -p solidcraft-ui-egui --lib golden_frames -- --ignored --nocapture
 //! ```
@@ -421,12 +421,8 @@ fn golden_frames() {
     let size: [u32; 2] =
         env("GOLDEN_SIZE").and_then(|s| s.split_once('x').and_then(|(a, b)| Some([a.parse().ok()?, b.parse().ok()?]))).unwrap_or([1600, 1000]);
     let ssaa: f32 = env("GOLDEN_SSAA").and_then(|s| s.parse().ok()).unwrap_or(2.0);
-    let studio = env("GOLDEN_STUDIO").map(|s| match s.as_str() {
-        "soft" => StudioPreset::Soft,
-        "contrast" => StudioPreset::Contrast,
-        "product" => StudioPreset::Product,
-        _ => StudioPreset::default(),
-    });
+    // A built-in studio by name or id (`product`, `contrast`, `NATIVE-STUDIO-028`, …).
+    let studio = env("GOLDEN_STUDIO").map(|s| crate::studio_library::builtin_preset(&s).unwrap_or_else(|| panic!("no built-in studio {s}")));
     let intensity: Option<f32> = env("GOLDEN_INTENSITY").and_then(|s| s.parse().ok());
     let Some((adapter, device, queue)) = crate::gpu::offscreen_device() else { panic!("no GPU adapter") };
     eprintln!(

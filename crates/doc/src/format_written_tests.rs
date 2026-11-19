@@ -148,11 +148,14 @@ fn this_build_writes_appearance_graphs_only_for_designs_with_graphs() {
     // What a build without the change writes: the other pending changes, or the last folded number.
     let without = |doc: &Document| {
         let mut v = serde_json::to_value(doc).unwrap();
-        if others.is_empty() {
+        // The other pending changes the design may use: those without `USED`, and those whose
+        // `USED` says so.
+        let listed: Vec<&str> = others.iter().filter(|p| p.used.is_none_or(|used| used(&v))).map(|p| p.name).collect();
+        if listed.is_empty() {
             v["format"] = format_string(FORMAT - 1).into();
             v.as_object_mut().unwrap().remove("format_pending");
         } else {
-            v["format_pending"] = others.iter().map(|p| p.name).collect::<Vec<_>>().into();
+            v["format_pending"] = listed.into();
         }
         v
     };
@@ -175,8 +178,14 @@ fn this_build_writes_appearance_graphs_only_for_designs_with_graphs() {
     let mut written = serde_json::to_value(&graphs).unwrap();
     write_oldest_format(&mut written);
     assert_eq!(written["format"], format_string(FORMAT));
-    assert_eq!(written["format_pending"], json!(pending_names()), "every pending change this build has, in file order");
-    assert!(matches!(graphs.in_written_format(), std::borrow::Cow::Borrowed(_)), "already this build's format");
+    // Every pending change this build has, in file order, that a design with graphs may use.
+    let used: Vec<&str> = PENDING.iter().filter(|p| p.name == "appearance-graphs" || p.used.is_none_or(|u| u(&written))).map(|p| p.name).collect();
+    assert_eq!(written["format_pending"], json!(used), "the pending changes it may use, in file order");
+    // Borrowed (nothing to rewrite) only while every pending change is one it uses.
+    assert_eq!(serde_json::to_value(&*graphs.in_written_format()).unwrap(), written);
+    if used.len() == PENDING.len() {
+        assert!(matches!(graphs.in_written_format(), std::borrow::Cow::Borrowed(_)), "already this build's format");
+    }
 
     graphs.appearances.tables.graphs.clear();
     assert_eq!(serde_json::to_value(&*graphs.in_written_format()).unwrap(), without(&plain));

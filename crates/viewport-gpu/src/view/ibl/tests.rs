@@ -6,6 +6,10 @@ use std::f64::consts::PI;
 use super::reference::{dfg, shade, shade_parts, unturn};
 use super::*;
 
+fn rig_of(preset: StudioPreset) -> Arc<StudioRig> {
+    studio(preset).unwrap_or_else(|| panic!("{preset:?} is registered"))
+}
+
 /// The environment-BRDF fit stays within its stated error of the split-sum terms integrated
 /// numerically from the viewport's own BRDF.
 #[test]
@@ -91,7 +95,7 @@ fn white_furnace() {
 /// radiance (a rotation-invariant, normalised lobe), within the sampling error.
 #[test]
 fn prefiltering_conserves_the_studio_energy() {
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
         let sharp = env.level_mean(0);
         for level in 1..env.level_count() {
@@ -106,7 +110,7 @@ fn prefiltering_conserves_the_studio_energy() {
 /// The nine-term irradiance against the cosine-weighted integral of the cyclorama's own radiance.
 #[test]
 fn irradiance_matches_the_cosine_integral() {
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
         let integral = |n: [f64; 3]| {
             let (steps_t, steps_p) = (256, 512);
@@ -145,7 +149,7 @@ fn irradiance_matches_the_cosine_integral() {
 /// The sharpest level shows the studio as it is: a softbox's centre and the dark floor.
 #[test]
 fn the_sharpest_level_shows_the_studio() {
-    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let env = StudioEnvironment::bake(StudioPreset::product());
     // Toward the key light's centre (`STU-002`: front-left, above).
     let [ca, sa, se] = unit([-1.2, -1.2, 1.0]);
     let ce = 1.0;
@@ -246,30 +250,33 @@ fn half_floats() {
 /// What the renderer draws of a look: hostile values clamped or replaced, never passed through.
 #[test]
 fn looks_are_sanitized() {
-    let look = ProductLook { exposure: 1.5, studio: StudioPreset::Contrast, rotation: 0.75, intensity: 0.6, room: None };
+    let look = ProductLook { exposure: 1.5, studio: StudioPreset::contrast(), rotation: 0.75, intensity: 0.6, room: None };
     assert_eq!(look.sanitized(), look);
     assert_eq!(look.uniform(), [1.5, 0.6, 0.75, 1.0]);
-    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::Soft, rotation: f32::INFINITY, intensity: 1e12, room: None };
+    let wild = ProductLook { exposure: f32::NAN, studio: StudioPreset::soft(), rotation: f32::INFINITY, intensity: 1e12, room: None };
     assert_eq!(
         wild.sanitized(),
-        ProductLook { exposure: 1.0, studio: StudioPreset::Soft, rotation: 0.0, intensity: ProductLook::MAX_SCALE, room: None }
+        ProductLook { exposure: 1.0, studio: StudioPreset::soft(), rotation: 0.0, intensity: ProductLook::MAX_SCALE, room: None }
     );
     let odd = ProductLook { exposure: -3.0, rotation: -1.0, ..look }.sanitized();
     assert_eq!(odd.exposure, 0.0);
     assert!((odd.rotation - (std::f32::consts::TAU - 1.0)).abs() < 1e-6);
-    for preset in StudioPreset::ALL {
-        assert_eq!(StudioPreset::from_id(preset.id()), Some(preset));
-    }
-    assert_eq!(StudioPreset::from_id(99), None);
+    // A handle is its rig's content: the same rig registered again is the same studio, an edited
+    // one another, and the default names none.
+    assert_eq!(StudioPreset::register(&test_rig("Soft")), StudioPreset::soft());
+    let mut brighter = test_rig("Soft");
+    brighter.lights[0].radiance = brighter.lights[0].radiance.map(|c| c * 2.0);
+    assert_ne!(StudioPreset::register(&brighter), StudioPreset::soft());
+    assert!(StudioPreset::default().rig().is_none() && StudioPreset::soft().rig().is_some());
 }
 
 /// A bake in bounded steps (the web's way, a frame's share at a time) gives the same studio as one
 /// bake all at once, and each step does about the work it is given (whole rows).
 #[test]
 fn a_stepped_bake_is_the_whole_bake() {
-    let whole = StudioEnvironment::bake(StudioPreset::Contrast);
-    assert!(StudioBake::new(StudioPreset::Contrast).finish().is_none(), "nothing before the bake is done");
-    let mut bake = StudioBake::new(StudioPreset::Contrast);
+    let whole = StudioEnvironment::bake(StudioPreset::contrast());
+    assert!(StudioBake::new(StudioPreset::contrast()).finish().is_none(), "nothing before the bake is done");
+    let mut bake = StudioBake::new(StudioPreset::contrast());
     let mut steps = 0;
     while !bake.step(StudioBake::FRAME_WORK) {
         steps += 1;
@@ -277,7 +284,7 @@ fn a_stepped_bake_is_the_whole_bake() {
     }
     // The sharpest level and the rough ones in shares of a frame's work: many steps.
     assert!(steps > 100, "{steps} steps");
-    assert!(bake.is_done() && bake.preset() == StudioPreset::Contrast);
+    assert!(bake.is_done() && bake.preset() == StudioPreset::contrast());
     let Some(stepped) = bake.finish() else { panic!("done") };
     assert_eq!(stepped.uniform_bytes(), whole.uniform_bytes());
     assert_eq!(stepped.levels.len(), whole.levels.len());
@@ -324,7 +331,7 @@ fn probe_shader_is_valid() {
 #[test]
 fn gpu_environment_term_matches_the_cpu_reference() {
     let Ok((_, device, queue)) = crate::open_headless(crate::test_env::policy()) else { return };
-    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let env = StudioEnvironment::bake(StudioPreset::product());
     let furnace = StudioEnvironment::furnace(1.0);
     let source = probe_source();
     let module =
@@ -450,11 +457,11 @@ fn gpu_environment_term_matches_the_cpu_reference() {
 /// The bake is bounded: its size is fixed, whatever the preset.
 #[test]
 fn bake_size_is_fixed() {
-    let env = StudioEnvironment::bake(StudioPreset::Soft);
+    let env = StudioEnvironment::bake(StudioPreset::soft());
     let texels: usize = env.levels.iter().map(|l| l.texels.len()).sum();
     let expected: usize = (0..ENV_MIPS).map(|m| 6 * ((ENV_SIZE >> m) as usize).pow(2)).sum();
     assert_eq!(texels, expected);
-    assert_eq!(env.preset(), StudioPreset::Soft);
+    assert_eq!(env.preset(), StudioPreset::soft());
     assert_eq!(env.uniform_bytes().len() as u64, ENV_UNIFORM_SIZE);
 }
 
@@ -685,7 +692,7 @@ fn probe_coated_ibl(@builtin(global_invocation_id) id: vec3<u32>) {
             .map(|x| x as f32),
         );
     }
-    for (env, name) in [(&StudioEnvironment::bake(StudioPreset::Product), "product studio"), (&furnace, "furnace")] {
+    for (env, name) in [(&StudioEnvironment::bake(StudioPreset::product()), "product studio"), (&furnace, "furnace")] {
         let got = run_probe(&device, &queue, probe, "probe_coated_ibl", &input, cases.len(), Some(env));
         assert_eq!(got.len(), cases.len());
         for ((base, metallic, roughness, ior, coat, n, v, rotation), g) in cases.iter().zip(&got) {
@@ -750,17 +757,20 @@ fn the_bound_rigs_are_upstreams() {
     let items = export["items"].as_array().cloned().unwrap_or_default();
     let vector = |v: &serde_json::Value| -> [f64; 3] { std::array::from_fn(|k| v[k].as_f64().unwrap_or(f64::NAN)) };
     let close = |a: [f64; 3], b: [f64; 3], tolerance: f64| (0..3).all(|k| (a[k] - b[k]).abs() <= tolerance);
-    for preset in StudioPreset::ALL {
-        let rig = studio(preset);
-        assert_eq!(preset.rig_id(), rig.preset);
-        let item = items.iter().find(|i| i["preset_id"] == rig.preset).unwrap_or_else(|| panic!("{} is exported", rig.preset));
-        assert_eq!(item["state"], "authored_numeric_unbound", "{}: a complete numeric rig", rig.preset);
+    let text = include_str!("../../../tests/fixtures/studios.json");
+    let file: serde_json::Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("studios.json: {e}"));
+    let studios: Vec<solidcraft_viewport::studio::Studio> = serde_json::from_value(file["items"].clone()).unwrap_or_default();
+    for studio in studios.iter().filter(|s| s.realistic.is_some()) {
+        let Some(rig) = &studio.realistic else { continue };
+        let source = studio.source.clone().unwrap_or_default();
+        let item = items.iter().find(|i| i["preset_id"] == source.as_str()).unwrap_or_else(|| panic!("{source} is exported"));
+        assert_eq!(item["state"], "authored_numeric_unbound", "{source}: a complete numeric rig");
         let lights = item["lights"].as_array().cloned().unwrap_or_default();
-        assert_eq!(lights.len(), rig.exported, "{}: every light bound", rig.preset);
-        assert!(rig.exported <= rig.lights.len() && rig.lights.len() <= rig::MAX_LIGHTS);
+        assert_eq!(lights.len(), rig.rig_lights, "{source}: every light bound");
+        assert!(rig.rig_lights <= rig.lights.len() && rig.lights.len() <= rig::MAX_LIGHTS);
         let extent = item["fixture_extent_mm"].as_f64().unwrap_or(f64::NAN);
         for (light, exported) in rig.lights.iter().zip(&lights) {
-            let name = format!("{} {}", rig.preset, light.id);
+            let name = format!("{source} {}", light.id);
             assert_eq!(exported["id"], light.id, "{name}");
             assert_eq!(exported["type"], "rectangular_area", "{name}");
             assert_eq!(exported["emission_sides"], "front_only", "{name}");
@@ -771,13 +781,13 @@ fn the_bound_rigs_are_upstreams() {
             assert!((2.0 * light.half_width - exported["width_mm"].as_f64().unwrap_or(f64::NAN) / extent).abs() < 1e-12, "{name}: width");
             assert!((2.0 * light.half_height - exported["height_mm"].as_f64().unwrap_or(f64::NAN) / extent).abs() < 1e-12, "{name}: height");
             assert!(close(light.radiance, vector(&exported["emission"]["rgb"]), 1e-9), "{name}: radiance");
-            assert!(rig::ROOM.contains(light.centre), "{name}: inside the room");
+            assert!(rig.room.contains(light.centre), "{name}: inside the room");
         }
         // The studio's own lights: inside the room, whole, and facing the subject.
-        for light in &rig.lights[rig.exported..] {
-            let name = format!("{} {}", rig.preset, light.id);
+        for light in &rig.lights[rig.rig_lights..] {
+            let name = format!("{source} {}", light.id);
             assert!(lights.iter().all(|l| l["id"] != light.id), "{name}: not an exported id");
-            assert!(light.corners().iter().all(|c| rig::ROOM.contains(*c)), "{name}: inside the room");
+            assert!(light.corners().iter().all(|c| rig.room.contains(*c)), "{name}: inside the room");
             assert!(dot(light.centre, light.normal()) < 0.0, "{name}: faces the subject");
         }
     }
@@ -790,7 +800,7 @@ fn the_bound_rigs_are_upstreams() {
 #[test]
 fn the_moody_studio_lights_tops_softly_from_above() {
     let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    let env = StudioEnvironment::bake(StudioPreset::Contrast);
+    let env = StudioEnvironment::bake(StudioPreset::contrast());
     let at = |elevation: f64| {
         let e = elevation.to_radians();
         luminance(env.source([e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.sin()]))
@@ -805,8 +815,8 @@ fn the_moody_studio_lights_tops_softly_from_above() {
 /// the rectangle's mean radiance is the rig's.
 #[test]
 fn graded_lights_keep_their_calibrated_mean() {
-    for preset in StudioPreset::ALL {
-        for light in studio(preset).lights {
+    for preset in StudioPreset::all() {
+        for light in rig_of(preset).lights.clone() {
             let steps = 400;
             let mut sum = 0.0;
             for i in 0..steps {
@@ -827,7 +837,8 @@ fn graded_lights_keep_their_calibrated_mean() {
 /// dA), for a light in front of the surface, one that crosses its horizon and one behind it.
 #[test]
 fn polygon_irradiance_matches_the_area_integral() {
-    let light = rig::PRODUCT.lights[0];
+    let product = test_rig("Product");
+    let light = product.lights[0].clone();
     let numeric = |p: [f64; 3], n: [f64; 3]| {
         let steps = 300;
         let ln = light.normal();
@@ -866,14 +877,14 @@ fn polygon_irradiance_matches_the_area_integral() {
     assert_eq!(rig::polygon_irradiance([0.0; 3], [0.0, 0.0, -1.0], &light.corners()), 0.0, "below the horizon");
     // From behind the light gives nothing.
     let behind: [f64; 3] = std::array::from_fn(|k| light.centre[k] - 0.1 * light.normal()[k]);
-    assert_eq!(rig::PRODUCT.direct_irradiance(behind, unit(light.normal().map(|c| -c))), [0.0; 3]);
+    assert_eq!(product.direct_irradiance(behind, unit(light.normal().map(|c| -c))), [0.0; 3]);
 }
 
 /// Box projection: a ray leaves the room where it meets the nearest wall, so points across a flat
 /// face look at different parts of the studio (a gradient, not one colour).
 #[test]
 fn reflections_are_projected_against_the_room() {
-    let room = rig::ROOM;
+    let room = solidcraft_viewport::studio::Room::default();
     let hit = room.exit([0.5, 0.0, 0.0], [1.0, 0.0, 0.0]);
     assert!((hit[0] - room.half).abs() < 1e-9 && hit[1].abs() < 1e-9);
     let up = room.exit([0.0, 0.0, 0.0], unit([0.1, 0.2, 1.0]));
@@ -896,7 +907,7 @@ fn reflections_are_projected_against_the_room() {
 #[test]
 fn no_direction_is_darker_than_a_tenth_of_the_mean() {
     let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
         let mean = luminance(env.level_mean(0));
         let Some(level) = env.levels.first() else { panic!("baked") };
@@ -905,7 +916,7 @@ fn no_direction_is_darker_than_a_tenth_of_the_mean() {
         let floor = luminance(env.source([0.0, 0.0, -1.0]));
         let band = luminance(env.source(unit([0.3, -1.0, 0.1])));
         assert!(floor < band, "{preset:?}: floor {floor}, band {band}");
-        let key = luminance(env.source(unit(studio(preset).lights[0].centre)));
+        let key = luminance(env.source(unit(rig_of(preset).lights[0].centre)));
         // The soft studio's broad panels are the dimmest lights, at about four times the band.
         assert!(key > 3.0 * band, "{preset:?}: key {key}, band {band}");
     }
@@ -918,9 +929,9 @@ fn no_direction_is_darker_than_a_tenth_of_the_mean() {
 #[test]
 fn white_under_the_key_is_calibrated_per_studio() {
     let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
-        let rig = studio(preset);
+        let rig = rig_of(preset);
         let white = |n: [f64; 3]| {
             let mut e = rig.direct_irradiance([0.0; 3], n).map(|c| c * env.calibration());
             add(&mut e, env.irradiance_at(n), 1.0);
@@ -928,7 +939,7 @@ fn white_under_the_key_is_calibrated_per_studio() {
         };
         let key = white(unit(rig.lights[0].centre));
         let value = luminance(key);
-        assert!((value - rig::WHITE_UNDER_KEY).abs() < 0.03 * rig::WHITE_UNDER_KEY, "{preset:?}: {value}");
+        assert!((value - rig.white_under_key).abs() < 0.03 * rig.white_under_key, "{preset:?}: {value}");
         let shown = pbr_neutral(key.map(|c| c as f32));
         let display = |c: f32| if c <= 0.0031308 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
         assert!((display(shown[1]) - 0.8).abs() < 0.02, "{preset:?}: display {}", display(shown[1]));
@@ -952,7 +963,7 @@ fn rooms_fit_the_scene() {
     for (min, max) in [([0.0; 3], [0.0; 3]), ([0.0; 3], [f32::NAN, 1.0, 1.0]), ([1.0; 3], [0.0; 3]), ([0.0; 3], [f32::INFINITY, 1.0, 1.0])] {
         assert!(StudioRoom::around(min, max).is_none(), "{min:?} {max:?}");
     }
-    let look = ProductLook { room: Some(room), ..ProductLook::default() };
+    let look = ProductLook { room: Some(room), ..ProductLook::product() };
     assert_eq!(look.room_uniform(), [40.0, 25.0, 0.0, 80.0, room.footprint[0], room.footprint[1], 0.0, 0.0]);
     for wild in [
         StudioRoom { extent: -1.0, ..room },
@@ -962,7 +973,7 @@ fn rooms_fit_the_scene() {
         StudioRoom { origin: [1e30, 0.0, 0.0], ..room },
         StudioRoom { footprint: [-1.0, 1.0], ..room },
     ] {
-        let bad = ProductLook { room: Some(wild), ..ProductLook::default() };
+        let bad = ProductLook { room: Some(wild), ..ProductLook::product() };
         assert_eq!(bad.sanitized().room, None, "{wild:?}");
         assert_eq!(bad.room_uniform(), [0.0; 8], "{wild:?}");
     }
@@ -991,13 +1002,13 @@ fn probe_rig(@builtin(global_invocation_id) id: vec3<u32>) {
         ([0.0; 3], [0.0, 0.0, -1.0]),
         ([-0.4, 0.0, 0.1], unit([0.2, 0.9, 0.3])),
     ];
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
         let input: Vec<f32> = cases.iter().flat_map(|(q, n)| [q[0], q[1], q[2], 0.0, n[0], n[1], n[2], 0.0]).map(|x| x as f32).collect();
         let got = run_probe(&device, &queue, probe, "probe_rig", &input, cases.len(), Some(&env));
         assert_eq!(got.len(), cases.len());
         for ((q, n), g) in cases.iter().zip(&got) {
-            let expected = studio(preset).direct_irradiance(*q, *n).map(|c| c * env.calibration());
+            let expected = rig_of(preset).direct_irradiance(*q, *n).map(|c| c * env.calibration());
             for k in 0..3 {
                 assert!((f64::from(g[k]) - expected[k]).abs() <= 2e-3 * expected[k] + 1e-4, "{preset:?} q={q:?} n={n:?}: {g:?} against {expected:?}");
             }
@@ -1094,7 +1105,7 @@ fn probe_layers(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     // In the baked studio the bend moves an anisotropic metal's reflection.
-    let studio = StudioEnvironment::bake(StudioPreset::Product);
+    let studio = StudioEnvironment::bake(StudioPreset::product());
     let got = run_probe(&device, &queue, probe, "probe_layers", &input, 2 * cases.len(), Some(&studio));
     let moved = cases.iter().enumerate().filter(|(k, c)| c.1 == 1.0 && (0..3).any(|j| (got[2 * k][j] - got[2 * k + 1][j]).abs() > 1e-3)).count();
     assert!(got.iter().all(|g| g.iter().all(|x| x.is_finite() && *x >= 0.0)), "{got:?}");
@@ -1206,7 +1217,7 @@ fn probe_stretch(@builtin(global_invocation_id) id: vec3<u32>) {
             sweeps += 1;
         }
     }
-    let env = StudioEnvironment::bake(StudioPreset::Product);
+    let env = StudioEnvironment::bake(StudioPreset::product());
     let got = run_probe(&device, &queue, probe, "probe_stretch", &input, input.len() / 4, Some(&env));
     assert!(got.iter().all(|g| g[0].is_finite() && g[0] >= 0.0));
     // Detail along a sweep: the summed second differences, which a blur along it removes first.

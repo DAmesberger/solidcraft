@@ -630,8 +630,9 @@ fn a_plan_with_pole_nodes_is_refused_by_name() {
 /// shared crate reads no file outside its own directory); the copies stay the app's.
 #[test]
 fn viewport_gpu_fixtures_are_the_apps_assets() {
-    let pairs: [(&[u8], &[u8]); 6] = [
+    let pairs: [(&[u8], &[u8]); 7] = [
         (include_bytes!("../../viewport-gpu/tests/fixtures/rigs.json"), include_bytes!("../../../assets/render/starter/lighting/exports/rigs.json")),
+        (include_bytes!("../../viewport-gpu/tests/fixtures/studios.json"), include_bytes!("../../../assets/render/catalog/studios.json")),
         (
             include_bytes!("../../viewport-gpu/tests/fixtures/tinted-coat-over-copper.json"),
             include_bytes!("../../../assets/appearances/graphs/tinted-coat-over-copper.json"),

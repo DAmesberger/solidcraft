@@ -1,0 +1,782 @@
+{
+ "schema": "solidcraft-studios/1",
+ "license": "MIT OR Apache-2.0",
+ "units": {
+  "lights": "positions and sizes in subject extents B about the studio's centre (+Z up, -Y front, +X right), radiance relative linear Rec. 709 before the studio's calibration (CAL-LIGHT-001 gains)",
+  "cyclorama": "shares of a white diffuse card's radiance under the key alone"
+ },
+ "items": [
+  {
+   "id": "NATIVE-STUDIO-001",
+   "name": "Neutral product studio",
+   "description": "Original side-softbox HDR and a fitted passive ground. Preserves the camera, all appearances and native geometry.",
+   "path": {
+    "hdr": "HDR-001",
+    "intensity": 1.0,
+    "exposure_ev": -0.9,
+    "ground": [
+     0.32,
+     0.34,
+     0.38
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-002",
+   "name": "Soft enveloping studio",
+   "description": "Original broad white HDR and a neutral ground for product inspection. No automatic appearance assignment.",
+   "path": {
+    "hdr": "HDR-002",
+    "intensity": 1.0,
+    "exposure_ev": -2.0,
+    "ground": [
+     0.18,
+     0.19,
+     0.21
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-003",
+   "name": "Electronics inspection studio",
+   "description": "Original electronics-bench HDR, neutral passive ground and explicit exposure. Retains board and component appearances.",
+   "path": {
+    "hdr": "HDR-014",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.22,
+     0.24,
+     0.27
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-004",
+   "name": "Three-light product studio",
+   "description": "Original RIG-002 with an explicit 1/16 creative radiance gain, HDR-002 fill and passive ground. This is not the unmodified reference calibration.",
+   "path": {
+    "hdr": "HDR-002",
+    "intensity": 0.12,
+    "exposure_ev": -1.1,
+    "ground": [
+     0.32,
+     0.34,
+     0.38
+    ],
+    "rig": "RIG-002"
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-005",
+   "name": "Dark metal reflection studio",
+   "description": "Original black-strip HDR for readable metal reflections, with a dark diffuse ground. Preserves all product optics.",
+   "path": {
+    "hdr": "HDR-003",
+    "intensity": 1.0,
+    "exposure_ev": -0.9,
+    "ground": [
+     0.025,
+     0.03,
+     0.04
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-006",
+   "name": "Warm DIY workbench studio",
+   "description": "Original home-workbench window radiance and a warm diffuse ground. Not a textured workshop reconstruction.",
+   "path": {
+    "hdr": "HDR-013",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.27,
+     0.22,
+     0.16
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-007",
+   "name": "Spacecraft inspection bay",
+   "description": "Original clean-bay HDR and pale neutral ground. A terrestrial inspection composition, not lunar illumination or vacuum physics.",
+   "path": {
+    "hdr": "HDR-023",
+    "intensity": 1.0,
+    "exposure_ev": -2.0,
+    "ground": [
+     0.42,
+     0.44,
+     0.48
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-008",
+   "name": "Woodshop soft-window studio",
+   "description": "Original broad-window woodshop HDR with a warm neutral ground. Does not automatically assign a wood material or geometry.",
+   "path": {
+    "hdr": "HDR-010",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.3,
+     0.25,
+     0.2
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-009",
+   "name": "Aerospace hangar inspection",
+   "description": "Hangar skylight reflections for airframe hardware. This is a finite product stage, not a reconstructed hangar.",
+   "path": {
+    "hdr": "HDR-004",
+    "intensity": 1.0,
+    "exposure_ev": -1.2,
+    "ground": [
+     0.25,
+     0.28,
+     0.32
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-010",
+   "name": "Neutral comparison studio",
+   "description": "Neutral comparison field and an 18-percent diffuse ground. Relative authored radiance, not a colorimetric calibration.",
+   "path": {
+    "hdr": "HDR-005",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.18,
+     0.18,
+     0.18
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-011",
+   "name": "Warm tabletop presentation",
+   "description": "Warm table-window reflections and a muted warm ground for household and DIY objects.",
+   "path": {
+    "hdr": "HDR-006",
+    "intensity": 1.0,
+    "exposure_ev": -1.2,
+    "ground": [
+     0.26,
+     0.22,
+     0.16
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-012",
+   "name": "Automotive showroom ribbons",
+   "description": "Long showroom reflection bands with a dark passive ground. Paint optics and material assignments are preserved.",
+   "path": {
+    "hdr": "HDR-007",
+    "intensity": 1.0,
+    "exposure_ev": -0.9,
+    "ground": [
+     0.04,
+     0.05,
+     0.07
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-013",
+   "name": "Mechanical service bay",
+   "description": "Mechanical-bay window reflections for industrial assemblies and workshop hardware.",
+   "path": {
+    "hdr": "HDR-008",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.21,
+     0.23,
+     0.25
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-014",
+   "name": "CNC tooling overhead studio",
+   "description": "Overhead lane reflections for machined parts. Does not add manufacturing marks or simulate a cutting process.",
+   "path": {
+    "hdr": "HDR-009",
+    "intensity": 1.0,
+    "exposure_ev": -1.1,
+    "ground": [
+     0.25,
+     0.27,
+     0.28
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-015",
+   "name": "Garage doorway product studio",
+   "description": "Broad garage-doorway reflections and a neutral dark ground for automotive and DIY components.",
+   "path": {
+    "hdr": "HDR-011",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.16,
+     0.17,
+     0.18
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-016",
+   "name": "Makerspace worklight studio",
+   "description": "Authored worklight environment for printed fixtures, enclosures and tools. Retains the actual source geometry.",
+   "path": {
+    "hdr": "HDR-012",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.27,
+     0.26,
+     0.23
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-017",
+   "name": "Sun-free overcast inspection",
+   "description": "Diffuse overcast environment without a solar disc. No extra sun or atmospheric medium is introduced.",
+   "path": {
+    "hdr": "HDR-015",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.3,
+     0.32,
+     0.34
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-018",
+   "name": "Automotive turntable presentation",
+   "description": "Turntable-style reflections on a stationary finite ground. This composition does not animate the subject.",
+   "path": {
+    "hdr": "HDR-016",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.045,
+     0.05,
+     0.06
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-019",
+   "name": "Paint reflection-band review",
+   "description": "Authored inspection bands reveal the currently assigned surface. Flakes, spectral paint and coating thickness are not added.",
+   "path": {
+    "hdr": "HDR-017",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.05,
+     0.055,
+     0.065
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-020",
+   "name": "Assembly bench soft studio",
+   "description": "Soft assembly-bench lighting for mechanisms, bearings and electronic enclosures; engineering materials remain unchanged.",
+   "path": {
+    "hdr": "HDR-018",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.24,
+     0.25,
+     0.26
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-021",
+   "name": "Electronics rework reflection studio",
+   "description": "Offset strips for solder and component inspection. No physical PCB or solder geometry is synthesized.",
+   "path": {
+    "hdr": "HDR-019",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.12,
+     0.14,
+     0.16
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-022",
+   "name": "FDM surface inspection",
+   "description": "Neutral authored lighting for real printed-part surface detail. Layer geometry is not invented by this preset.",
+   "path": {
+    "hdr": "HDR-020",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.28,
+     0.29,
+     0.3
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-023",
+   "name": "Printed-part photography",
+   "description": "Broad photographic environment and a pale ground for printed housings and DIY products.",
+   "path": {
+    "hdr": "HDR-021",
+    "intensity": 1.0,
+    "exposure_ev": -1.0,
+    "ground": [
+     0.45,
+     0.46,
+     0.48
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-024",
+   "name": "Robot LED editorial studio",
+   "description": "Colored editorial environment for robotics. Does not assign emitters, diode photometry or a physical lunar atmosphere.",
+   "path": {
+    "hdr": "HDR-022",
+    "intensity": 1.0,
+    "exposure_ev": -1.4,
+    "ground": [
+     0.025,
+     0.027,
+     0.035
+    ],
+    "rig": null
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-025",
+   "name": "Black-environment three-light studio",
+   "description": "Black environment with an explicit three-light rig and dark ground. Not solar or lunar illumination.",
+   "path": {
+    "hdr": "HDR-024",
+    "intensity": 1.0,
+    "exposure_ev": -1.1,
+    "ground": [
+     0.08,
+     0.08,
+     0.09
+    ],
+    "rig": "RIG-002"
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-026",
+   "name": "Product",
+   "description": "Three-point product studio (STU-002): a graded key above front-left, a fill card front-right and a strip rim behind, in a mid-bright cyclorama room. The Realistic view's default.",
+   "source": "STU-002",
+   "realistic": {
+    "lights": [
+     {
+      "id": "key",
+      "centre": [
+       -1.2,
+       -1.2,
+       1.0
+      ],
+      "width_axis": [
+       -0.7071067811865476,
+       0.7071067811865476,
+       0.0
+      ],
+      "height_axis": [
+       0.358979079309,
+       0.358979079309,
+       0.861549790341
+      ],
+      "half_width": 0.4,
+      "half_height": 0.5,
+      "radiance": [
+       357.289685146,
+       357.289685146,
+       357.289685146
+      ],
+      "grade": 0.5
+     },
+     {
+      "id": "fill",
+      "centre": [
+       1.2,
+       -1.0,
+       0.6
+      ],
+      "width_axis": [
+       -0.640184399664,
+       -0.768221279597,
+       -2.77555756156e-17
+      ],
+      "height_axis": [
+       -0.275460015502,
+       0.229550012919,
+       0.933503385869
+      ],
+      "half_width": 0.6,
+      "half_height": 0.5,
+      "radiance": [
+       45.1401839419,
+       45.1401839419,
+       45.1401839419
+      ],
+      "grade": 0.35
+     },
+     {
+      "id": "rim",
+      "centre": [
+       0.7,
+       1.1,
+       1.0
+      ],
+      "width_axis": [
+       0.843661487732,
+       -0.536875492193,
+       2.77555756156e-17
+      ],
+      "height_axis": [
+       -0.326732019607,
+       -0.51343603081,
+       0.793492047616
+      ],
+      "half_width": 0.125,
+      "half_height": 0.6,
+      "radiance": [
+       475.065381914,
+       475.065381914,
+       475.065381914
+      ],
+      "grade": 0.3
+     }
+    ],
+    "rig_lights": 3,
+    "cyclorama": {
+     "floor": [
+      0.9,
+      0.8865,
+      0.864
+     ],
+     "wall": [
+      1.05,
+      1.05,
+      1.05
+     ],
+     "band": [
+      0.8,
+      0.8,
+      0.8
+     ],
+     "ceiling": [
+      0.576,
+      0.588,
+      0.6
+     ],
+     "spill": 0.4
+    },
+    "room": {
+     "half": 2.0,
+     "floor": -0.5,
+     "ceiling": 2.5
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-027",
+   "name": "Soft",
+   "description": "Black housing with broad side reflections (STU-004): two broad side panels over a bright cyclorama. Low contrast, soft highlights.",
+   "source": "STU-004",
+   "realistic": {
+    "lights": [
+     {
+      "id": "key",
+      "centre": [
+       -1.5,
+       -0.4,
+       0.7
+      ],
+      "width_axis": [
+       -0.25766265056,
+       0.966234939601,
+       -1.38777878078e-17
+      ],
+      "height_axis": [
+       0.397174885335,
+       0.105913302756,
+       0.911610927292
+      ],
+      "half_width": 0.75,
+      "half_height": 0.75,
+      "radiance": [
+       106.904574216,
+       106.904574216,
+       106.904574216
+      ],
+      "grade": 0.5
+     },
+     {
+      "id": "fill",
+      "centre": [
+       1.5,
+       -0.4,
+       0.7
+      ],
+      "width_axis": [
+       -0.25766265056,
+       -0.966234939601,
+       1.38777878078e-17
+      ],
+      "height_axis": [
+       -0.397174885335,
+       0.105913302756,
+       0.911610927292
+      ],
+      "half_width": 0.75,
+      "half_height": 0.75,
+      "radiance": [
+       75.5929493679,
+       75.5929493679,
+       75.5929493679
+      ],
+      "grade": 0.5
+     }
+    ],
+    "rig_lights": 2,
+    "cyclorama": {
+     "floor": [
+      1.35,
+      1.32975,
+      1.296
+     ],
+     "wall": [
+      1.9,
+      1.9,
+      1.9
+     ],
+     "band": [
+      0.6,
+      0.6,
+      0.6
+     ],
+     "ceiling": [
+      1.3439999999999999,
+      1.3719999999999999,
+      1.4
+     ],
+     "spill": 0.15
+    },
+    "room": {
+     "half": 2.0,
+     "floor": -0.5,
+     "ceiling": 2.5
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-028",
+   "name": "Contrast",
+   "description": "Mirror-metal vertical strips (STU-005): two tall strips and a low front fill in a darker cyclorama room, with a soft overhead scrim so flat metal seen from above reads light. Crisp highlights on metal; dark materials darker on faces turned from the light.",
+   "source": "STU-005",
+   "realistic": {
+    "lights": [
+     {
+      "id": "left_strip",
+      "centre": [
+       -1.1,
+       -0.3,
+       0.2
+      ],
+      "width_axis": [
+       -0.263117405792,
+       0.964763821238,
+       0.0
+      ],
+      "height_axis": [
+       0.166685800662,
+       0.0454597638169,
+       0.984961549367
+      ],
+      "half_width": 0.06,
+      "half_height": 0.8,
+      "radiance": [
+       592.738980244,
+       592.738980244,
+       592.738980244
+      ],
+      "grade": 0.3
+     },
+     {
+      "id": "right_strip",
+      "centre": [
+       1.1,
+       -0.3,
+       0.2
+      ],
+      "width_axis": [
+       -0.263117405792,
+       -0.964763821238,
+       0.0
+      ],
+      "height_axis": [
+       -0.166685800662,
+       0.0454597638169,
+       0.984961549367
+      ],
+      "half_width": 0.06,
+      "half_height": 0.8,
+      "radiance": [
+       296.369490122,
+       296.369490122,
+       296.369490122
+      ],
+      "grade": 0.3
+     },
+     {
+      "id": "front_fill",
+      "centre": [
+       0.0,
+       -1.8,
+       0.8
+      ],
+      "width_axis": [
+       -1.0,
+       0.0,
+       0.0
+      ],
+      "height_axis": [
+       0.0,
+       0.406138466053,
+       0.91381154862
+      ],
+      "half_width": 0.55,
+      "half_height": 0.4,
+      "radiance": [
+       40.6801806776,
+       40.6801806776,
+       40.6801806776
+      ],
+      "grade": 0.4
+     },
+     {
+      "id": "top_scrim",
+      "centre": [
+       0.0,
+       0.0,
+       1.3
+      ],
+      "width_axis": [
+       1.0,
+       0.0,
+       0.0
+      ],
+      "height_axis": [
+       0.0,
+       -1.0,
+       0.0
+      ],
+      "half_width": 1.95,
+      "half_height": 1.95,
+      "radiance": [
+       14.0,
+       14.0,
+       14.0
+      ],
+      "grade": 0.7
+     }
+    ],
+    "rig_lights": 3,
+    "cyclorama": {
+     "floor": [
+      0.9,
+      0.8865,
+      0.864
+     ],
+     "wall": [
+      0.9,
+      0.9,
+      0.9
+     ],
+     "band": [
+      0.75,
+      0.75,
+      0.75
+     ],
+     "ceiling": [
+      0.576,
+      0.588,
+      0.6
+     ],
+     "spill": 0.2
+    },
+    "room": {
+     "half": 2.0,
+     "floor": -0.5,
+     "ceiling": 2.5
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
+  }
+ ]
+}
