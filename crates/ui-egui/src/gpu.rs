@@ -720,8 +720,18 @@ fn offscreen(
     let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
     let depth_tex = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let (color_view, depth_view) = (color.create_view(&Default::default()), depth_tex.create_view(&Default::default()));
-    let mut encoder = device.create_command_encoder(&Default::default());
     let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
+    // Material-graph pipelines compile off the frame: prepare once and wait for them, so the one
+    // frame drawn shows the graphs, not their base response.
+    {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let extra = egui_wgpu::CallbackTrait::prepare(&cb, &device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(extra.into_iter().chain([encoder.finish()]));
+        if let Some(r) = resources.get::<Renderer>().filter(|r| r.wants_redraw()) {
+            r.wait_for_materials(std::time::Duration::from_secs(5));
+        }
+    }
+    let mut encoder = device.create_command_encoder(&Default::default());
     let extra = egui_wgpu::CallbackTrait::prepare(&cb, &device, &queue, &screen, &mut encoder, &mut resources);
     {
         let mut pass = encoder
@@ -886,6 +896,9 @@ pub(crate) fn render_realistic_offscreen(
             egui_wgpu::CallbackTrait::paint(&cb, info, &mut pass, &resources);
         }
         let done = resources.get::<Renderer>().is_none_or(|r| !r.wants_redraw());
+        if !done && let Some(r) = resources.get::<Renderer>() {
+            r.wait_for_materials(std::time::Duration::from_secs(5));
+        }
         if !done || n == 0 {
             queue.submit(extra.into_iter().chain([encoder.finish()]));
             device.poll(wgpu::PollType::wait_indefinitely()).ok()?;

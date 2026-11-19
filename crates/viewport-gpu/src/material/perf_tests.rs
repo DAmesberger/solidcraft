@@ -105,14 +105,14 @@ fn mixed_128() -> MaterialGraph {
     graph_of(json!({"name": "mixed", "nodes": nodes, "output": "s"}))
 }
 
-/// The most expensive graph of `count` 3-D gradient noises of 8 octaves summed into the colour
-/// that still validates: the one nearest the 2000-unit budget.
+/// The most expensive graph of one-octave 3-D gradient noises summed into the colour that stays
+/// within a typical graph's cost (`limits::COST_TYPICAL`, about 2× today's look).
 fn budget_graph() -> (MaterialGraph, u32) {
     let make = |count: usize| {
         let mut nodes = vec![json!({"id": "p", "kind": "geometry.position", "params": {"space": "object"}})];
         let mut last: Option<String> = None;
         for i in 0..count {
-            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"octaves": 8, "kind": "gradient", "dimensions": 3},
+            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"octaves": 1, "kind": "gradient", "dimensions": 3},
                 "inputs": {"position": {"from": "p"}, "scale_mm": 1.0 + i as f64, "seed": i}}));
             let sum = format!("a{i}");
             let a = last.clone().map_or(json!(0.0), |l| json!({"from": l}));
@@ -127,7 +127,7 @@ fn budget_graph() -> (MaterialGraph, u32) {
     let mut best = None;
     for count in 1..64 {
         let g = make(count);
-        match validate(&g).ok().and_then(|v| lower(&v).ok()) {
+        match validate(&g).ok().and_then(|v| lower(&v).ok()).filter(|ir| ir.cost <= solidcraft_viewport::material_graph::limits::COST_TYPICAL) {
             Some(ir) => best = Some((g, ir.cost)),
             None => break,
         }
@@ -344,7 +344,7 @@ fn frame_times(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, t: 
     spread((0..60).map(|step| t.draw(r, device, queue, &frame(scene, key, 100 + step, look)).0).collect())
 }
 
-/// §5.4 fragment cost: a constant graph against today's `fs_pbr`, a graph at the 2000-unit budget
+/// §5.4 fragment cost: a constant graph against today's `fs_pbr`, a graph at the typical cost
 /// against the look, the brushed (anisotropic) graph against the same graph without anisotropy,
 /// and the Standard view's scalar faces; [`LAYERS`] full-screen layers at 1920 × 1080.
 #[test]
@@ -595,6 +595,378 @@ fn texture_costs() {
             bytes.len() / 1024,
             decode.0,
             decode.1
+        );
+    }
+    println!("load after: {}", load());
+}
+
+/// One measured node: `count` copies made by `copy(i)`, each a list of nodes whose last
+/// produces a float named `x{i}`. Every copy has its own uniforms, so none can be merged.
+type Copy = fn(usize) -> Vec<Value>;
+
+/// The graph of `count` copies summed into the base colour, over a shared planar texcoord `uv`
+/// and an object position `p`. `slope`: the sum also drives a bump, so every copy carries slopes.
+fn copies_graph(copy: Copy, count: usize, slope: bool) -> MaterialGraph {
+    let mut nodes = vec![
+        json!({"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}}),
+        json!({"id": "p", "kind": "geometry.position", "params": {"space": "object"}}),
+    ];
+    let mut last: Option<String> = None;
+    for i in 0..count {
+        nodes.extend(copy(i));
+        let sum = format!("s{i}");
+        let a = last.clone().map_or(json!(0.0), |l| json!({"from": l}));
+        nodes.push(json!({"id": sum, "kind": "add", "inputs": {"a": a, "b": {"from": format!("x{i}")}}}));
+        last = Some(sum);
+    }
+    let last = last.unwrap_or_default();
+    nodes.push(json!({"id": "c", "kind": "convert.float_to_color3", "inputs": {"in": {"from": last}}}));
+    let mut surface = json!({"base_color": {"from": "c"}});
+    if slope {
+        nodes.push(json!({"id": "bump", "kind": "normal.from_height", "inputs": {"height": {"from": last}}}));
+        surface["geometry_normal"] = json!({"from": "bump"});
+    }
+    nodes.push(json!({"id": "surface", "kind": "standard_surface", "inputs": surface}));
+    graph_of(json!({"name": "copies", "nodes": nodes, "output": "surface"}))
+}
+
+fn scale(i: usize) -> f64 {
+    0.7 + 0.13 * i as f64
+}
+
+macro_rules! noise {
+    ($kind:literal, $dims:literal, $oct:literal) => {
+        |i| {
+            let source = if $dims == 2 { json!({"texcoord": {"from": "uv"}}) } else { json!({"position": {"from": "p"}}) };
+            let mut inputs = source;
+            inputs["scale_mm"] = json!(scale(i));
+            inputs["seed"] = json!(i);
+            vec![json!({"id": format!("x{i}"), "kind": "pattern.noise", "params": {"kind": $kind, "dimensions": $dims, "octaves": $oct}, "inputs": inputs})]
+        }
+    };
+}
+
+macro_rules! pattern {
+    ($kind:literal, $params:tt, $size:literal) => {
+        |i| vec![json!({"id": format!("x{i}"), "kind": $kind, "params": $params, "inputs": {"texcoord": {"from": "uv"}, $size: [scale(i), scale(i)]}})]
+    };
+}
+
+macro_rules! unary {
+    ($kind:literal) => {
+        |i| vec![json!({"id": format!("x{i}"), "kind": $kind, "inputs": {"in": scale(i)}})]
+    };
+}
+
+macro_rules! binary {
+    ($kind:literal) => {
+        |i| vec![json!({"id": format!("x{i}"), "kind": $kind, "inputs": {"a": scale(i), "b": 1.0 + scale(i)}})]
+    };
+}
+
+/// The measured kinds: (label, copy, slope).
+fn measured_kinds() -> Vec<(&'static str, Copy, bool)> {
+    vec![
+        ("constant (baseline)", |i| vec![json!({"id": format!("x{i}"), "kind": "constant", "inputs": {"value": scale(i)}})], false),
+        ("noise value 2D ×1", noise!("value", 2, 1), false),
+        ("noise value 2D ×4", noise!("value", 2, 4), false),
+        ("noise value 3D ×1", noise!("value", 3, 1), false),
+        ("noise value 3D ×4", noise!("value", 3, 4), false),
+        ("noise gradient 2D ×1", noise!("gradient", 2, 1), false),
+        ("noise gradient 2D ×4", noise!("gradient", 2, 4), false),
+        ("noise gradient 3D ×1", noise!("gradient", 3, 1), false),
+        ("noise gradient 3D ×4", noise!("gradient", 3, 4), false),
+        ("noise cellular 2D ×1", noise!("cellular", 2, 1), false),
+        ("noise cellular 2D ×4", noise!("cellular", 2, 4), false),
+        ("noise cellular 3D ×1", noise!("cellular", 3, 1), false),
+        ("noise cellular 3D ×4", noise!("cellular", 3, 4), false),
+        ("noise value 2D ×1, sloped", noise!("value", 2, 1), true),
+        ("constant, sloped (baseline)", |i| vec![json!({"id": format!("x{i}"), "kind": "constant", "inputs": {"value": scale(i)}})], true),
+        (
+            "brushed",
+            |i| {
+                vec![
+                    json!({"id": format!("x{i}"), "kind": "pattern.brushed", "inputs": {"texcoord": {"from": "uv"}, "density_per_mm": 10.0 * scale(i), "seed": i}}),
+                ]
+            },
+            false,
+        ),
+        ("weave plain", pattern!("pattern.weave", {"kind": "plain"}, "pitch_mm"), false),
+        ("weave twill", pattern!("pattern.weave", {"kind": "twill_2x2"}, "pitch_mm"), false),
+        ("checker", pattern!("pattern.checker", {}, "size_mm"), false),
+        ("grid", pattern!("pattern.grid", {}, "size_mm"), false),
+        (
+            "gradient",
+            |i| vec![json!({"id": format!("x{i}"), "kind": "pattern.gradient", "inputs": {"texcoord": {"from": "uv"}, "end": scale(i)}})],
+            false,
+        ),
+        (
+            "planar (+ separate3)",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.planar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "separate3", "inputs": {"in": {"from": format!("t{i}.uv")}}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "cylindrical (+ separate3)",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.cylindrical", "inputs": {"radius_mm": scale(i)}}),
+                    json!({"id": format!("x{i}"), "kind": "separate3", "inputs": {"in": {"from": format!("t{i}.uv")}}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "transform (+ separate3)",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.transform", "inputs": {"texcoord": {"from": "uv"}, "rotation": 0.1 * scale(i)}}),
+                    json!({"id": format!("x{i}"), "kind": "separate3", "inputs": {"in": {"from": format!("t{i}.uv")}}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "checker on its own planar",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.planar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "pattern.checker", "inputs": {"texcoord": {"from": format!("t{i}")}}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "checker on its own triplanar",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.triplanar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "pattern.checker", "inputs": {"texcoord": {"from": format!("t{i}")}}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "value noise on its own planar",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.planar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "pattern.noise", "inputs": {"texcoord": {"from": format!("t{i}")}, "scale_mm": scale(i)}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "value noise on its own triplanar",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.triplanar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "pattern.noise", "inputs": {"texcoord": {"from": format!("t{i}")}, "scale_mm": scale(i)}}),
+                ]
+            },
+            false,
+        ),
+        (
+            "weave on its own triplanar",
+            |i| {
+                vec![
+                    json!({"id": format!("t{i}"), "kind": "texcoord.triplanar", "inputs": {"origin": [scale(i), 0, 0]}}),
+                    json!({"id": format!("x{i}"), "kind": "pattern.weave", "inputs": {"texcoord": {"from": format!("t{i}")}, "pitch_mm": [scale(i), scale(i)]}}),
+                ]
+            },
+            false,
+        ),
+        ("noise cellular 2D ×1, sloped", noise!("cellular", 2, 1), true),
+        ("multiply", binary!("multiply"), false),
+        ("divide", binary!("divide"), false),
+        ("power", binary!("power"), false),
+        ("sin", unary!("sin"), false),
+        ("sqrt", unary!("sqrt"), false),
+        ("smoothstep", |i| vec![json!({"id": format!("x{i}"), "kind": "smoothstep", "inputs": {"edge0": 0.1, "edge1": 0.9, "in": scale(i)}})], false),
+        ("remap", unary!("remap"), false),
+        (
+            "hsv_adjust (+ luminance)",
+            |i| {
+                vec![
+                    json!({"id": format!("h{i}"), "kind": "hsv_adjust", "inputs": {"in": [0.5, 0.3, 0.2], "hue": 0.1 * scale(i)}}),
+                    json!({"id": format!("x{i}"), "kind": "luminance", "inputs": {"in": {"from": format!("h{i}")}}}),
+                ]
+            },
+            false,
+        ),
+    ]
+}
+
+/// §3.6 calibration: the GPU time each node kind adds per copy, over [`LAYERS`] full-screen
+/// 1080p layers, against the same number of constants, and the units that implies. One unit is
+/// defined so that 2000 units of nodes add half of today's look (`fs_pbr`) on top of a constant
+/// graph (so `limits::COST_TYPICAL`, 4000 units, is about 2× the look).
+///
+/// Per-copy cost is not always additive: some shapes fall off a compiler cliff (several times
+/// slower per copy at one count than at another). Each kind is measured at 2 and 8 copies (or as
+/// many as validate); the cheaper per-copy figure is the additive cost, and a ratio over 3 is
+/// reported as a cliff. Times are minima (over frames, then rounds): on a shared machine the
+/// least disturbed frame is the closest to the GPU's own time.
+#[test]
+#[ignore = "a measurement; run optimised with --nocapture"]
+fn node_costs() {
+    let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
+    println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
+    let t = Target::new(&device, SIZE);
+    let copper_graph: MaterialGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
+    let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let none = BTreeMap::new();
+    let mut key = 1000;
+    let mut time = |scene: &GpuScene| {
+        key += 1;
+        let mut r = renderer(&device, &queue);
+        frame_times(&mut r, &device, &queue, &t, scene, key, true).0
+    };
+    let filter = std::env::var("NODE_KINDS").ok();
+    let kinds: Vec<_> = measured_kinds().into_iter().filter(|k| filter.as_ref().is_none_or(|f| f.split(',').any(|f| k.0.contains(f)))).collect();
+    let constant = measured_kinds()[0].1;
+    // (kind, copies) → per-copy ms, one per round.
+    let mut results: BTreeMap<(&str, usize), Vec<f64>> = BTreeMap::new();
+    let mut pbr = Vec::new();
+    for round in 0..3 {
+        pbr.push(time(&pbr_layers(surface)));
+        let mut baselines: BTreeMap<(usize, bool), f64> = BTreeMap::new();
+        for (name, copy, slope) in &kinds {
+            for want in [2, 8] {
+                let Some((count, g)) = (1..=want).rev().map(|n| (n, copies_graph(*copy, n, *slope))).find(|(_, g)| validate(g).is_ok()) else {
+                    println!("round {round}: {name}: does not validate even once");
+                    continue;
+                };
+                if want == 8 && count <= 2 {
+                    continue;
+                }
+                let base = match baselines.get(&(count, *slope)) {
+                    Some(b) => *b,
+                    None => {
+                        let b = time(&graph_layers_with(&lowered(&copies_graph(constant, count, *slope)), &none, false));
+                        baselines.insert((count, *slope), b);
+                        b
+                    }
+                };
+                let ms = time(&graph_layers_with(&lowered(&g), &none, false));
+                let per = (ms - base) / count as f64;
+                results.entry((name, count)).or_default().push(per);
+                println!("round {round}: {name} × {count}: {ms:.3} ms against {base:.3} ms: {per:.4} ms a copy");
+            }
+        }
+    }
+    let (pbr_ms, _) = spread(pbr);
+    let unit = 0.5 * pbr_ms / 2000.0;
+    println!("fs_pbr {pbr_ms:.3} ms; one unit = {:.3} µs over {LAYERS} 1080p layers", unit * 1e3);
+    for (name, _, _) in &kinds {
+        let per: Vec<(usize, f64)> = results.iter().filter(|((n, _), _)| n == name).map(|((_, c), v)| (*c, spread(v.clone()).0)).collect();
+        let cheapest = per.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let dearest = per.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        let cliff = if cheapest > 0.0 && dearest > 3.0 * cheapest { " CLIFF" } else { "" };
+        let list: Vec<String> = per.iter().map(|(c, ms)| format!("×{c} {ms:.4}")).collect();
+        println!("{name}: {} ms a copy: {:.0} units{cliff}", list.join(", "), cheapest.max(0.0) / unit);
+    }
+    println!("load after: {}", load());
+}
+
+/// Whether per-copy costs add up: 1, 2, 4 and 8 copies of a few kinds (`NODE_KINDS` filters
+/// by label substring), each against the same number of constants.
+#[test]
+#[ignore = "a measurement; run optimised with --nocapture"]
+fn node_cost_linearity() {
+    let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
+    println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
+    let t = Target::new(&device, SIZE);
+    let none = BTreeMap::new();
+    let filter = std::env::var("NODE_KINDS").unwrap_or_else(|_| "value 2D ×1,cellular 2D ×1,gradient 3D ×1,cellular 3D ×1".into());
+    let kinds = measured_kinds();
+    let mut key = 5000;
+    for round in 0..2 {
+        for (name, copy, slope) in kinds.iter().filter(|k| filter.split(',').any(|f| k.0.contains(f))) {
+            for count in [1, 2, 4, 8] {
+                let g = copies_graph(*copy, count, *slope);
+                if validate(&g).is_err() {
+                    continue;
+                }
+                let mut ms = Vec::new();
+                for g in [g, copies_graph(kinds[0].1, count, *slope)] {
+                    key += 1;
+                    let mut r = renderer(&device, &queue);
+                    ms.push(frame_times(&mut r, &device, &queue, &t, &graph_layers_with(&lowered(&g), &none, false), key, true).1);
+                }
+                println!("round {round}: {name} × {count}: {:.3} ms against {:.3} ms: {:.4} ms a copy", ms[0], ms[1], (ms[0] - ms[1]) / count as f64);
+            }
+        }
+    }
+    println!("load after: {}", load());
+}
+
+#[test]
+#[ignore = "a diagnosis aid: prints the generated function of a measured graph"]
+fn print_copies_source() {
+    let kinds = measured_kinds();
+    let name = std::env::var("NODE_KINDS").unwrap_or_else(|_| "value 2D ×1".into());
+    let count: usize = std::env::var("COPIES").ok().and_then(|c| c.parse().ok()).unwrap_or(4);
+    let Some((_, copy, slope)) = kinds.iter().find(|k| k.0.contains(name.as_str())) else { panic!("no kind {name}") };
+    let src = super::shape_source(&lowered(&copies_graph(*copy, count, *slope)).ir).unwrap_or_else(|e| panic!("{e}"));
+    let start = src.find("fn material_eval").unwrap_or(0);
+    println!("{}", &src[start..]);
+}
+
+#[path = "../../../../assets/appearances/graphs/library.rs"]
+mod library;
+
+/// The real graphs (the built-in library and the showcase's) against the cost model: each one's
+/// GPU time over a constant graph on [`LAYERS`] full-screen 1080p layers, without the scalar
+/// underlay, and the units that implies (as [`node_costs`] defines a unit), beside the units the
+/// model gives it. Minima over frames and rounds.
+#[test]
+#[ignore = "a measurement; run optimised with --nocapture"]
+fn library_graph_costs() {
+    let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
+    println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
+    let t = Target::new(&device, SIZE);
+    let copper_graph: MaterialGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
+    let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let constant = lowered(&copper_graph);
+    let mut graphs: Vec<(String, MaterialGraph)> =
+        library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}")))).collect();
+    graphs.extend(showcase_graphs().into_iter().map(|(n, g)| (format!("showcase {n}"), g)));
+    let none = BTreeMap::new();
+    let mut key = 9000;
+    let mut time = |scene: &GpuScene| {
+        key += 1;
+        let mut r = renderer(&device, &queue);
+        frame_times(&mut r, &device, &queue, &t, scene, key, true).0
+    };
+    let mut best: BTreeMap<String, f64> = BTreeMap::new();
+    let mut pbr = Vec::new();
+    let mut base = Vec::new();
+    for _ in 0..3 {
+        pbr.push(time(&pbr_layers(surface)));
+        base.push(time(&graph_layers_with(&constant, &none, false)));
+        for (name, g) in &graphs {
+            let ms = time(&graph_layers_with(&lowered(g), &none, false));
+            let b = best.entry(name.clone()).or_insert(f64::INFINITY);
+            *b = b.min(ms);
+        }
+    }
+    let (pbr_ms, base_ms) = (spread(pbr).0, spread(base).0);
+    let unit = 0.5 * pbr_ms / 2000.0;
+    println!("fs_pbr {pbr_ms:.3} ms, constant graph {base_ms:.3} ms; one unit = {:.3} µs", unit * 1e3);
+    for (name, g) in &graphs {
+        let ms = best.get(name).copied().unwrap_or(f64::NAN);
+        println!(
+            "{name}: {ms:.3} ms ({:.2}× fs_pbr): {:.0} units measured, {} modelled",
+            ms / pbr_ms,
+            (ms - base_ms).max(0.0) / unit,
+            lowered(g).ir.cost
         );
     }
     println!("load after: {}", load());

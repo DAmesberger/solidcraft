@@ -13,7 +13,7 @@
      "license": "MIT OR Apache-2.0",
      "author": "SolidCraft contributors",
      "project": "Realistic view showcase",
-     "description": "Original example design for the Realistic view: brushed, polished and coated finishes, a carbon-fibre twill with a printed label, a clear silicone dome and the Sample Plate. Illustrative visual estimates, not measured optical data."
+     "description": "Original example design for the Realistic view: brushed, polished and coated finishes, the same red plastic with and without a clear coat, a carbon-fibre twill with a printed label, a clear silicone dome and the Sample Plate. Illustrative visual estimates, not measured optical data."
     }
    }
   },
@@ -389,7 +389,7 @@
    "params": {
     "body_name": "Steel cylinder",
     "base": [
-     -125,
+     -152,
      -45,
      0
     ],
@@ -404,7 +404,7 @@
    "params": {
     "body_name": "Steel sphere",
     "center": [
-     -75,
+     -108,
      -45,
      18
     ],
@@ -418,7 +418,7 @@
     "name": "Epoxy box profile",
     "plane": {
      "origin": [
-      -5,
+      -48,
       -45,
       0
      ],
@@ -467,42 +467,42 @@
    "params": {
     "edges": [
      [
-      -5,
+      -48,
       -65.0,
       26
      ],
      [
-      -5,
+      -48,
       -25.0,
       26
      ],
      [
-      -32.0,
+      -75.0,
       -45,
       26
      ],
      [
-      22.0,
+      -21.0,
       -45,
       26
      ],
      [
-      -29.949747468305834,
+      -72.94974746830583,
       -62.94974746830583,
       26
      ],
      [
-      -29.949747468305834,
+      -72.94974746830583,
       -27.050252531694166,
       26
      ],
      [
-      19.949747468305834,
+      -23.050252531694166,
       -62.94974746830583,
       26
      ],
      [
-      19.949747468305834,
+      -23.050252531694166,
       -27.050252531694166,
       26
      ]
@@ -511,11 +511,67 @@
    }
   },
   {
+   "command": "solid.cylinder",
+   "params": {
+    "body_name": "ABS puck",
+    "base": [
+     4,
+     -45,
+     0
+    ],
+    "radius": 16,
+    "height": 14,
+    "axis": "Z",
+    "operation": "new"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      20,
+      -45,
+      14
+     ]
+    ],
+    "radius": 9
+   }
+  },
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "body_name": "ABS puck, coated",
+    "base": [
+     42,
+     -45,
+     0
+    ],
+    "radius": 16,
+    "height": 14,
+    "axis": "Z",
+    "operation": "new"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      58,
+      -45,
+      14
+     ]
+    ],
+    "radius": 9
+   }
+  },
+  {
    "command": "solid.sphere",
    "params": {
     "body_name": "Silicone dome",
     "center": [
-     85,
+     104,
      -45,
      0
     ],
@@ -527,7 +583,7 @@
    "command": "solid.box",
    "params": {
     "corner": [
-     59,
+     78,
      -71,
      -26
     ],
@@ -949,6 +1005,44 @@
    }
   },
   {
+   "command": "appearance.graph.create",
+   "params": {
+    "id": "red-abs",
+    "name": "Red ABS",
+    "graph": {
+     "name": "Red ABS",
+     "interface": [
+      {
+       "name": "coat",
+       "type": "float",
+       "default": 0
+      }
+     ],
+     "nodes": [
+      {
+       "id": "surface",
+       "kind": "standard_surface",
+       "inputs": {
+        "base_color": [
+         0.5,
+         0.045,
+         0.035
+        ],
+        "specular_roughness": 0.45,
+        "specular_ior": 1.5,
+        "coat_weight": {
+         "interface": "coat"
+        },
+        "coat_roughness": 0.06,
+        "coat_ior": 1.5
+       }
+      }
+     ],
+     "output": "surface"
+    }
+   }
+  },
+  {
    "command": "appearance.assign",
    "params": {
     "bodies": [
@@ -1003,6 +1097,32 @@
    "command": "appearance.assign",
    "params": {
     "bodies": [
+     "ABS puck"
+    ],
+    "graph": "red-abs",
+    "values": {
+     "coat": 0
+    },
+    "name": "Red ABS"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
+     "ABS puck, coated"
+    ],
+    "graph": "red-abs",
+    "values": {
+     "coat": 1
+    },
+    "name": "Red ABS, clear coated"
+   }
+  },
+  {
+   "command": "appearance.assign",
+   "params": {
+    "bodies": [
      "Silicone dome"
     ],
     "graph": "clear-silicone",
@@ -1044,13 +1164,13 @@
     "name": "Showcase: isometric front-left",
     "camera": {
      "target": [
-      -10,
-      5,
+      0,
+      0,
       12
      ],
      "yaw": 0.7853981633974483,
      "pitch": 0.6154797086703874,
-     "distance": 520,
+     "distance": 400,
      "fov": 0.6
     }
    }
@@ -1061,13 +1181,13 @@
     "name": "Showcase: low back three-quarter",
     "camera": {
      "target": [
-      -10,
-      5,
+      0,
+      0,
       10
      ],
      "yaw": -2.35,
      "pitch": 0.26,
-     "distance": 500,
+     "distance": 390,
      "fov": 0.6
     }
    }

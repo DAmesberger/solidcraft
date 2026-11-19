@@ -243,18 +243,34 @@ def graphs(label_sha):
         ],
         "output": "surface",
     }
-    return {"brushed-aluminium": brushed, "black-epoxy": epoxy, "carbon-twill": carbon, "clear-silicone": silicone}
+    # One moulded plastic for the coated/uncoated pair (§5.9 "materials distinguishable"): the
+    # same base, with the clear coat's weight an interface input that each look sets.
+    abs_plastic = {
+        "name": "Red ABS",
+        "interface": [{"name": "coat", "type": "float", "default": 0}],
+        "nodes": [
+            {"id": "surface", "kind": "standard_surface", "inputs": {
+                "base_color": [0.50, 0.045, 0.035], "specular_roughness": 0.45, "specular_ior": 1.5,
+                "coat_weight": {"interface": "coat"}, "coat_roughness": 0.06, "coat_ior": 1.5}},
+        ],
+        "output": "surface",
+    }
+    return {"brushed-aluminium": brushed, "black-epoxy": epoxy, "carbon-twill": carbon, "clear-silicone": silicone,
+            "red-abs": abs_plastic}
 
 
 # Placement (centres on the floor, mm). Back row: Sample Plate, brushed lid, carbon plate.
-# Front row: polished steel cylinder and sphere, coated epoxy box, silicone dome.
+# Front row: polished steel cylinder and sphere, coated epoxy box, the red ABS pair (uncoated
+# left, clear coated right, side by side), silicone dome.
 SAMPLE = (-150, 30)  # the Sample Plate's corner; it is 80 x 50 mm
 LID = (-10, 55)
 PLATE = (115, 50)
-CYLINDER = (-125, -45)
-SPHERE = (-75, -45)
-EPOXY = (-5, -45)
-DOME = (85, -45)
+CYLINDER = (-152, -45)
+SPHERE = (-108, -45)
+EPOXY = (-48, -45)
+PUCKS = ((4, -45), (42, -45))  # uncoated, coated
+DOME = (104, -45)
+PUCK_NAMES = ("ABS puck", "ABS puck, coated")
 
 
 def sample_plate(s):
@@ -294,7 +310,7 @@ def scene(label_sha):
         "author": "SolidCraft contributors",
         "project": "Realistic view showcase",
         "description": "Original example design for the Realistic view: brushed, polished and coated "
-                       "finishes, a carbon-fibre twill with a printed label, a clear silicone dome and the "
+                       "finishes, the same red plastic with and without a clear coat, a carbon-fibre twill with a printed label, a clear silicone dome and the "
                        "Sample Plate. Illustrative visual estimates, not measured optical data.",
     })
 
@@ -304,6 +320,9 @@ def scene(label_sha):
     s.cmd("solid.cylinder", body_name="Steel cylinder", base=[CYLINDER[0], CYLINDER[1], 0], radius=15, height=40, axis="Z", operation="new")
     s.cmd("solid.sphere", body_name="Steel sphere", center=[SPHERE[0], SPHERE[1], 18], radius=18, operation="new")
     s.rounded_block("Epoxy box", EPOXY, (54, 40, 26), 7, 4)
+    for name, (px, py) in zip(PUCK_NAMES, PUCKS):
+        s.cmd("solid.cylinder", body_name=name, base=[px, py, 0], radius=16, height=14, axis="Z", operation="new")
+        s.cmd("solid.fillet", edges=[[px + 16, py, 14]], radius=9)
     s.cmd("solid.sphere", body_name="Silicone dome", center=[DOME[0], DOME[1], 0], radius=24, operation="new")
     s.cmd("solid.box", corner=[DOME[0] - 26, DOME[1] - 26, -26], length=52, width=52, height=26,
           operation="cut", targets=["Silicone dome"], name="Dome base")
@@ -318,6 +337,8 @@ def scene(label_sha):
     s.cmd("appearance.assign", bodies=["Epoxy box"], graph="black-epoxy", name="Black epoxy, clear coated")
     s.cmd("appearance.assign", bodies=["Carbon plate"], graph="carbon-twill", values={"label": {"texture": label_sha}},
           name="Carbon twill, labelled")
+    s.cmd("appearance.assign", bodies=[PUCK_NAMES[0]], graph="red-abs", values={"coat": 0}, name="Red ABS")
+    s.cmd("appearance.assign", bodies=[PUCK_NAMES[1]], graph="red-abs", values={"coat": 1}, name="Red ABS, clear coated")
     s.cmd("appearance.assign", bodies=["Silicone dome"], graph="clear-silicone", name="Clear silicone")
     # The Sample Plate: a metal PBR look on the body and a plain colour on the boss's top face.
     sx, sy = SAMPLE
@@ -327,8 +348,8 @@ def scene(label_sha):
     # Named views: isometric front-left, a low three-quarter view from the back, and a close-up
     # of the label and the dome.
     for name, target, yaw, pitch, distance in [
-        ("Showcase: isometric front-left", [-10, 5, 12], math.pi / 4, 0.6154797086703874, 520),
-        ("Showcase: low back three-quarter", [-10, 5, 10], -2.35, 0.26, 500),
+        ("Showcase: isometric front-left", [0, 0, 12], math.pi / 4, 0.6154797086703874, 400),
+        ("Showcase: low back three-quarter", [0, 0, 10], -2.35, 0.26, 390),
         ("Showcase: label and dome", [100, 0, 6], 0.55, 0.62, 260),
     ]:
         s.cmd("view.save", name=name, camera={"target": target, "yaw": yaw, "pitch": pitch, "distance": distance, "fov": 0.6})

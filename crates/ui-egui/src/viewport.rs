@@ -6133,6 +6133,10 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             app.viewport.lowered_noted = true;
             app.set_status(app.tr("ui.gpu_memory_lowered"), false);
         }
+        // Material-graph pipelines compile off the frame: draw again until they are in.
+        if app.viewport.draw_stats.as_ref().is_some_and(|s| s.lock().is_ok_and(|s| s.materials_pending)) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+        }
     } else if app.viewport.gpu_unavailable {
         unavailable_note(app, &painter, rect);
     }

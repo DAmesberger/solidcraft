@@ -214,6 +214,9 @@ fn draw(t: &Target, format: wgpu::TextureFormat, studio: Option<StudioPreset>, c
             egui_wgpu::CallbackTrait::paint(&cb, info, &mut pass, &resources);
         }
         let done = resources.get::<Renderer>().is_none_or(|r| !r.wants_redraw());
+        if !done && let Some(r) = resources.get::<Renderer>() {
+            r.wait_for_materials(std::time::Duration::from_secs(5));
+        }
         if (!done || n == 0) && n < 119 {
             queue.submit(extra.into_iter().chain([encoder.finish()]));
             device.poll(wgpu::PollType::wait_indefinitely()).ok()?;

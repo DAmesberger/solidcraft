@@ -16,9 +16,9 @@ and its revision exactly as they were.
 | Command | Params | Returns |
 |---|---|---|
 | `appearance.graph.nodes` | – | `{version, nodes}`: every node kind with typed inputs, ranges, defaults, params, outputs and cost |
-| `appearance.graph.validate` | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node?, port?, code, message}]}`; the design is not consulted |
+| `appearance.graph.validate` | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node?, port?, code, message}], note?}`; the design is not consulted |
 | `appearance.graph.list` | – | `{graphs: [{id, name, uses, source?}]}` |
-| `appearance.graph.get` | `{id}` | `{id, graph, cost, uses}` |
+| `appearance.graph.get` | `{id}` | `{id, graph, cost, uses, note?}` |
 | `appearance.texture.list` | – | `{textures: [{texture, name, width, height, bytes, uses}]}` |
 
 `uses` counts every look that names the graph (bodies, faces, components, physical
@@ -29,14 +29,17 @@ the graphs and looks that name it.
 
 | Command | Params | Returns |
 |---|---|---|
-| `appearance.graph.create` | `name`, `id?`, and `graph?` or `from?` | `{id, cost}` |
-| `appearance.graph.set` | `id`, `graph` | `{id, cost}` |
-| `appearance.graph.edit` | `id`, `ops` (1–512) | `{id, cost}` |
-| `appearance.graph.duplicate` | `id`, `new_id?`, `name?` | `{id, cost}` |
+| `appearance.graph.create` | `name`, `id?`, and `graph?` or `from?` | `{id, cost, note?}` |
+| `appearance.graph.set` | `id`, `graph` | `{id, cost, note?}` |
+| `appearance.graph.edit` | `id`, `ops` (1–512) | `{id, cost, note?}` |
+| `appearance.graph.duplicate` | `id`, `new_id?`, `name?` | `{id, cost, note?}` |
 | `appearance.graph.delete` | `id`, `replace_with?` | `{replaced}` |
-| `appearance.graph.convert` | `look`, `id?`, `name?`, `scope?` | `{id, cost, count}` |
+| `appearance.graph.convert` | `look`, `id?`, `name?`, `scope?` | `{id, cost, count, note?}` |
 | `appearance.graph.update_from_library` | `id`, `library`, `preview?` | `{applied, changes, looks}` |
 
+- **Cost** is advisory (note §3.6): `note` is present when the graph is heavier than typical
+  (over 4,000 units, about 2× today's look), and the graph is still accepted. Only a graph
+  over the 100,000-unit safety bound is refused (error code `cost`).
 - **Ids** are 1–64 characters of `a–z 0–9 _ . -`. Without `id`, one is made from the name
   (`"Brushed Nickel/Silver"` → `brushed-nickel-silver`, then `-2`, `-3` …). A given id that
   is taken is refused.

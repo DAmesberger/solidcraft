@@ -652,7 +652,7 @@ fn preview(ui: &mut egui::Ui, ed: &Editor, gpu: bool, look: Option<OpaqueSurface
     ui.painter().rect_stroke(rect, t.control_radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
 }
 
-/// The cost against the budget, and validation's findings.
+/// The cost against a typical graph's (advisory), and validation's findings.
 fn budget(ui: &mut egui::Ui, ed: &Editor) {
     let Some(loaded) = ed.graph() else { return };
     // The cost is the last reply's (`get`, or the change that made the graph).
@@ -661,9 +661,14 @@ fn budget(ui: &mut egui::Ui, ed: &Editor) {
         Some(Ok(v)) => (Some(v.samples), Some(v.textures)),
         _ => (None, None),
     };
-    let text = format("appearance.graph.cost", &[("cost", &cost.to_string()), ("budget", &limits::COST_UNITS.to_string())]);
+    // Advisory only: a graph is never refused for its cost below the safety bound (§3.6).
+    let text = format("appearance.graph.cost", &[("cost", &cost.to_string()), ("budget", &limits::COST_TYPICAL.to_string())]);
     ui_kit::row(ui, tr("appearance.graph.budget"), |ui| ui_kit::text(ui, &text, ui_kit::Text::MonoCell));
-    ui_kit::progress(ui, "appearance_graph_cost", model::fraction(cost, limits::COST_UNITS));
+    ui_kit::progress(ui, "appearance_graph_cost", model::fraction(cost, limits::COST_TYPICAL));
+    if cost > limits::COST_TYPICAL {
+        let times = format!("{:.1}", 1.0 + f64::from(cost) / 4000.0);
+        ui_kit::status_line(ui, &format("appearance.graph.heavy", &[("times", &times)]), ui_kit::StatusTone::Warning);
+    }
     if let (Some(samples), Some(textures)) = (samples, textures) {
         let text = format(
             "appearance.graph.samples",

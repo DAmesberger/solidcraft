@@ -208,7 +208,8 @@ pub struct Ir {
     /// Floats of uniform data one material of this graph needs (≤ `limits::UNIFORM_FLOATS`).
     pub uniform_floats: u32,
     pub textures: Vec<TextureBinding>,
-    /// Cost units after expansion (≤ `limits::COST_UNITS`).
+    /// Cost units after expansion (≤ `limits::COST_UNITS`, the safety bound; above
+    /// `limits::COST_TYPICAL` it is heavier than typical).
     pub cost: u32,
     /// Texture samples after expansion (≤ `limits::TEXTURE_SAMPLES`).
     pub samples: u32,

@@ -258,7 +258,8 @@ pub(crate) fn paint(ui: &egui::Ui, id: egui::Id, rect: egui::Rect, sample: Sampl
     }
 }
 
-/// Whether the swatch's material pipeline was still compiling in the last frame.
+/// Whether the swatch's material pipelines or textures were still being prepared in the last
+/// frame (they compile off the frame).
 static MATERIAL_PENDING: AtomicBool = AtomicBool::new(false);
 
 struct SwatchCallback(Frame);
@@ -287,7 +288,7 @@ impl egui_wgpu::CallbackTrait for SwatchCallback {
             STUDIO_READY.store(swatch.renderer.has_studio_environment(look.studio), Ordering::Relaxed);
         }
         swatch.renderer.prepare(device, queue, encoder, &self.0);
-        MATERIAL_PENDING.store(swatch.renderer.material_stats().pending > 0, Ordering::Relaxed);
+        MATERIAL_PENDING.store(swatch.renderer.wants_redraw(), Ordering::Relaxed);
         Vec::new()
     }
 
