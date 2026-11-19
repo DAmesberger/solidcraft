@@ -664,6 +664,33 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
     assert!(counts(&app).0.is_empty());
 }
 
+/// Until its shape compiles, a graph look draws its base response (§5.6) with the look's own
+/// values: the record's head is the look's colour, never the graph's default (a first frame in
+/// the default colour flashed before the compiled one).
+#[test]
+fn a_graph_look_waits_for_its_shape_in_its_own_colour() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    // A base and a coat colour on the interface, as the library's coated graphs take them.
+    app.run("appearance.graph.create", json!({"id": "coated", "name": "Coated", "graph": {"name": "Coated", "interface": [
+        {"name": "tint", "type": "color3", "default": [0.5, 0.05, 0.05]}, {"name": "coat", "type": "color3", "default": [0.1, 0.45, 0.12]}],
+        "nodes": [{"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"interface": "tint"}, "coat_weight": 1, "coat_color": {"interface": "coat"}}}], "output": "s"}}))
+    .unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "coated", "values": {"tint": [0.7, 0.6, 0.1], "coat": [0.04, 0.12, 0.42]}}))
+        .unwrap();
+    app.viewport.gpu =
+        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.ui.view_look = crate::view_look::REALISTIC;
+    let sc = build_scene(&app);
+    let page = sc.graphs.pages().first().map(|p| p.words.clone()).unwrap_or_default();
+    let head: Vec<f32> = page.iter().take(20).map(|w| f32::from_bits(*w)).collect();
+    let close = |a: &[f32], b: [f32; 3]| a.len() == 3 && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+    // `base_record`: (base colour, metalness), …, (coat colour, transmission) at vec4 4.
+    assert!(close(&head[0..3], [0.7, 0.6, 0.1]), "base colour from the look: {head:?}");
+    assert!(close(&head[16..19], [0.04, 0.12, 0.42]), "coat colour from the look: {head:?}");
+}
+
 /// A see-through graph look (transmission) in the Realistic view: the material stream draws its
 /// faces blended, and the standard path draws them as glass that shows nothing.
 #[test]

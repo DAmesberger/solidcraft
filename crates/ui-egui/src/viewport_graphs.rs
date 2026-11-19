@@ -53,7 +53,8 @@ fn content_key(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> u6
 fn lower(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<Lowered, String> {
     let valid = mg::validate(graph).map_err(|e| e.to_string())?;
     let ir = mg::lower(&valid).map_err(|e| e.to_string())?;
-    let base = mg::base_sample(&valid).map_err(|e| e.to_string())?;
+    // The look's values, not the graph's defaults: this is what shows until the shape compiles.
+    let base = mg::look_base_sample(graph, values).map_err(|e| e.to_string())?;
     let words = mg::uniform_words(&ir, values).map_err(|e| e.to_string())?;
     Ok(Lowered { ir: Arc::new(ir), words, base })
 }

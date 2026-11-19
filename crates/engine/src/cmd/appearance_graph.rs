@@ -289,14 +289,7 @@ fn check_values(cmd: &str, look: &Look, graph: &MaterialGraph, ir: &Ir) -> Resul
 /// The colour the standard view shows for a graph with these values: the base response's base
 /// colour, sRGB8 (docs/material-graph.md §4.1).
 fn display_color(cmd: &str, graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<[u8; 3]> {
-    let mut graph = graph.clone();
-    for input in &mut graph.interface {
-        if let Some(v) = values.get(&input.name) {
-            input.default = Some(v.clone());
-        }
-    }
-    let validated = mg::validate(&graph).map_err(|e| invalid(cmd, "the look's graph", &e))?;
-    let base = mg::base_response(&validated).map_err(|e| invalid(cmd, "the look's graph", &e))?.base_color();
+    let base = mg::look_base_sample(graph, values).map_err(|e| invalid(cmd, "the look's graph", &e))?.opaque.base_color();
     Ok([base.x, base.y, base.z].map(solidcraft_color::srgb::encode8))
 }
 

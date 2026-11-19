@@ -32,7 +32,9 @@ mod validate;
 
 pub use catalogue::{CATALOGUE, CATALOGUE_VERSION, InputDefault, InputSpec, NodeSpec, OutputSpec, ParamKind, ParamSpec, PortType, node_spec};
 pub use graph::{Connection, Constant, GraphSource, InputValue, InterfaceInput, InterfaceRef, MaterialGraph, Node, ParamValue};
-pub use ir::{GraphError, GraphIssue, Ir, ShapeKey, UniformSlot, Validated, base_response, base_sample, lower, uniform_words, validate};
+pub use ir::{
+    GraphError, GraphIssue, Ir, ShapeKey, UniformSlot, Validated, base_response, base_sample, look_base_sample, lower, uniform_words, validate,
+};
 pub use sample::SurfaceSample;
 
 /// Bounds every graph is checked against when it is read. Hostile input: these keep the

@@ -58,21 +58,14 @@ pub fn extract(s: &Session) -> Result<ProductScene> {
 fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_viewport::surface::OpaqueSurface>> {
     let Some(id) = &look.graph else { return look.opaque_surface().map_err(|e| EngineError::Other(e.to_string())) };
     let fail = |e: solidcraft_render::material_graph::GraphError| EngineError::Other(format!("material graph `{}`: {e}", id.as_str()));
-    let mut graph = s
+    let graph = s
         .doc
         .appearances
         .tables
         .graphs
         .get(id)
-        .cloned()
         .ok_or_else(|| EngineError::Other(format!("a look names missing material graph `{}`", id.as_str())))?;
-    for input in &mut graph.interface {
-        if let Some(v) = look.values.get(&input.name) {
-            input.default = Some(v.clone());
-        }
-    }
-    let validated = solidcraft_render::material_graph::validate(&graph).map_err(fail)?;
-    solidcraft_render::material_graph::base_response(&validated).map(Some).map_err(fail)
+    solidcraft_render::material_graph::look_base_sample(graph, &look.values).map(|s| Some(s.opaque)).map_err(fail)
 }
 
 /// For each of `scene`'s meshes, the shared mesh it is drawn from and the placement that moves

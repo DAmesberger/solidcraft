@@ -39,7 +39,7 @@ impl Material {
     pub(crate) fn new(graph: &MaterialGraph, values: &std::collections::BTreeMap<String, Constant>) -> Option<Material> {
         let valid = mg::validate(graph).ok()?;
         let ir = mg::lower(&valid).ok()?;
-        let base = mg::base_sample(&valid).ok()?;
+        let base = mg::look_base_sample(graph, values).ok()?;
         let words = mg::uniform_words(&ir, values).ok()?;
         let record = solidcraft_viewport_gpu::material::base_record(&base);
         let bytes =

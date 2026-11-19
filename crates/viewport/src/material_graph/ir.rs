@@ -255,6 +255,19 @@ pub fn base_sample(graph: &Validated) -> Result<SurfaceSample, GraphError> {
     super::base::sample(&analysis).map_err(GraphError::Invalid)
 }
 
+/// [`base_sample`] for a look: `graph` with the look's interface `values` in place of the
+/// interface's defaults. What the look shows while its shape compiles and its display colour, so
+/// a look never shows the graph's own default colours (docs/material-graph.md §5.6).
+pub fn look_base_sample(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<SurfaceSample, GraphError> {
+    let mut graph = graph.clone();
+    for input in &mut graph.interface {
+        if let Some(v) = values.get(&input.name) {
+            input.default = Some(v.clone());
+        }
+    }
+    base_sample(&validate(&graph)?)
+}
+
 /// One material's uniform data: `ir.uniform_floats` 32-bit words (`f32` bits; seeds as `u32`),
 /// with interface slots taken from `values` where given, else their defaults. Values are checked
 /// for type and range; names that no slot reads (a texture, an unused input) are ignored.
