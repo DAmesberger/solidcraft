@@ -60,7 +60,10 @@ Recorded on an Apple M5 Max (Metal) at `45427568d`:
 The bar is not met yet. In the modelling view's Realistic frames:
 
 - Clipping and crushing pass. Every part is at or under 1 % in all three views, except the
-  silicone dome's 1.9 % clipped from the low back view.
+  silicone dome's 1.9 % clipped from the low back view. Re-measured at `a2ee99436`, where what
+  shows through a see-through face keeps only 1 − F: from the low back view the dome clips 1.11 %
+  under Product and 0.85 % under Contrast (Render preview 1.68 % and 1.30 %). What is left is the
+  key softbox's highlight on the dome's top, a compact highlight.
 - Face medians fail:
   - the brushed lid's top reads 246–251;
   - the Sample Plate's top reads 245 in the isometric view, where the bar for the Sample Plate is
