@@ -662,3 +662,27 @@ fn the_material_graphs_example_builds() {
     let text = s.doc.to_json();
     assert_eq!(solidcraft_doc::Document::from_json(&text).unwrap().appearances, s.doc.appearances);
 }
+
+/// The Realistic showcase (`examples/realistic-showcase.json`, note §5.9) builds through the
+/// commands, and its coated/uncoated pair is one red plastic: the same graph on two like
+/// bodies, whose looks set only the clear coat's weight (0 and 1).
+#[test]
+fn the_showcase_pairs_one_plastic_with_and_without_its_coat() {
+    let mut script: Value = serde_json::from_str(include_str!("../../../../examples/realistic-showcase.json")).unwrap();
+    // Its texture paths are relative to the repository root.
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    for c in script["commands"].as_array_mut().into_iter().flatten().filter(|c| c["command"] == "appearance.texture.add") {
+        let path = format!("{root}{}", c["params"]["path"].as_str().unwrap());
+        c["params"]["path"] = json!(path);
+    }
+    let mut s = Session::default();
+    s.run_script(&script).unwrap();
+    let look = |body: &str| serde_json::to_value(s.doc.appearances.bodies.get(body).unwrap_or_else(|| panic!("{body} has a look"))).unwrap();
+    let (plain, coated) = (look("ABS puck"), look("ABS puck, coated"));
+    assert_eq!((&plain["graph"], &coated["graph"]), (&json!("red-abs"), &json!("red-abs")), "{plain} {coated}");
+    assert_eq!((&plain["values"]["coat"], &coated["values"]["coat"]), (&json!(0.0), &json!(1.0)));
+    let state = s.model.state();
+    for body in ["ABS puck", "ABS puck, coated"] {
+        assert!(state.bodies.iter().any(|b| b.name == body), "{body} is built");
+    }
+}
