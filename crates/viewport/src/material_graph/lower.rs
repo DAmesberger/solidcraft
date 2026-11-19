@@ -312,17 +312,22 @@ fn instr_cost(instr: &Instr) -> (u64, u64) {
     let Some(spec) = node_spec(instr.op) else { return (0, 0) };
     let param = |name: &str| spec.params.iter().position(|p| p.name == name).and_then(|i| instr.params.get(i)).copied();
     let mut cost = u64::from(spec.cost);
+    let mut slope_factor = 3;
     if instr.op == "pattern.noise" {
         let octaves = u64::try_from(param("octaves").unwrap_or(1)).unwrap_or(1);
-        let dims = if param("dimensions") == Some(3) { 2 } else { 1 };
-        let (num, den) = match param("kind") {
-            Some(1) => (3, 2),
-            Some(2) => (3, 1),
-            _ => (1, 1),
+        let dims = param("dimensions").unwrap_or(2);
+        let kind = match param("kind") {
+            Some(1) => "gradient",
+            Some(2) => "cellular",
+            _ => "value",
         };
-        cost = cost.saturating_mul(octaves).saturating_mul(dims).saturating_mul(num) / den;
+        cost = cost.saturating_add(u64::from(super::catalogue::noise_octave_cost(kind, dims)).saturating_mul(octaves));
+        // A 3D noise's slope is three more evaluations (one per axis), a 2D pattern's two.
+        if dims == 3 {
+            slope_factor = 4;
+        }
     }
-    let factor = if instr.slope { 3 } else { 1 } * if instr.triplanar { 3 } else { 1 };
+    let factor = if instr.slope { slope_factor } else { 1 } * if instr.triplanar { 3 } else { 1 };
     let samples = match (instr.op, instr.triplanar) {
         ("image", true) => 3,
         ("image", false) => 1,
@@ -377,7 +382,16 @@ pub(super) fn build(an: &Analysis) -> Result<Ir, Vec<GraphIssue>> {
         || l.memo.values().any(|o| *o == Operand::Geometry(GeometryInput::ObjectPosition));
     let mut issues = l.issues;
     if cost > u64::from(limits::COST_UNITS) {
-        issues.push(None, None, "cost", format!("the graph costs {cost} units after expansion; the budget is {}", limits::COST_UNITS));
+        issues.push(
+            None,
+            None,
+            "cost",
+            format!(
+                "the graph costs {cost} units after expansion; the safety bound is {} (a typical graph stays under {})",
+                limits::COST_UNITS,
+                limits::COST_TYPICAL
+            ),
+        );
     }
     if samples > u64::from(limits::TEXTURE_SAMPLES) {
         issues.push(None, None, "samples", format!("the graph takes {samples} texture samples after expansion; at most {}", limits::TEXTURE_SAMPLES));

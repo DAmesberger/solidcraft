@@ -223,7 +223,7 @@ with bounded cost, and derivatives stay valid everywhere (§5.1).
 | Interface inputs | 32 | |
 | Ids | 1–64 bytes `[a-z0-9_.-]`, unique within a graph | Never used as identifiers in generated code. |
 | Names | 1–256 UTF-8 bytes, no control characters | As body names. |
-| Cost after expansion (§3.6) | 2000 units | Bounds per-pixel ALU (target, §5.4). |
+| Cost after expansion (§3.6) | 100,000 units (safety bound) | Not a quality limit: it stops pathological or hostile graphs that would stall the GPU until the driver resets it. Above 4,000 units (about 2× today's look) a graph is only reported as heavier than typical. |
 | Texture samples after expansion | 8 | Triplanar images count three each. |
 | Distinct textures per graph | 4 | WebGL2 has 16 sampled textures per stage (§5.3). |
 | Texture assets | ≤ 16384 px a side, ≤ 256 MiB encoded, ≤ 256 per design, ≤ 1 GiB decoded per design | Safety only (§4.3); the renderer clamps the resident size. |
@@ -232,13 +232,33 @@ with bounded cost, and derivatives stay valid everywhere (§5.1).
 
 ### 3.6 Cost model
 
-Each node kind has a fixed cost in "units", roughly ALU operations, taken from its prelude
-function: `constant` 0, arithmetic 1, `smoothstep` 4, `pattern.noise` 2D value 20 per
-octave (3D 40, gradient ×1.5, cellular ×3), `pattern.weave` 60, `image` 8 plus one sample,
-and `standard_surface` 0 (the lighting is fixed cost). Slope-carrying wires cost ×3 and
-triplanar subgraphs ×3. Validation computes the expanded cost and refuses a graph over the
-budget, so an author learns at once, not at frame time. The table is part of the node
-catalogue that `appearance.graph.nodes` returns (§7.2).
+Each node kind has a fixed cost in "units", calibrated against GPU time
+(`material::perf_tests::node_costs` and `library_graph_costs`, recorded in `docs/perf.md`):
+one unit is the fragment time with which 2000 units add half of today's look (`fs_pbr`) on
+top of a constant graph, so a graph's fragment time is about 1 + cost / 4000 times the look.
+`constant` 0, arithmetic 1, `smoothstep` 4, `hsv_adjust` 40, `pattern.brushed` 100,
+`pattern.weave` 120, `image` 8 plus one sample, and `standard_surface` 0 (the lighting is
+fixed cost). `pattern.noise` costs 100 plus, per octave, 75 (2D value), 150 (3D value), 200
+(2D gradient), 500 (3D gradient), 400 (2D cellular) or 1500 (3D cellular). Slope-carrying
+wires cost ×3 (×4 for 3D noise, one more evaluation per axis) and triplanar subgraphs ×3.
+These are each kind's linear costs; the generated code's shape keeps the driver from adding
+more (§5.1).
+
+The cost is **advisory**: there is no quality limit. Validation computes the expanded cost,
+and the commands and the editor report it; above 4,000 units (`limits::COST_TYPICAL`, about
+2× today's look) they add a "heavier than typical" note, and the graph is still accepted and
+drawn. Only a graph over the **safety bound** of 100,000 units (`limits::COST_UNITS`) is
+refused. That bound guards against pathological or hostile files, which are untrusted: at
+100,000 units a full-screen layer takes about 25× today's look on a fast desktop GPU, and on
+a GPU twenty times slower, at 4K with some overdraw, about a second a frame, near the point
+where drivers reset the GPU (Windows' 2 s timeout) and browsers lose the WebGL context. The
+table is part of the node catalogue that `appearance.graph.nodes` returns (§7.2).
+
+**Open item: quality tiers (not built).** Viewers could later choose a quality tier, as games
+do (for example Low, Medium, High, Ultra), each with its own cost budget. A graph over the
+tier's budget would then draw a cheaper form (its base response, or fewer octaves) in that
+viewer only; the file and the graph stay the same. Nothing of this exists yet: today every
+graph under the safety bound draws in full.
 
 ### 3.7 Today's looks, expressed
 
@@ -817,7 +837,7 @@ frame. A browser run of the graph path is part of the completion evidence (track
 | Pipeline creation per new shape | ≤ 30 ms native, ≤ 150 ms WebGL2, off the critical frame by §5.2 |
 | GPU memory per material | ≤ 1 KiB uniform + its textures (+⅓ for mips) |
 | Draws per frame | one per (shape, page, texture set): ≤ 20 for a typical product or board scene |
-| Fragment cost | constant-only graph = today's `fs_pbr`; a graph at the 2000-unit budget ≤ 1.5× today's look fragment time at 1080p |
+| Fragment cost | constant-only graph = today's `fs_pbr`; a graph's fragment time about 1 + cost / 4000 times today's look at 1080p (the cost model's calibration, §3.6) |
 | Value edit (slider drag) | uniform upload only, ≤ 0.1 ms, no rebuild of geometry |
 | Selection and camera changes | no rebuild and no recompile |
 
@@ -1243,7 +1263,8 @@ a permissively licensed egui node-graph widget would be evaluated then, with its
 named in the PR.
 
 The editor shows a live swatch (a sphere and a flat coupon, rendered on the GPU with the product look
-off the window thread) and the graph's cost against the budget. Every edit is a command
+off the window thread) and the graph's cost against a typical graph's, with a "heavier than
+typical" note above it (advisory, §3.6). Every edit is a command
 (below); a slider drag is one undo step on release.
 
 ### 7.2 Commands

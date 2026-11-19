@@ -56,7 +56,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .doc_only()
         .contract(&VALIDATE)
         .output(output_schema_for::<GraphValidateResult>)
-        .params("graph → {ok, cost, samples, textures, shape, errors: [{node?, port?, code, message}]}; read-only, the design is not consulted"),
+        .params("graph → {ok, cost, samples, textures, shape, errors: [{node?, port?, code, message}], note?}; read-only, the design is not consulted. note: the graph is heavier than typical (advisory, never a refusal)"),
     CommandSpec::new("appearance.graph.create", "New Material Graph", crate::checked!("appearance.graph.create", create))
         .icon("appearance")
         .contract(&CREATE)
@@ -192,6 +192,19 @@ fn lowered(graph: &MaterialGraph) -> std::result::Result<Ir, GraphError> {
 
 fn cost_of(graph: &MaterialGraph) -> u32 {
     lowered(graph).map_or(0, |ir| ir.cost)
+}
+
+/// The advisory for a graph heavier than typical (§3.6): never a refusal. A graph's fragment
+/// time is about 1 + cost / 4000 times today's look.
+pub(crate) fn heavy_note(cost: u32) -> Option<String> {
+    (cost > mg::limits::COST_TYPICAL).then(|| {
+        format!(
+            "heavier than typical: {cost} cost units, above the typical {} (about {:.1}× the fragment time of a standard look); \
+             it is drawn as it is, and may slow the Realistic view",
+            mg::limits::COST_TYPICAL,
+            1.0 + f64::from(cost) / 4000.0
+        )
+    })
 }
 
 /// A new graph id made from `name`: `[a-z0-9_.-]`, and not yet in the table.
@@ -370,7 +383,7 @@ fn commit(cmd: &str, s: &mut Session, mut doc: Document, changed: &BTreeSet<Grap
 
 fn changed_reply(cmd: &str, s: &Session, id: &GraphId) -> Result<Value> {
     let cost = s.doc.appearances.tables.graphs.get(id).map_or(0, cost_of);
-    reply(cmd, GraphChanged { id: id.as_str().to_string(), cost, param_warnings: Vec::new() })
+    reply(cmd, GraphChanged { id: id.as_str().to_string(), cost, note: heavy_note(cost), param_warnings: Vec::new() })
 }
 
 /// Put `graph` in the table as `id` (new or replacing), then check and commit.
@@ -398,14 +411,26 @@ fn validate(_s: &mut Session, p: &Value) -> Result<Value> {
             let textures = u32::try_from(ir.textures.len()).unwrap_or(u32::MAX);
             return reply(
                 cmd,
-                GraphValidateResult { ok: true, cost: ir.cost, samples: ir.samples, textures, shape, errors: Vec::new(), param_warnings: Vec::new() },
+                GraphValidateResult {
+                    ok: true,
+                    cost: ir.cost,
+                    samples: ir.samples,
+                    textures,
+                    shape,
+                    errors: Vec::new(),
+                    note: heavy_note(ir.cost),
+                    param_warnings: Vec::new(),
+                },
             );
         }
         Err(GraphError::NotBuilt(what)) => return Err(bad(cmd, format!("{what} is not built yet; nothing was checked"))),
         Err(GraphError::Invalid(issues)) => issues,
     };
     let errors = issues.into_iter().map(|i| GraphIssueReply { node: i.node, port: i.port, code: i.code.to_string(), message: i.message }).collect();
-    reply(cmd, GraphValidateResult { ok: false, cost: 0, samples: 0, textures: 0, shape: String::new(), errors, param_warnings: Vec::new() })
+    reply(
+        cmd,
+        GraphValidateResult { ok: false, cost: 0, samples: 0, textures: 0, shape: String::new(), errors, note: None, param_warnings: Vec::new() },
+    )
 }
 
 /// A saved look given as `from` or `look`: `{name?, color, opacity?, pbr?}`, read as
@@ -484,7 +509,16 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     };
     commit(cmd, s, doc, &BTreeSet::from([id.clone()]), false)?;
     let cost = s.doc.appearances.tables.graphs.get(&id).map_or(0, cost_of);
-    reply(cmd, GraphConverted { id: id.as_str().to_string(), cost, count: u64::try_from(count).unwrap_or(u64::MAX), param_warnings: Vec::new() })
+    reply(
+        cmd,
+        GraphConverted {
+            id: id.as_str().to_string(),
+            cost,
+            count: u64::try_from(count).unwrap_or(u64::MAX),
+            note: heavy_note(cost),
+            param_warnings: Vec::new(),
+        },
+    )
 }
 
 fn existing(cmd: &str, s: &Session, id: &str) -> Result<(GraphId, MaterialGraph)> {
@@ -615,7 +649,7 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let uses = uses(&s.doc).get(&id).copied().unwrap_or(0);
     let cost = cost_of(&graph);
     let graph = serde_json::to_value(&graph).map_err(|e| bad(cmd, e.to_string()))?;
-    reply(cmd, GraphGetResult { id: id.as_str().to_string(), graph, cost, uses, param_warnings: Vec::new() })
+    reply(cmd, GraphGetResult { id: id.as_str().to_string(), graph, cost, uses, note: heavy_note(cost), param_warnings: Vec::new() })
 }
 
 fn list(s: &mut Session, p: &Value) -> Result<Value> {

@@ -96,7 +96,9 @@ pub struct NodeSpec {
     pub inputs: &'static [InputSpec],
     pub params: &'static [ParamSpec],
     pub outputs: &'static [OutputSpec],
-    /// Cost units before expansion (§3.6): noise is per octave; slopes and triplanar multiply.
+    /// Cost units before expansion (§3.6), calibrated against GPU time (docs/perf.md). For
+    /// `pattern.noise` this is the fixed part; each octave adds [`noise_octave_cost`]. Slopes
+    /// and triplanar multiply.
     pub cost: u32,
 }
 
@@ -250,7 +252,7 @@ pub const CATALOGUE: &[NodeSpec] = &[
             int("octaves", 1, super::limits::NOISE_OCTAVES, 1),
         ],
         PATTERN_OUT,
-        20,
+        100,
     ),
     node(
         "pattern.brushed",
@@ -264,7 +266,7 @@ pub const CATALOGUE: &[NodeSpec] = &[
         ],
         &[],
         &[out("value", PortType::Float), out("slope", PortType::Vector2), out("tangent", PortType::Vector3)],
-        30,
+        100,
     ),
     node(
         "pattern.weave",
@@ -277,7 +279,7 @@ pub const CATALOGUE: &[NodeSpec] = &[
         ],
         &[choice("kind", &["plain", "twill_2x2"], "plain")],
         PATTERN_OUT,
-        60,
+        120,
     ),
     node("pattern.checker", &[TEXCOORD, vec2("size_mm", 0.001, LENGTH, [1.0, 1.0])], &[], &[out("value", PortType::Float)], 6),
     node(
@@ -371,10 +373,24 @@ pub const CATALOGUE: &[NodeSpec] = &[
         &[color("in", [0.0, 0.0, 0.0]), float("hue", -PI, PI, 0.0), float("saturation", 0.0, 4.0, 1.0), float("value", 0.0, 4.0, 1.0)],
         &[],
         &[out("out", PortType::Color3)],
-        12,
+        40,
     ),
     node("convert.float_to_color3", &[float("in", -LENGTH, LENGTH, 0.0)], &[], &[out("out", PortType::Color3)], 0),
     node("convert.float_to_vector3", &[float("in", -LENGTH, LENGTH, 0.0)], &[], &[out("out", PortType::Vector3)], 0),
     node("convert.color3_to_vector3", &[color("in", [0.0, 0.0, 0.0])], &[], &[out("out", PortType::Vector3)], 0),
     node("convert.vector3_to_color3", &[vec3("in", -LENGTH, LENGTH, [0.0, 0.0, 0.0])], &[], &[out("out", PortType::Color3)], 0),
 ];
+
+/// Cost units of one octave of `pattern.noise` of `kind` (`value`, `gradient`, `cellular`) in
+/// `dimensions` (2 or 3), calibrated against GPU time (§3.6, docs/perf.md).
+pub fn noise_octave_cost(kind: &str, dimensions: i64) -> u32 {
+    let three = dimensions == 3;
+    match (kind, three) {
+        ("gradient", false) => 200,
+        ("gradient", true) => 500,
+        ("cellular", false) => 400,
+        ("cellular", true) => 1500,
+        (_, false) => 75,
+        (_, true) => 150,
+    }
+}

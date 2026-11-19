@@ -105,14 +105,14 @@ fn mixed_128() -> MaterialGraph {
     graph_of(json!({"name": "mixed", "nodes": nodes, "output": "s"}))
 }
 
-/// The most expensive graph of `count` 3-D gradient noises of 8 octaves summed into the colour
-/// that still validates: the one nearest the 2000-unit budget.
+/// The most expensive graph of one-octave 3-D gradient noises summed into the colour that stays
+/// within a typical graph's cost (`limits::COST_TYPICAL`, about 2× today's look).
 fn budget_graph() -> (MaterialGraph, u32) {
     let make = |count: usize| {
         let mut nodes = vec![json!({"id": "p", "kind": "geometry.position", "params": {"space": "object"}})];
         let mut last: Option<String> = None;
         for i in 0..count {
-            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"octaves": 8, "kind": "gradient", "dimensions": 3},
+            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"octaves": 1, "kind": "gradient", "dimensions": 3},
                 "inputs": {"position": {"from": "p"}, "scale_mm": 1.0 + i as f64, "seed": i}}));
             let sum = format!("a{i}");
             let a = last.clone().map_or(json!(0.0), |l| json!({"from": l}));
@@ -127,7 +127,7 @@ fn budget_graph() -> (MaterialGraph, u32) {
     let mut best = None;
     for count in 1..64 {
         let g = make(count);
-        match validate(&g).ok().and_then(|v| lower(&v).ok()) {
+        match validate(&g).ok().and_then(|v| lower(&v).ok()).filter(|ir| ir.cost <= solidcraft_viewport::material_graph::limits::COST_TYPICAL) {
             Some(ir) => best = Some((g, ir.cost)),
             None => break,
         }
@@ -344,7 +344,7 @@ fn frame_times(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, t: 
     spread((0..60).map(|step| t.draw(r, device, queue, &frame(scene, key, 100 + step, look)).0).collect())
 }
 
-/// §5.4 fragment cost: a constant graph against today's `fs_pbr`, a graph at the 2000-unit budget
+/// §5.4 fragment cost: a constant graph against today's `fs_pbr`, a graph at the typical cost
 /// against the look, the brushed (anisotropic) graph against the same graph without anisotropy,
 /// and the Standard view's scalar faces; [`LAYERS`] full-screen layers at 1920 × 1080.
 #[test]
@@ -804,7 +804,7 @@ fn measured_kinds() -> Vec<(&'static str, Copy, bool)> {
 /// §3.6 calibration: the GPU time each node kind adds per copy, over [`LAYERS`] full-screen
 /// 1080p layers, against the same number of constants, and the units that implies. One unit is
 /// defined so that 2000 units of nodes add half of today's look (`fs_pbr`) on top of a constant
-/// graph: the §5.4 budget of 1.5× with the constant graph counted as the look itself.
+/// graph (so `limits::COST_TYPICAL`, 4000 units, is about 2× the look).
 ///
 /// Per-copy cost is not always additive: some shapes fall off a compiler cliff (several times
 /// slower per copy at one count than at another). Each kind is measured at 2 and 8 copies (or as

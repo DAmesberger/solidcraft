@@ -611,7 +611,7 @@ fn the_built_in_material_library_applies_every_graph() {
         let graph = &catalog["graphs"][id];
         let report = s.execute("appearance.graph.validate", &json!({"graph": graph})).unwrap();
         assert_eq!(report["ok"], true, "{id}: {report}");
-        assert!(report["cost"].as_u64().unwrap() <= 2000, "{id}: {report}");
+        assert!(report["cost"].as_u64().unwrap() > 0, "{id} reports its cost: {report}");
         let apply = json!({"path": BUILTIN_PATH, "entry": entry["id"], "revision": entry["revision"], "targets": {"bodies": ["Can"]}});
         s.execute("library.apply", &apply).unwrap();
         let held = &s.doc.appearances.bodies["Can"];
@@ -685,4 +685,35 @@ fn the_showcase_pairs_one_plastic_with_and_without_its_coat() {
     for body in ["ABS puck", "ABS puck, coated"] {
         assert!(state.bodies.iter().any(|b| b.name == body), "{body} is built");
     }
+}
+
+/// Cost is advisory (§3.6): a graph heavier than typical validates and saves, with a note; only
+/// one past the safety bound is refused.
+#[test]
+fn a_heavy_graph_is_accepted_with_a_note_and_only_the_safety_bound_refuses() {
+    let graph = |count: usize| {
+        let mut nodes = vec![json!({"id": "p", "kind": "geometry.position"})];
+        let mut last = String::from("n0");
+        for i in 0..count {
+            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 8}, "inputs": {"position": {"from": "p"}}}));
+            if i > 0 {
+                nodes.push(json!({"id": format!("a{i}"), "kind": "add", "inputs": {"a": {"from": last}, "b": {"from": format!("n{i}")}}}));
+                last = format!("a{i}");
+            }
+        }
+        nodes.push(json!({"id": "c", "kind": "convert.float_to_color3", "inputs": {"in": {"from": last}}}));
+        nodes.push(json!({"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"from": "c"}}}));
+        json!({"name": "Heavy", "nodes": nodes, "output": "s"})
+    };
+    let mut s = with_body();
+    let heavy = s.execute("appearance.graph.validate", &json!({"graph": graph(1)})).unwrap();
+    assert_eq!(heavy["ok"], true, "{heavy}");
+    assert!(heavy["note"].as_str().unwrap().contains("heavier than typical"), "{heavy}");
+    let created = s.execute("appearance.graph.create", &json!({"name": "Heavy", "graph": graph(1)})).unwrap();
+    assert!(created["note"].is_string(), "{created}");
+    let light = s.execute("appearance.graph.validate", &json!({"graph": fixture(COPPER)})).unwrap();
+    assert!(light.get("note").is_none(), "{light}");
+    let refused = s.execute("appearance.graph.validate", &json!({"graph": graph(9)})).unwrap();
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused["errors"].as_array().unwrap().iter().any(|e| e["code"] == "cost"), "{refused}");
 }

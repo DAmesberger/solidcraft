@@ -50,8 +50,16 @@ pub mod limits {
     pub const ID_BYTES: usize = 64;
     /// Bytes in a graph or texture name (UTF-8, no control characters).
     pub const NAME_BYTES: usize = 256;
-    /// Cost units after triplanar and slope expansion (docs/material-graph.md §3.6).
-    pub const COST_UNITS: u32 = 2000;
+    /// Cost units after triplanar and slope expansion (docs/material-graph.md §3.6) above which a
+    /// graph is refused: a safety bound against pathological or hostile graphs, not a quality
+    /// limit. 100,000 units is about 25× today's look per full-screen layer on a fast desktop GPU
+    /// (3.4 ms at 1080p on an Apple M5 Max); on a GPU twenty times slower, at 4K with a few
+    /// layers of overdraw, that is about a second a frame, near the point where drivers reset
+    /// the GPU (Windows' 2 s timeout) and browsers lose the WebGL context. Files are untrusted.
+    pub const COST_UNITS: u32 = 100_000;
+    /// Cost units above which a graph is heavier than typical (about 2× today's look): advisory,
+    /// reported by the commands and the editor, never refused (§3.6).
+    pub const COST_TYPICAL: u32 = 4000;
     /// Texture samples after expansion.
     pub const TEXTURE_SAMPLES: u32 = 8;
     /// Distinct textures one graph reads.

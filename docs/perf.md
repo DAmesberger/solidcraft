@@ -116,15 +116,15 @@ in units, against the units the model gives):
 | showcase brushed aluminium | 1.39 | 1,144 | 39 |
 | showcase red ABS (constant, coat 0) | 1.29 | 736 | 0 |
 
-The model under-prices every real graph by 3–30×. Linear per-copy costs at two copies, where
-no cliff interferes (`node_costs`): one octave of 2D value noise about 70 units, 3-D value
-150, 2D gradient 200, 3-D gradient 500, 2D cellular 400, 3-D cellular 1,300–1,500, plus about
-100 fixed; brushed about 100, weave about 120, `hsv_adjust` about 40; arithmetic, checker,
-grid, gradient and projections within the noise of the measurement (0). Priced so, five of
-the nine library graphs and the showcase's black epoxy cost 2,700–3,900 units, over the
-2,000-unit budget, and they really are 1.8–2.1× `fs_pbr`, over the 1.5× target. The prices are
-therefore not changed yet: either the budget rises (about 4,000 units for 2×) or those graphs
-get cheaper, which is a decision on the note's limits. The clear silicone (a see-through graph,
+The old model under-priced every real graph by 3–30×. The calibrated prices are the linear
+per-copy costs at two copies, where no cliff interferes (`node_costs`): one octave of 2D value
+noise 75 units, 3-D value 150, 2D gradient 200, 3-D gradient 500, 2D cellular 400, 3-D
+cellular 1,500, plus 100 fixed; brushed 100, weave 120, `hsv_adjust` 40; arithmetic, checker,
+grid, gradient and projections keep their prices (within the noise of the measurement).
+Priced so, the library and showcase graphs cost 0–3,542 units, close to the measured
+1.3–2.1× `fs_pbr`. By the founder's decision (2026-11-19) cost is advisory: above 4,000 units
+(about 2×) the commands and the editor note "heavier than typical", and only the safety bound
+of 100,000 units refuses a graph (note §3.6). The clear silicone (a see-through graph,
 drawn blended in every layer) is not comparable here.
 
 ## Material graphs and the Realistic view against their targets (2026-11-04)

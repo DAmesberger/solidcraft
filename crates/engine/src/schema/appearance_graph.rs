@@ -72,7 +72,8 @@ pub struct GraphIssueReply {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct GraphValidateResult {
     pub ok: bool,
-    /// Cost units after expansion, out of 2000.
+    /// Cost units after expansion (§3.6): advisory above 4000, refused only above the 100,000
+    /// safety bound.
     pub cost: u32,
     /// Texture samples after expansion, out of 8.
     pub samples: u32,
@@ -81,6 +82,10 @@ pub struct GraphValidateResult {
     /// The shape key as hex: graphs with equal shapes share a GPU pipeline.
     pub shape: String,
     pub errors: Vec<GraphIssueReply>,
+    /// Set when the graph is heavier than typical (cost above `COST_TYPICAL`, about 2× today's
+    /// look): advisory, the graph is still accepted and drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
 }
@@ -154,6 +159,10 @@ pub struct GraphConverted {
     pub cost: u32,
     /// Overrides that now name the graph.
     pub count: u64,
+    /// Set when the graph is heavier than typical (cost above `COST_TYPICAL`, about 2× today's
+    /// look): advisory, the graph is still accepted and drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
 }
@@ -210,6 +219,10 @@ pub struct GraphChanged {
     pub id: String,
     /// Cost units after expansion.
     pub cost: u32,
+    /// Set when the graph is heavier than typical (cost above `COST_TYPICAL`, about 2× today's
+    /// look): advisory, the graph is still accepted and drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
 }
@@ -229,6 +242,10 @@ pub struct GraphGetResult {
     pub cost: u32,
     /// How many looks use it.
     pub uses: u32,
+    /// Set when the graph is heavier than typical (cost above `COST_TYPICAL`, about 2× today's
+    /// look): advisory, the graph is still accepted and drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
 }

@@ -52,14 +52,14 @@ fn surface_graph(nodes: Value, inputs: Value) -> MaterialGraph {
 fn every_fixture_validates_lowers_and_costs_what_the_note_says() {
     // (fixture, expanded cost, texture samples, textures, mix layers, object space)
     let expected = [
-        // planar 4 + brushed 30 + 2 × remap 2 + multiply 1 (§3.8).
-        ("brushed-nickel-silver", 39, 0, 0, 0, true),
-        // planar 4 + image 8 + cellular 2D noise 60 × slope 3 + from_height 6 + mix 10.
-        ("laser-etched-nickel-silver", 208, 1, 1, 1, true),
-        // planar 4 + 2 × value noise 20 × 3 + (multiply 1 + add 1) × 3 + from_height 6.
-        ("solder-mask-over-copper", 136, 0, 0, 0, true),
-        // cellular 3D noise, 2 octaves: 20 × 2 × 2 × 3, + remap 2.
-        ("black-epoxy-clear-coat", 242, 0, 0, 0, true),
+        // planar 4 + brushed 100 + 2 × remap 2 + multiply 1 (§3.8).
+        ("brushed-nickel-silver", 109, 0, 0, 0, true),
+        // planar 4 + image 8 + cellular 2D noise (100 + 400) × slope 3 + from_height 6 + mix 10.
+        ("laser-etched-nickel-silver", 1528, 1, 1, 1, true),
+        // planar 4 + 2 × value noise (100 + 75) × 3 + (multiply 1 + add 1) × 3 + from_height 6.
+        ("solder-mask-over-copper", 1066, 0, 0, 0, true),
+        // cellular 3D noise, 2 octaves: 100 + 2 × 1500, + remap 2.
+        ("black-epoxy-clear-coat", 3102, 0, 0, 0, true),
         // cylindrical 8 + smoothstep 4 + image 8 + max 1 + mix 10; separate3 is free.
         ("electrolytic-sleeve", 31, 1, 1, 1, true),
         ("pbr-copper", 0, 0, 0, 0, false),
@@ -125,8 +125,8 @@ fn slopes_and_triplanar_expansion_are_marked() {
     let weave = ir.instrs.iter().find(|i| i.op == "pattern.weave").unwrap();
     assert!(weave.slope && weave.triplanar);
     assert!(!ir.instrs.iter().find(|i| i.op == "texcoord.triplanar").unwrap().triplanar);
-    // triplanar 6 + weave 60 × 3 × 3 + from_height 6.
-    assert_eq!(ir.cost, 6 + 540 + 6);
+    // triplanar 6 + weave 120 × 3 × 3 + from_height 6.
+    assert_eq!(ir.cost, 6 + 1080 + 6);
 }
 
 #[test]
@@ -315,16 +315,26 @@ fn a_node_id_with_a_dot_is_resolved_or_refused_as_ambiguous() {
 }
 
 #[test]
-fn budgets_refuse_over_limit_graphs() {
-    // Cost: eight octaves of 3D cellular noise is 20 × 8 × 2 × 3 = 960; three of them pass 2000.
-    let mut nodes = vec![json!({"id": "p", "kind": "geometry.position"})];
-    for i in 0..3 {
-        nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 8}, "inputs": {"position": {"from": "p"}}}));
-    }
-    nodes.push(json!({"id": "a", "kind": "add", "inputs": {"a": {"from": "n0"}, "b": {"from": "n1"}}}));
-    nodes.push(json!({"id": "b", "kind": "add", "inputs": {"a": {"from": "a"}, "b": {"from": "n2"}}}));
-    nodes.push(json!({"id": "m", "kind": "min", "inputs": {"a": {"from": "b"}, "b": 1}}));
-    assert!(codes(&surface_graph(json!(nodes), json!({"base_metalness": {"from": "m"}}))).contains(&"cost"));
+fn budgets_refuse_over_limit_graphs_and_cost_is_only_bounded_for_safety() {
+    // Cost: eight octaves of 3D cellular noise is 100 + 8 × 1500 = 12,100 units. One is heavier
+    // than typical and still accepted (cost is advisory); nine pass the 100,000 safety bound.
+    let cellular = |count: usize| {
+        let mut nodes = vec![json!({"id": "p", "kind": "geometry.position"})];
+        let mut last = String::from("n0");
+        for i in 0..count {
+            nodes.push(json!({"id": format!("n{i}"), "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 8}, "inputs": {"position": {"from": "p"}}}));
+            if i > 0 {
+                nodes.push(json!({"id": format!("a{i}"), "kind": "add", "inputs": {"a": {"from": last}, "b": {"from": format!("n{i}")}}}));
+                last = format!("a{i}");
+            }
+        }
+        nodes.push(json!({"id": "m", "kind": "min", "inputs": {"a": {"from": last}, "b": 1}}));
+        surface_graph(json!(nodes), json!({"base_metalness": {"from": "m"}}))
+    };
+    let one = ir_of(&cellular(1));
+    assert_eq!(one.cost, 12_100 + 1);
+    assert!(one.cost > limits::COST_TYPICAL);
+    assert!(codes(&cellular(9)).contains(&"cost"));
     // Texture count and samples: five distinct images, and three triplanar images (nine samples).
     let sha = |i: u8| format!("{:064x}", i);
     let mut nodes = vec![json!({"id": "p", "kind": "texcoord.planar"})];
@@ -588,10 +598,11 @@ fn a_full_size_graph_validates_and_lowers() {
 #[path = "../../../../assets/appearances/graphs/library.rs"]
 mod library;
 
-/// The built-in library and the Realistic showcase's graphs fit the cost budget under the
-/// calibrated cost model (§3.6).
+/// The built-in library and the Realistic showcase's graphs, priced by the calibrated cost model
+/// (§3.6), fit under the safety bound, and each reports its cost (and whether it is heavier than
+/// typical, which is advisory).
 #[test]
-fn the_built_in_library_and_the_showcase_fit_the_budget() {
+fn the_built_in_library_and_the_showcase_fit_under_the_safety_bound() {
     let mut graphs: Vec<(String, MaterialGraph)> =
         library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap())).collect();
     let showcase: Value = serde_json::from_str(include_str!("../../../../examples/realistic-showcase.json")).unwrap();
@@ -599,12 +610,16 @@ fn the_built_in_library_and_the_showcase_fit_the_budget() {
         graphs.push((format!("showcase {}", c["params"]["id"].as_str().unwrap_or("?")), from_json(c["params"]["graph"].clone())));
     }
     assert!(graphs.len() > library::GRAPHS.len(), "the showcase creates graphs");
-    let mut over = Vec::new();
+    let mut refused = Vec::new();
     for (name, graph) in &graphs {
         match validate(graph).and_then(|v| lower(&v)) {
-            Ok(ir) => eprintln!("{name}: {} units", ir.cost),
-            Err(e) => over.push(format!("{name}: {e}")),
+            Ok(ir) => {
+                let heavy = if ir.cost > limits::COST_TYPICAL { ", heavier than typical" } else { "" };
+                eprintln!("{name}: {} units{heavy}", ir.cost);
+                assert!(ir.cost <= limits::COST_UNITS);
+            }
+            Err(e) => refused.push(format!("{name}: {e}")),
         }
     }
-    assert!(over.is_empty(), "over the budget: {over:#?}");
+    assert!(refused.is_empty(), "refused: {refused:#?}");
 }
