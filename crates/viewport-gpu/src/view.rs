@@ -278,6 +278,9 @@ pub struct DrawStats {
     /// The device refused the memory for a frame (#7296): the view is drawn at a lower
     /// resolution, or with its see-through surfaces sorted.
     pub lowered: bool,
+    /// Material-graph shapes or textures were still being prepared (off the frame): the next
+    /// frame draws more, so a client asks for another ([`Renderer::wants_redraw`]).
+    pub materials_pending: bool,
 }
 
 /// What the last scene change uploaded to the GPU, in bytes: what an edit costs beyond the CPU
@@ -337,6 +340,7 @@ impl Tally {
             line_segments: self.segments.get(),
             supersampled: false,
             lowered: false,
+            materials_pending: false,
         }
     }
 }
@@ -4479,7 +4483,7 @@ impl Renderer {
 
     fn publish(&self, drawn: DrawStats) {
         if let Ok(mut s) = self.stats.lock() {
-            *s = DrawStats { lowered: self.lowered, ..drawn };
+            *s = DrawStats { lowered: self.lowered, materials_pending: self.materials.wants_redraw(), ..drawn };
         }
     }
 
