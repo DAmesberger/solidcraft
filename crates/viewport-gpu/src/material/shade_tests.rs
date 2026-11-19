@@ -73,8 +73,8 @@ fn gpu_required() {
 }
 
 /// Coverage: an opaque surface has alpha 1 exactly; a cut-out at opacity ½ halves its colour
-/// (premultiplied) and alpha; clear glass covers nothing; red glass at weight ½ covers
-/// 1 − ½·⅓; both together multiply.
+/// (premultiplied) and alpha; clear glass covers only what its interface reflects (the light
+/// behind keeps 1 − F); red glass at weight ½ covers 1 − ½·⅓·(1 − F); both together multiply.
 #[test]
 fn realistic_alpha_is_the_cut_out_times_the_see_through_coverage() {
     let base = json!({"base_color": [0.6, 0.5, 0.4], "specular_roughness": 0.5});
@@ -98,9 +98,11 @@ fn realistic_alpha_is_the_cut_out_times_the_see_through_coverage() {
     for k in 0..3 {
         assert!((h[k] - 0.5 * o[k]).abs() <= 1.0, "opacity ½ premultiplies: {h:?} against {o:?}");
     }
-    assert!(c[3] <= 0.5, "clear glass covers nothing: {c:?}");
+    // Clear glass at IOR 1.5 reflects a few percent: the light behind keeps the rest.
+    assert!(c[3] > 0.5 && c[3] <= 0.25 * 255.0, "clear glass covers only its reflection: {c:?}");
     assert!(c[0] < o[0], "clear glass shows only its reflection: {c:?} against {o:?}");
-    let red_coverage = 255.0 * (1.0 - 0.5 / 3.0);
+    let keep = 1.0 - c[3] / 255.0;
+    let red_coverage = 255.0 * (1.0 - 0.5 / 3.0 * keep);
     assert!((r[3] - red_coverage).abs() <= 1.0, "red glass: alpha {r:?}, {red_coverage}");
     assert!(r[0] > r[1] && r[0] > r[2], "red glass shows its tint: {r:?}");
     assert!((b[3] - 0.5 * red_coverage).abs() <= 1.0, "glass and cut-out multiply: {b:?}");

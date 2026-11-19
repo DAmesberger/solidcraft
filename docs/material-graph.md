@@ -879,7 +879,7 @@ They will be measured with the existing `gpu` perf harness and recorded in
 | CPU ray tracer, CPU product host (out of scope) | Today's behaviour: the display `color` for a graph look, the `pbr` values for a `pbr` look. |
 | No GPU (the CPU viewport renderer) | The realistic view is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "the Realistic view needs a GPU". The standard view works as today. |
 | Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the base response's colour). |
-| `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. |
+| `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. In the Realistic view the light behind keeps only what the interface does not reflect (1 − F at the view angle), so a glossy dome's reflection does not add to an undimmed background and clip. |
 | A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O10). |
 
 ### 5.7 One material system, two GPU targets

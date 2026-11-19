@@ -434,8 +434,12 @@ fn pbr_shade(s: Surface, f: PbrFragment) -> vec4<f32> {
         // encode (`srgb_decode`, with the straight segment), so the stored bytes are `encoded`.
         // `to_linear` skips that segment and lifted dark channels (≤ 10/255) up to 12.92×, which
         // the dither flipped pixel by pixel into coloured stripes.
-        if (u.back.w > 0.5) { return sc_cover(vec4<f32>(srgb_decode(encoded), see.a), s.opacity); }
-        return sc_cover(vec4<f32>(encoded, see.a), s.opacity);
+        // What passes through a see-through surface is what its interface does not reflect: the
+        // light behind keeps 1 − F of its share (the dielectric's Fresnel at this angle, as a coat
+        // keeps it), so the reflection and what shows through add up to no more than came in.
+        let a = 1.0 - (1.0 - see.a) * pbr_coat_keep(vec3<f32>(1.0, parameters.y, parameters.z), abs(nv));
+        if (u.back.w > 0.5) { return sc_cover(vec4<f32>(srgb_decode(encoded), a), s.opacity); }
+        return sc_cover(vec4<f32>(encoded, a), s.opacity);
     }
     radiance += s.emission_color * s.emission_luminance;
     let mapped = radiance / (vec3<f32>(1.0) + radiance);
