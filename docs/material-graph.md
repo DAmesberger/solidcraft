@@ -1153,6 +1153,13 @@ Their natural word, "Shaded", is already a visual style, so reusing it would be 
   - one viewport serves all design tabs, as visual style does. The Render workspace preview
     is a separate view with its own look. If Solidcraft gains split views, each view carries
     its own look as it would its own visual style.
+- **The Render preview's Realistic look** draws graph and `pbr` looks through the same material
+  stream as the modelling view (`render_preview_graphs`, `viewport_graphs::add_body` over the
+  product scene's bodies), lit by the studio and the preview's own product lights: patterns,
+  images and coats show, and see-through graph faces (a dome of clear silicone) are drawn by the
+  stream alone, blended, so the preview leaves them out of its own blocks. Faces the
+  appearance-assign preview recolours keep the tried look. The Standard preview builds none of
+  this; its scene and key are as before.
 
 ### 6.2 Realistic keeps modelling clear
 

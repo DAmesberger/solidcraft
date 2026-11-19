@@ -2206,7 +2206,7 @@ fn preview_upload_bytes_include_instanced_geometry() {
     assert!(instanced > 0, "the placed copies of the part are instanced");
     let blocks = gpu.blocks.iter().map(|b| b.bytes.vertices.len()).sum::<usize>();
     let mut state = State::default();
-    state.prepare_preview((7, 123, 99, MAX_GEOMETRY_BYTES as u64), || Ok((scene.clone(), placements.clone()))).unwrap();
+    state.prepare_preview((7, 123, 99, MAX_GEOMETRY_BYTES as u64), || Ok((scene.clone(), placements.clone(), None))).unwrap();
     assert_eq!(
         state.preview_upload_bytes,
         Some(gpu.pbr.len() + gpu.tris.len() + gpu.glass.len() + blocks + instanced),
@@ -4998,7 +4998,7 @@ fn refused_product_capture_is_cached_until_identity_changes_or_explicit_retry() 
     session.execute("solid.box", &json!({"length":1,"width":1,"height":1})).unwrap();
     h.app
         .render_workspace
-        .prepare_preview(signature, || solidcraft_engine::product_scene::extract(&session).map(|s| (s, Vec::new())).map_err(|e| e.to_string()))
+        .prepare_preview(signature, || solidcraft_engine::product_scene::extract(&session).map(|s| (s, Vec::new(), None)).map_err(|e| e.to_string()))
         .unwrap();
     assert!(h.app.render_workspace.scene_error.is_none());
     assert!(h.app.render_workspace.preview_upload_bytes.unwrap() > 0);
@@ -8239,8 +8239,8 @@ fn geometry_budget_change_retries_cached_admission_without_document_changes() {
     let scene = solidcraft_engine::product_scene::extract(&session).unwrap();
     let bytes = preview_upload_plan(&scene, usize::MAX).unwrap().bytes().unwrap() as u64;
     let mut state = State::default();
-    assert!(state.prepare_preview((7, 123, 99, bytes - 1), || Ok((scene.clone(), Vec::new()))).is_err());
-    state.prepare_preview((7, 123, 99, bytes), || Ok((scene, Vec::new()))).unwrap();
+    assert!(state.prepare_preview((7, 123, 99, bytes - 1), || Ok((scene.clone(), Vec::new(), None))).is_err());
+    state.prepare_preview((7, 123, 99, bytes), || Ok((scene, Vec::new(), None))).unwrap();
     assert_eq!(state.preview_upload_bytes, Some(bytes as usize));
     assert!(state.scene_error.is_none());
 }

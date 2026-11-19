@@ -255,6 +255,7 @@ mod quick_measure_tests;
 pub mod recovery_ui;
 pub mod ref_images;
 pub(crate) mod refused_part;
+pub(crate) mod render_preview_graphs;
 mod render_ui;
 pub mod render_workspace;
 pub mod resume_ui;

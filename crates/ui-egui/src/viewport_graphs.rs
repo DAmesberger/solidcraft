@@ -138,7 +138,7 @@ pub(crate) fn active(app: &crate::SolveApp) -> bool {
 
 /// The graph faces of body `b` into `sc.graphs`: each face `drawn(face)` keeps whose own look,
 /// else the body's, names a graph, from `mesh` (world positions, also used as object positions).
-/// Returns how many faces it added.
+/// Returns the faces it added.
 pub(crate) fn add_body(
     sc: &mut GpuScene,
     looks: &mut GraphLooks,
@@ -147,7 +147,7 @@ pub(crate) fn add_body(
     face_looks: &HashMap<usize, solidcraft_engine::doc::appearance::Look>,
     mesh: &solidcraft_engine::geom::Mesh,
     drawn: impl Fn(usize) -> bool,
-) -> usize {
+) -> Vec<usize> {
     let graphs = &doc.appearances.tables.graphs;
     let body_look = doc.model_body_look(b);
     let mut materials: HashMap<usize, solidcraft_viewport_gpu::material::GraphMaterial> = HashMap::new();
@@ -195,7 +195,7 @@ pub(crate) fn add_body(
         }
     }
     if materials.is_empty() {
-        return 0;
+        return Vec::new();
     }
     for (t, f) in mesh.triangles.iter().zip(&mesh.tri_face) {
         let Some(m) = usize::try_from(*f).ok().and_then(|f| materials.get(&f)).copied() else { continue };
@@ -205,5 +205,7 @@ pub(crate) fn add_body(
             sc.graphs.vertex(m, p, n, p);
         }
     }
-    materials.len()
+    let mut added: Vec<usize> = materials.keys().copied().collect();
+    added.sort_unstable();
+    added
 }
