@@ -56,12 +56,12 @@ impl StudioEnvironment {
 
     /// The studio's own (unbaked) radiance along `d`, at its calibrated scale.
     pub(crate) fn source(&self, d: Rgb) -> Rgb {
-        super::studio(self.preset).radiance(super::unit(d)).map(|c| c * self.calibration)
+        super::studio(self.preset).map_or([0.0; 3], |r| r.radiance_in(super::unit(d), r.key_white()).map(|c| c * self.calibration))
     }
 
     /// The cyclorama's own radiance along `d` (without the rig's lights), at the calibrated scale.
     pub(crate) fn ambient_source(&self, d: Rgb) -> Rgb {
-        super::studio(self.preset).ambient(super::unit(d)).map(|c| c * self.calibration)
+        super::studio(self.preset).map_or([0.0; 3], |r| r.ambient_in(super::unit(d), r.key_white()).map(|c| c * self.calibration))
     }
 
     /// The levels the shader samples.

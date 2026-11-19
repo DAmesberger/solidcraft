@@ -255,6 +255,7 @@ mod quick_measure_tests;
 pub mod recovery_ui;
 pub mod ref_images;
 pub(crate) mod refused_part;
+pub(crate) mod render_preview_graphs;
 mod render_ui;
 pub mod render_workspace;
 pub mod resume_ui;
@@ -330,6 +331,7 @@ pub(crate) mod verify_job;
 pub use solidcraft_ui_kit::start_page;
 pub mod starting;
 mod status_bar;
+pub(crate) mod studio_library;
 #[cfg(test)]
 mod sweep_dialog_tests;
 pub(crate) mod test_boat;
@@ -438,6 +440,15 @@ pub struct UiState {
     pub view_look: u8,
     /// The Render workspace preview's own look, as [`UiState::view_look`].
     pub render_preview_look: u8,
+    /// The user's studios and the Realistic studio, kept with the preferences under their own key
+    /// ([`studio_library`]).
+    #[serde(skip)]
+    pub studios: solidcraft_engine::cmd::render::studios::StudioLibrary,
+    /// The studio being adjusted in Preferences › Graphics, and the last refusal there.
+    #[serde(skip)]
+    pub(crate) studio_edit: prefs::studios::Edit,
+    #[serde(skip)]
+    pub(crate) studio_message: Option<String>,
     /// A soft shadow on the ground under the model (seen from above).
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, axis view, home view and ground follow it.
@@ -489,6 +500,9 @@ impl Default for UiState {
             visual_style: 0,
             view_look: 0,
             render_preview_look: 0,
+            studios: Default::default(),
+            studio_edit: Default::default(),
+            studio_message: None,
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
@@ -1310,6 +1324,7 @@ impl SolveApp {
         });
         if let Some(obj) = v.as_object_mut() {
             obj.extend(view_look::prefs(self).map(|(key, value)| (key.to_owned(), value)));
+            obj.insert(studio_library::KEY.into(), studio_library::prefs(self));
         }
         if let Some(layout) = panel_layout
             && let Some(obj) = v.as_object_mut()
@@ -1372,6 +1387,7 @@ impl SolveApp {
             self.ui.visual_style = u8::try_from(s.min(3)).unwrap_or(0);
         }
         view_look::load(self, &v);
+        studio_library::load(self, &v);
         // Browser folders the user opened or closed.
         let keys = |k: &str| -> std::collections::BTreeSet<String> {
             v.get(k)
@@ -1488,12 +1504,16 @@ impl SolveApp {
         let params = if matches!(id, "render.start" | "render.preflight") { render_workspace::light::filter_request(self, params)? } else { params };
         // The look is the window's: a toggle or a missing view is resolved here, against it.
         let params = if id == "view.look" { view_look::resolve(self, params)? } else { params };
+        studio_library::before(self, id);
         let selected_before = self.session.selection.clone();
         let r = self.session.execute(id, &params).map_err(|e| e.to_string()).and_then(|reply| {
             panel_runtime::apply_placement_command(self, id, &reply).map_err(solidcraft_engine::panels::commands::error_text)?;
             render_workspace::apply_command(self, id, &reply)?;
             Ok(reply)
         });
+        if r.is_ok() {
+            studio_library::after(self, id);
+        }
         self.big_operation |= now_ms() - t0 >= recovery_ui::BIG_OPERATION_MS;
         self.after_command(id, &params, revision, selected_before, r)
     }

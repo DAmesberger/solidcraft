@@ -19,6 +19,7 @@ use solidcraft_viewport::Camera;
 
 use crate::SolveApp;
 use crate::gpu::{Frame, GpuScene, SceneSlot};
+use crate::render_preview_graphs::PreviewGraphs;
 use solidcraft_theme::Tokens;
 use solidcraft_viewport_egui::ViewportCallback;
 
@@ -1182,7 +1183,14 @@ pub(crate) fn output_child_summary(app: &SolveApp, kind: &str) -> String {
         "effects" => solidcraft_ui_text::format(
             "render.children.look_summary",
             &[
-                ("tone", if view.studio.tone_map == solidcraft_engine::render::job::ToneMap::AcesFitted { "ACES" } else { "Reinhard" }),
+                (
+                    "tone",
+                    match view.studio.tone_map {
+                        solidcraft_engine::render::job::ToneMap::AcesFitted => "ACES",
+                        solidcraft_engine::render::job::ToneMap::PbrNeutral => "PBR Neutral",
+                        solidcraft_engine::render::job::ToneMap::Reinhard => "Reinhard",
+                    },
+                ),
                 ("count", &view.studio.finishing.looks.len().to_string()),
             ],
         ),
@@ -2760,12 +2768,13 @@ impl State {
     fn prepare_preview(
         &mut self,
         signature: (u64, usize, u64, u64),
-        capture: impl FnOnce() -> Result<(ProductScene, Vec<Option<Placement>>), String>,
+        capture: impl FnOnce() -> Result<(ProductScene, Vec<Option<Placement>>, Option<PreviewGraphs>), String>,
     ) -> Result<(), String> {
         if self.scene_signature != Some(signature) {
             let cache = &mut self.product_cache;
-            let prepared = capture()
-                .and_then(|(scene, placements)| gpu_scene_cached(&scene, &placements, signature.3, cache).map(|(key, gpu)| (scene, key, gpu)));
+            let prepared = capture().and_then(|(scene, placements, graphs)| {
+                gpu_scene_with_graphs(&scene, &placements, signature.3, cache, graphs).map(|(key, gpu)| (scene, key, gpu))
+            });
             self.scene_signature = Some(signature);
             match prepared {
                 Ok((scene, key, gpu)) => {
@@ -2950,7 +2959,7 @@ impl PreviewUploadPlan {
 
 #[cfg(test)]
 fn preview_upload_plan(scene: &ProductScene, limit: usize) -> Result<PreviewUploadPlan, String> {
-    preview_upload_plan_with(scene, &[], &[], limit)
+    preview_upload_plan_with(scene, &[], &[], limit, None)
 }
 
 /// The meshes drawn as instances of a shared mesh: placed copies ([`Placement`]) of a mesh that
@@ -2960,9 +2969,15 @@ fn instanced_bodies(
     scene: &ProductScene,
     placements: &[Option<Placement>],
     pbr_ok: &dyn Fn(&Arc<solidcraft_engine::geom::Mesh>) -> bool,
+    graphs: Option<&PreviewGraphs>,
 ) -> Vec<bool> {
     let eligible = |b: &solidcraft_engine::render::ProductMesh, p: &Option<Placement>| {
         let Some((source, _)) = p else { return false };
+        // A body the material stream draws on is built: without the faces only the stream draws,
+        // and with the faces it shades drawn before it.
+        if graphs.is_some_and(|g| g.stream_only_faces(&b.name).is_some() || g.shaded_faces(&b.name).is_some()) {
+            return false;
+        }
         let pbr = b.surface.is_some() && b.transmission.is_none();
         b.faces.is_empty() && b.opacity > 0.0 && (!pbr || (b.opacity == 1.0 && pbr_ok(source)))
     };
@@ -2984,12 +2999,13 @@ fn instanced_bodies(
 }
 
 /// [`preview_upload_plan`] with the meshes `instanced` drawn as instances of their `placements`'
-/// shared meshes.
+/// shared meshes, and without the faces only the material stream (`graphs`) draws.
 fn preview_upload_plan_with(
     scene: &ProductScene,
     placements: &[Option<Placement>],
     instanced: &[bool],
     limit: usize,
+    graphs: Option<&PreviewGraphs>,
 ) -> Result<PreviewUploadPlan, String> {
     if scene.meshes.len() > solidcraft_engine::render::job::MAX_CPU_BODIES {
         return Err(solidcraft_ui_text::tr("render.error_body_bound").into());
@@ -3022,8 +3038,13 @@ fn preview_upload_plan_with(
             plan.add_instanced(first.then_some(source.triangles.len()), limit)?;
             continue;
         }
+        let stream_only = graphs.and_then(|g| g.stream_only_faces(&body.name));
         for index in 0..body.mesh.triangles.len() {
-            let face = body.mesh.tri_face.get(index).and_then(|id| looks.get(id));
+            let id = body.mesh.tri_face.get(index);
+            if stream_only.is_some_and(|faces| id.and_then(|f| faces.get(*f as usize)).copied().unwrap_or(false)) {
+                continue;
+            }
+            let face = id.and_then(|id| looks.get(id));
             let (opacity, pbr) = face.map_or((body.opacity, body.surface.is_some() && body.transmission.is_none()), |face| {
                 (face.opacity, face.surface.is_some() && face.transmission.is_none())
             });
@@ -3112,6 +3133,11 @@ struct BodyLooks<'a> {
     instanced: bool,
     /// Face index → its look and its place among the body's face looks (its palette slot).
     faces: std::collections::BTreeMap<u32, (usize, &'a solidcraft_engine::render::FaceAppearance)>,
+    /// Per face, whether only the Realistic look's material stream draws it ([`PreviewGraphs`]).
+    stream_only: Option<&'a [bool]>,
+    /// Per face, whether the stream shades it over this body's triangle: drawn as an opaque
+    /// triangle (before the stream), never as a PBR one (after it, which would cover it).
+    stream_shaded: Option<&'a [bool]>,
 }
 
 impl BodyLooks<'_> {
@@ -3119,14 +3145,19 @@ impl BodyLooks<'_> {
         if self.instanced {
             return ProductDraw::Hidden;
         }
-        let face = self.body.mesh.tri_face.get(triangle).and_then(|f| self.faces.get(f));
+        let id = self.body.mesh.tri_face.get(triangle);
+        if self.stream_only.is_some_and(|faces| id.and_then(|f| faces.get(*f as usize)).copied().unwrap_or(false)) {
+            return ProductDraw::Hidden;
+        }
+        let face = id.and_then(|f| self.faces.get(f));
         let (opacity, surface, slot) = match face {
             Some((k, l)) => (l.opacity, l.surface.filter(|_| l.transmission.is_none()), self.slots.face(*k)),
             None => (self.body.opacity, self.body.surface.filter(|_| self.body.transmission.is_none()), self.slots.body),
         };
+        let shaded = self.stream_shaded.is_some_and(|faces| id.and_then(|f| faces.get(*f as usize)).copied().unwrap_or(false));
         if opacity <= 0.0 {
             ProductDraw::Hidden
-        } else if surface.is_some() {
+        } else if surface.is_some() && !shaded {
             ProductDraw::Block(crate::gpu::TriClass::Pbr, slot)
         } else if opacity < 0.999 {
             ProductDraw::Block(crate::gpu::TriClass::Glass, slot)
@@ -3138,7 +3169,7 @@ impl BodyLooks<'_> {
     /// What a block keeps of this body: its mesh, its slots, and for the body and each face
     /// look whether it is drawn at all, and whether as PBR (whose normals are made unit).
     fn geometry(&self, h: &mut impl Hasher) {
-        (Arc::as_ptr(&self.body.mesh) as usize, self.slots.body.0, self.slots.faces, self.instanced).hash(h);
+        (Arc::as_ptr(&self.body.mesh) as usize, self.slots.body.0, self.slots.faces, self.instanced, self.stream_only, self.stream_shaded).hash(h);
         let drawn = |opacity: f64, pbr: bool| (opacity > 0.0, pbr);
         drawn(self.body.opacity, self.body.surface.is_some() && self.body.transmission.is_none()).hash(h);
         for (face, (k, l)) in &self.faces {
@@ -3166,6 +3197,19 @@ pub fn gpu_scene_cached(
     placements: &[Option<Placement>],
     budget: u64,
     cache: &mut ProductCache,
+) -> Result<(u64, GpuScene), String> {
+    gpu_scene_with_graphs(scene, placements, budget, cache, None)
+}
+
+/// [`gpu_scene_cached`] in the Realistic look with `graphs`: the material stream's surfaces
+/// (`render_preview_graphs`) join the scene and its key, and the faces only they draw are left out
+/// of the scene's own triangles.
+fn gpu_scene_with_graphs(
+    scene: &ProductScene,
+    placements: &[Option<Placement>],
+    budget: u64,
+    cache: &mut ProductCache,
+    graphs: Option<PreviewGraphs>,
 ) -> Result<(u64, GpuScene), String> {
     use crate::gpu::{BlockBuilder, TriClass};
     // A PBR body is drawn as an instance only of a smooth shared mesh whose normals can all be
@@ -3199,9 +3243,10 @@ pub fn gpu_scene_cached(
         pbr_ok.insert(address, ok);
     }
     cache.pbr_ok.retain(|k, _| pbr_ok.contains_key(k));
-    let instanced = instanced_bodies(scene, placements, &|source| pbr_ok.get(&(Arc::as_ptr(source) as usize)).copied().unwrap_or(false));
+    let instanced =
+        instanced_bodies(scene, placements, &|source| pbr_ok.get(&(Arc::as_ptr(source) as usize)).copied().unwrap_or(false), graphs.as_ref());
     let limit = usize::try_from(budget).unwrap_or(usize::MAX);
-    let plan = preview_upload_plan_with(scene, placements, &instanced, limit)?;
+    let plan = preview_upload_plan_with(scene, placements, &instanced, limit, graphs.as_ref())?;
     let mut gpu = GpuScene::default();
     // Stable slots for every body and face look, allocated before the palette is copied.
     cache.arena.sync(scene.meshes.iter().map(|b| b.name.as_str()));
@@ -3230,7 +3275,9 @@ pub fn gpu_scene_cached(
             cache.arena.set(slots.face(k), [l.color[0], l.color[1], l.color[2], alpha(l.opacity)]);
             set_material(slots.face(k), material(l.surface, l.transmission.is_none()));
         }
-        looks.push(BodyLooks { body, slots, instanced: instanced.get(looks.len()).copied().unwrap_or(false), faces });
+        let stream_only = graphs.as_ref().and_then(|g| g.stream_only_faces(&body.name));
+        let stream_shaded = graphs.as_ref().and_then(|g| g.shaded_faces(&body.name));
+        looks.push(BodyLooks { body, slots, instanced: instanced.get(looks.len()).copied().unwrap_or(false), faces, stream_only, stream_shaded });
     }
     let mut key = std::collections::hash_map::DefaultHasher::new();
     let mut used = std::collections::HashSet::new();
@@ -3378,6 +3425,10 @@ pub fn gpu_scene_cached(
     for m in gpu.palette.materials() {
         (m.base.map(f32::to_bits), m.metallic.to_bits(), m.roughness.to_bits(), m.ior.to_bits(), m.pbr).hash(&mut key);
     }
+    if let Some(graphs) = graphs {
+        graphs.hash(&mut key);
+        gpu.graphs = graphs.graphs;
+    }
     Ok((key.finish(), gpu))
 }
 
@@ -3386,7 +3437,8 @@ pub fn gpu_scene_cached(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn preview_scene_for_evidence(app: &SolveApp) -> Result<(ProductScene, GpuScene, Vec<[f32; 16]>), String> {
     let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|error| error.to_string())?;
-    let (_, gpu) = gpu_scene_cached(&scene, &[], u64::MAX, &mut ProductCache::default())?;
+    let graphs = crate::render_preview_graphs::build(app, &scene, None);
+    let (_, gpu) = gpu_scene_with_graphs(&scene, &[], u64::MAX, &mut ProductCache::default(), graphs)?;
     Ok((scene, gpu, light::preview(app)?))
 }
 
@@ -3644,15 +3696,22 @@ fn paint_product_kind(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, c
         }
         let (doc, world, visibility) = preview_signature(app);
         let budget = preferred_geometry_budget(app.render_workspace.geometry_budget, app.preferences.render_previous_geometry_budget);
-        let signature = (doc, world, visibility ^ assign::preview_key(app), budget);
+        // The Realistic look adds the material stream (`render_preview_graphs`).
+        let realistic = crate::render_preview_graphs::active(app);
+        let signature = (doc, world, visibility ^ assign::preview_key(app) ^ u64::from(realistic), budget);
         let preview = assign::preview(app);
         let previous_key = app.render_workspace.key;
-        app.render_workspace.prepare_preview(signature, || {
+        // Captured here, before the preview is prepared, as the stream reads the whole app; only
+        // when the signature changed.
+        let captured = (app.render_workspace.scene_signature != Some(signature)).then(|| -> Result<_, String> {
             let mut scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|error| error.to_string())?;
             assign::preview_scene(&mut scene, preview.as_ref())?;
             let placements = solidcraft_engine::product_scene::placements(&app.session, &scene);
-            Ok((scene, placements))
-        })?;
+            let graphs = if realistic { crate::render_preview_graphs::build(app, &scene, preview.as_ref()) } else { None };
+            Ok((scene, placements, graphs))
+        });
+        app.render_workspace
+            .prepare_preview(signature, || captured.unwrap_or_else(|| Err(solidcraft_ui_text::tr("render.error_no_scene").into())))?;
         if app.render_workspace.key != previous_key {
             ui.ctx().request_repaint();
         }

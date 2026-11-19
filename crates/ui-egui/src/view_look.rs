@@ -91,7 +91,27 @@ pub(crate) fn apply(app: &mut SolveApp, reply: &Value) {
 /// What a view's frame asks the renderer for: the product look's default studio in Realistic,
 /// nothing (the standard drawing) in Standard or without a GPU.
 pub(crate) fn product_look(app: &SolveApp, view: &str) -> Option<crate::gpu::ProductLook> {
-    (current(app, view) == REALISTIC && unavailable(app).is_none()).then(crate::gpu::ProductLook::default)
+    (current(app, view) == REALISTIC && unavailable(app).is_none()).then(|| crate::gpu::ProductLook { studio: studio(app), ..Default::default() })
+}
+
+/// The studio the Realistic looks light with: the user's Realistic studio
+/// (`render.studio.default`, Product by default), registered for the renderer. Also kept for views
+/// without the app at hand ([`last_studio`]).
+pub(crate) fn studio(app: &SolveApp) -> solidcraft_viewport_gpu::view::StudioPreset {
+    let preset =
+        app.ui.studios.realistic().and_then(|s| s.realistic.as_ref()).map(solidcraft_viewport_gpu::view::StudioPreset::register).unwrap_or_default();
+    if let Ok(mut last) = LAST.lock() {
+        *last = preset;
+    }
+    preset
+}
+
+static LAST: std::sync::Mutex<solidcraft_viewport_gpu::view::StudioPreset> = std::sync::Mutex::new(solidcraft_viewport_gpu::view::StudioPreset::NONE);
+
+/// The Realistic studio as last worked out for a view ([`studio`]): for pictures drawn without the
+/// app at hand, such as the material swatch.
+pub(crate) fn last_studio() -> solidcraft_viewport_gpu::view::StudioPreset {
+    LAST.lock().map(|last| *last).unwrap_or_default()
 }
 
 /// [`product_look`] with the studio's room fitted to the shown subject's `bounds`, so its lights
@@ -151,7 +171,8 @@ mod tests {
         let r = app.run("view.look", json!({})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r, json!({"look": "realistic", "view": "model"}));
         assert_eq!(app.ui.view_look, REALISTIC);
-        assert_eq!(super::product_look(&app, "model"), Some(crate::gpu::ProductLook::default()));
+        assert_eq!(super::product_look(&app, "model"), Some(crate::gpu::ProductLook { studio: super::studio(&app), ..Default::default() }));
+        assert!(super::studio(&app).rig().is_some(), "Product, the built-in default");
         assert_eq!(super::product_look(&app, "render_preview"), None, "the Render preview has its own look");
         let r = app.run("view.look", json!({})).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(r, json!({"look": "standard", "view": "model"}), "a second toggle goes back");

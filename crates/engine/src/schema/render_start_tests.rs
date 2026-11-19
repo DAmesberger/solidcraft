@@ -73,6 +73,7 @@ fn schemas_and_the_key_check_agree() {
             "seed",
             "settings",
             "setup",
+            "studio",
             "studio_weights",
             "supersampling",
             "texture_filtering",

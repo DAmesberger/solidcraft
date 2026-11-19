@@ -117,7 +117,7 @@ mod parameter_sweep;
 mod parameters;
 mod plastic;
 mod print_face;
-mod render;
+pub mod render;
 pub(crate) use render::{
     PreparedCapture, prepare_capture_with_metadata, read_render_request, render_cancel_params, render_form_refusal, render_saved_job_refusal,
     render_started,

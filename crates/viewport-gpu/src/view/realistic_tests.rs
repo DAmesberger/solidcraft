@@ -80,10 +80,10 @@ fn realistic_lights_scalar_faces_and_keeps_every_overlay() {
         let mut frame = modelling_frame(ssaa);
         let standard = render_frame(&mut r, &device, &queue, &frame, true);
         assert_eq!(r.ss_scaled, ssaa > 1.0, "drawn as asked: ×{ssaa}");
-        frame.product_look = Some(ProductLook::default());
+        frame.product_look = Some(ProductLook::product());
         let waiting = render_frame(&mut r, &device, &queue, &frame, true);
         assert!(waiting == standard, "×{ssaa}: without its studio, the standard picture");
-        r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
         let realistic = render_frame(&mut r, &device, &queue, &frame, true);
         assert_eq!(overlays(&realistic), overlays(&standard), "×{ssaa}: the overlays keep their pixels");
         let (lit, plain) = (face(&realistic), face(&standard));
@@ -123,8 +123,8 @@ fn a_scalar_face_is_lit_as_a_rough_dielectric() {
     square(&mut scalar, [-12.0, -12.0, 12.0, 12.0], 0.0, [0.0, 0.0, 1.0], colour);
     let Some(pbr) = pbr_scene(Vec3::new(decode(srgb[0]), decode(srgb[1]), decode(srgb[2])), 0.0, 0.5, 1.5) else { panic!("valid surface") };
     let mut r = renderer(&device);
-    r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
-    let look = Some(ProductLook::default());
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
+    let look = Some(ProductLook::product());
     let draw = |r: &mut Renderer, scene: GpuScene, key: u64| {
         let frame = Frame { key, product_look: look, ..test_frame(scene, 1.0) };
         inner_pixels(&render_frame(r, &device, &queue, &frame, true))
@@ -143,11 +143,11 @@ fn a_scalar_face_is_lit_as_a_rough_dielectric() {
 fn switching_the_look_uploads_nothing() {
     let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
     let mut r = renderer(&device);
-    r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
     let mut frame = modelling_frame(1.0);
     let _ = render_frame(&mut r, &device, &queue, &frame, true);
     let uploaded = r.uploads();
-    for look in [Some(ProductLook::default()), None, Some(ProductLook::default())] {
+    for look in [Some(ProductLook::product()), None, Some(ProductLook::product())] {
         frame.product_look = look;
         let pixels = render_frame(&mut r, &device, &queue, &frame, true);
         assert!(mean(&region(&pixels, 8, 56)) > 20.0, "drawn");
@@ -221,14 +221,14 @@ fn an_instanced_highlight_draws_after_material_surfaces() {
     selected.place([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], PaletteIndex(0));
     let highlight = GpuScene { selected_instanced: vec![selected], ..Default::default() };
     let frame = Frame {
-        product_look: Some(ProductLook::default()),
+        product_look: Some(ProductLook::product()),
         hl_key: 1,
         hl_slot: Arc::new(Mutex::new(Some(highlight))),
         selection_tint: [0.9, 0.1, 0.1],
         ..test_frame(model, 1.0)
     };
     let mut r = renderer(&device);
-    r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
+    r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
     let mut picture = render_frame(&mut r, &device, &queue, &frame, true);
     for _ in 0..64 {
         if r.material_stats().pending == 0 {

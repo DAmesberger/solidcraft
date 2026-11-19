@@ -1,0 +1,28 @@
+{
+  "en": {
+    "render.tone_pbr_neutral": "PBR Neutral",
+    "prefs.studios": "Realistic studios",
+    "prefs.studios_help": "The studio the Realistic view lights with. Built-in studios are read-only: duplicate one to change your copy.",
+    "prefs.studios_studio": "Studio",
+    "prefs.studios_mine": "yours",
+    "prefs.studios_duplicate": "Duplicate",
+    "prefs.studios_export": "Export...",
+    "prefs.studios_delete": "Delete",
+    "prefs.studios_name": "Name",
+    "prefs.studios_lights": "Lights",
+    "prefs.studios_room": "Room"
+  },
+  "de": {
+    "render.tone_pbr_neutral": "PBR Neutral",
+    "prefs.studios": "Realistische Studios",
+    "prefs.studios_help": "Das Studio, mit dem die realistische Ansicht beleuchtet. Mitgelieferte Studios sind schreibgeschützt: Duplizieren Sie eines, um Ihre Kopie zu ändern.",
+    "prefs.studios_studio": "Studio",
+    "prefs.studios_mine": "eigenes",
+    "prefs.studios_duplicate": "Duplizieren",
+    "prefs.studios_export": "Exportieren...",
+    "prefs.studios_delete": "Löschen",
+    "prefs.studios_name": "Name",
+    "prefs.studios_lights": "Lichter",
+    "prefs.studios_room": "Raum"
+  }
+}

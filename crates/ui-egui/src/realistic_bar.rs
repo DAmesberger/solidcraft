@@ -14,12 +14,12 @@
 //! - **Clipped and crushed:** at most 1 % of each part's pixels at luma ≥ 254, and at most 1 % at
 //!   ≤ 5, for every material.
 //! - **Face medians:** every face's median in [20, 235], except for *dark* materials (a
-//!   dielectric whose base colour has a linear luminance under [`DARK_ALBEDO`]), which are judged
+//!   dielectric whose base colour has a linear luminance under the studio's `dark_albedo`), which are judged
 //!   relative to their own albedo instead: no crushed pixels (above), a visible coat or specular
-//!   highlight (the part's 99th percentile at least [`HIGHLIGHT`] above its median), and faces
-//!   that read apart (their medians spread at least [`DISTINCT`] when the part shows two or
+//!   highlight (the part's 99th percentile at least its `highlight` above its median), and faces
+//!   that read apart (their medians spread at least its `distinct` when the part shows two or
 //!   more), with medians at most 235.
-//! - **Metal gradients:** every planar metal face at least [`MIN_WIDTH`] B wide spans at least 12
+//! - **Metal gradients:** every planar metal face at least its `narrow_face` B wide spans at least 12
 //!   between its 5th and 95th percentiles. A flat mirror reflects a patch of the studio about as
 //!   wide as itself, seen from the room's walls 2 B away: a face narrower than 0.2 B sees about
 //!   6° of a smooth cyclorama, which cannot hold a 12/255 gradient, so it is judged by the other
@@ -30,14 +30,19 @@ use serde_json::{Value, json};
 use solidcore_record::Vec3;
 use solidcraft_engine::geom::prelude::*;
 
-/// Linear base-colour luminance under which a dielectric is a dark material (about sRGB 63).
-pub(crate) const DARK_ALBEDO: f64 = 0.05;
-/// How far a dark part's 99th percentile must stand above its median: a visible highlight.
-pub(crate) const HIGHLIGHT: f64 = 24.0;
-/// How far a dark part's face medians must spread: faces that read apart.
-pub(crate) const DISTINCT: f64 = 6.0;
-/// The narrowest planar metal face, in room extents B, that must show a gradient.
-pub(crate) const MIN_WIDTH: f64 = 0.2;
+/// The bar's thresholds: the studio's own (`Acceptance`, part of its record in the studio library),
+/// the Realistic default's (Product) unless a run names another (`GOLDEN_STUDIO`).
+pub(crate) fn acceptance() -> solidcraft_viewport::studio::Acceptance {
+    let builtin = solidcraft_engine::cmd::render::studios::builtin();
+    let named = std::env::var("GOLDEN_STUDIO").ok();
+    named
+        .as_deref()
+        .and_then(|name| builtin.iter().find(|s| s.name.eq_ignore_ascii_case(name) || s.id.eq_ignore_ascii_case(name)))
+        .or_else(|| builtin.iter().find(|s| s.id == solidcraft_engine::cmd::render::studios::DEFAULT_REALISTIC))
+        .and_then(|s| s.realistic.as_ref())
+        .map(|rig| rig.acceptance)
+        .unwrap_or_default()
+}
 
 /// Relative luminance of a linear colour.
 pub(crate) fn luminance(c: Vec3) -> f64 {
@@ -66,7 +71,7 @@ pub(crate) fn width(points: &[Vec3]) -> f64 {
 
 /// Whether a face row is of a dark material.
 fn dark(face: &Value) -> bool {
-    face["metallic"].as_f64().unwrap_or(0.0) < 0.5 && face["albedo"].as_f64().is_some_and(|a| a < DARK_ALBEDO)
+    face["metallic"].as_f64().unwrap_or(0.0) < 0.5 && face["albedo"].as_f64().is_some_and(|a| a < acceptance().dark_albedo)
 }
 
 /// The bar on one frame's metrics: each failure as `{check, part, detail}`. `check` is one of
@@ -90,14 +95,15 @@ pub(crate) fn failures(m: &Value) -> Vec<Value> {
             continue;
         }
         let (median, p99) = (p["median"].as_f64().unwrap_or(0.0), p["p99"].as_f64().unwrap_or(0.0));
-        if p99 - median < HIGHLIGHT {
-            fail("dark highlight", part, format!("99th percentile {p99:.0} over median {median:.0} (bar ≥ {HIGHLIGHT:.0} above)"));
+        let bar = acceptance();
+        if p99 - median < bar.highlight {
+            fail("dark highlight", part, format!("99th percentile {p99:.0} over median {median:.0} (bar ≥ {:.0} above)", bar.highlight));
         }
         let medians: Vec<f64> = own.iter().filter_map(|f| f["median"].as_f64()).collect();
         if medians.len() >= 2 {
             let spread = medians.iter().copied().fold(f64::NEG_INFINITY, f64::max) - medians.iter().copied().fold(f64::INFINITY, f64::min);
-            if spread < DISTINCT {
-                fail("dark faces", part, format!("face medians spread {spread:.0} (bar ≥ {DISTINCT:.0})"));
+            if spread < bar.distinct {
+                fail("dark faces", part, format!("face medians spread {spread:.0} (bar ≥ {:.0})", bar.distinct));
             }
         }
     }
@@ -109,7 +115,7 @@ pub(crate) fn failures(m: &Value) -> Vec<Value> {
             fail("face median", part, format!("face {face} median {median:.0} ({bar})"));
         }
         let metal = f["metallic"].as_f64().unwrap_or(0.0) >= 0.5;
-        let wide = f["width"].as_f64().unwrap_or(f64::INFINITY) >= MIN_WIDTH;
+        let wide = f["width"].as_f64().unwrap_or(f64::INFINITY) >= acceptance().narrow_face;
         let span = f["span"].as_f64().unwrap_or(0.0);
         if metal && wide && f["planar"].as_bool() == Some(true) && span < 12.0 {
             let width = f["width"].as_f64().unwrap_or(f64::NAN);

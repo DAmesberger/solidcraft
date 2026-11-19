@@ -792,6 +792,22 @@ pub(crate) fn render_realistic_offscreen(
     size: u32,
     look: Option<ProductLook>,
 ) -> Option<Vec<u8>> {
+    render_look_offscreen(scene, view_proj, back, eye, size, look, None)
+}
+
+/// [`render_realistic_offscreen`] for the Render preview: with `product_lights`, `scene` is drawn
+/// as the preview draws it (its own batches and lights, no occlusion).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn render_look_offscreen(
+    scene: GpuScene,
+    view_proj: [[f32; 4]; 4],
+    back: [f32; 3],
+    eye: [f32; 4],
+    size: u32,
+    look: Option<ProductLook>,
+    product_lights: Option<Vec<[f32; 16]>>,
+) -> Option<Vec<u8>> {
+    let product = product_lights.is_some();
     let (_, device, queue) = offscreen_device()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let depth = solidcraft_viewport_gpu::depth_format(&device, true);
@@ -809,10 +825,10 @@ pub(crate) fn render_realistic_offscreen(
             moving: None,
             preview_bounds: None,
             hatch: Default::default(),
-            product_lights: None,
+            product_lights: product_lights.clone(),
             product_look: look,
             units_per_mm: 1.0,
-            product: false,
+            product,
             upload_error: None,
             key,
             slot: slot.clone(),
@@ -836,7 +852,7 @@ pub(crate) fn render_realistic_offscreen(
             access: None,
             outline: false,
             eye,
-            ao_radius: 30.0,
+            ao_radius: if product { 0.0 } else { 30.0 },
             ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
             ssaa: 1.0,
             sky: [0.0; 4],

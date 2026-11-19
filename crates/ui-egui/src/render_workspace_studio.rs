@@ -52,6 +52,9 @@ pub(super) struct View {
     pub area_lights: Vec<AreaLight>,
     pub directional_lights: DirectionalLights,
     pub punctual_lights: PunctualLights,
+    /// A saved setup's studio (`GpuJob::studio`), kept so saving it again keeps it; the workspace
+    /// has no control for it yet.
+    pub realistic: Option<solidcraft_engine::doc::render_job::StudioChoice>,
 }
 
 impl Default for View {
@@ -92,6 +95,7 @@ impl Default for View {
             area_lights: Vec::new(),
             directional_lights: Default::default(),
             punctual_lights: Default::default(),
+            realistic: None,
         }
     }
 }
@@ -131,6 +135,9 @@ pub(super) fn params(app: &SolveApp, params: &mut Value) -> Result<(), String> {
     params["volume"] = json!(view.volume);
     params["adaptive"] = json!(view.adaptive);
     params["transmission_samples"] = json!(view.transmission_samples);
+    if let Some(studio) = &view.realistic {
+        params["studio"] = json!(studio);
+    }
     if view.lens_enabled {
         view.lens.validate().map_err(|error| error.to_string())?;
         if view.lens.aperture_radius_mm > 0.0 && app.cam.fov == 0.0 {
@@ -191,11 +198,13 @@ pub(super) fn tone_controls(app: &mut SolveApp, ui: &mut egui::Ui) {
     let label = match selected {
         ToneMap::Reinhard => solidcraft_ui_text::tr("render.tone_reinhard"),
         ToneMap::AcesFitted => solidcraft_ui_text::tr("render.tone_aces_fitted"),
+        ToneMap::PbrNeutral => solidcraft_ui_text::tr("render.tone_pbr_neutral"),
     };
     let response = ui_kit::dropdown_menu(ui, "render_tone_map", label, |ui| {
         for (map, label) in [
             (ToneMap::Reinhard, solidcraft_ui_text::tr("render.tone_reinhard")),
             (ToneMap::AcesFitted, solidcraft_ui_text::tr("render.tone_aces_fitted")),
+            (ToneMap::PbrNeutral, solidcraft_ui_text::tr("render.tone_pbr_neutral")),
         ] {
             if ui_kit::list_picker(ui, label, label, map == selected).clicked() {
                 app.render_workspace.view.studio.tone_map = map;

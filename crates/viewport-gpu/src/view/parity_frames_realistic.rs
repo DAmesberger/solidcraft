@@ -54,11 +54,11 @@ fn graph_scene(json: &str, slope: f32) -> Option<GpuScene> {
 fn looks() -> [(&'static str, ProductLook); 5] {
     let room = StudioRoom::around([-12.0, -12.0, 0.0], [12.0, 12.0, 9.0]);
     [
-        ("product", ProductLook::default()),
-        ("room", ProductLook { room, ..ProductLook::default() }),
-        ("soft", ProductLook { studio: StudioPreset::Soft, exposure: 1.7, rotation: 1.0, ..ProductLook::default() }),
-        ("contrast", ProductLook { studio: StudioPreset::Contrast, exposure: 1.4, room, ..ProductLook::default() }),
-        ("nostudio", ProductLook { intensity: 0.0, ..ProductLook::default() }),
+        ("product", ProductLook::product()),
+        ("room", ProductLook { room, ..ProductLook::product() }),
+        ("soft", ProductLook { studio: StudioPreset::soft(), exposure: 1.7, rotation: 1.0, ..ProductLook::product() }),
+        ("contrast", ProductLook { studio: StudioPreset::contrast(), exposure: 1.4, room, ..ProductLook::product() }),
+        ("nostudio", ProductLook { intensity: 0.0, ..ProductLook::product() }),
     ]
 }
 
@@ -195,10 +195,10 @@ fn studio_surround_brightness() {
             [r * phi.cos(), r * phi.sin(), z]
         })
         .collect();
-    let product = StudioEnvironment::bake(StudioPreset::Product);
+    let product = StudioEnvironment::bake(StudioPreset::product());
     let surround_of = |env: &StudioEnvironment| directions.iter().map(|d| luminance(env.ambient_source(*d))).sum::<f64>() / N as f64;
     let reference = surround_of(&product);
-    for preset in StudioPreset::ALL {
+    for preset in StudioPreset::all() {
         let env = StudioEnvironment::bake(preset);
         let ambient: Vec<f64> = directions.iter().map(|d| luminance(env.ambient_source(*d))).collect();
         let surround = ambient.iter().sum::<f64>() / N as f64;

@@ -5660,13 +5660,13 @@ mod tests {
         assert_eq!(&plain[meta..meta + 4], &[1.0, 2.0, 0.0, 0.0]);
         assert_eq!(&plain[meta + 4..meta + 20], &light);
         assert_eq!(&plain[look_at..look_at + 8], &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], "no look; the units");
-        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::Contrast, rotation: f32::NAN, intensity: -2.0, room: None };
+        let wild = ProductLook { exposure: f32::INFINITY, studio: StudioPreset::contrast(), rotation: f32::NAN, intensity: -2.0, room: None };
         f.product_look = Some(wild);
         let v = floats(&f);
         assert_eq!(&v[..look_at], &plain[..look_at], "the lights and everything else as without the look");
         let tame = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0];
         assert_eq!(&v[look_at..look_at + 8], &tame);
-        assert_eq!(wild.sanitized().studio, StudioPreset::Contrast);
+        assert_eq!(wild.sanitized().studio, StudioPreset::contrast());
         // Without product lights the look is on all the same.
         f.product_lights = None;
         assert_eq!(&floats(&f)[look_at..look_at + 8], &tame);
@@ -5812,11 +5812,11 @@ mod tests {
             super::frame_key(&f)
         };
         let off = lights(None);
-        let on = ProductLook::default();
+        let on = ProductLook::product();
         for (what, changed) in [
             ("product look", lights(Some(on))),
             ("exposure", lights(Some(ProductLook { exposure: 2.0, ..on }))),
-            ("studio", lights(Some(ProductLook { studio: StudioPreset::Soft, ..on }))),
+            ("studio", lights(Some(ProductLook { studio: StudioPreset::soft(), ..on }))),
             ("studio rotation", lights(Some(ProductLook { rotation: 0.5, ..on }))),
             ("studio intensity", lights(Some(ProductLook { intensity: 0.5, ..on }))),
         ] {
@@ -6569,9 +6569,14 @@ pub(crate) mod glass_tests {
 
     /// `preset`'s studio, baked once for all the tests (off the renderer, as a client bakes it).
     pub(crate) fn studio(preset: StudioPreset) -> StudioEnvironment {
-        static BAKED: [std::sync::OnceLock<StudioEnvironment>; 3] = [const { std::sync::OnceLock::new() }; 3];
-        let slot = BAKED.get(preset.id() as usize).unwrap_or(&BAKED[0]);
-        slot.get_or_init(|| StudioEnvironment::bake(preset)).clone()
+        static BAKED: std::sync::Mutex<Vec<StudioEnvironment>> = std::sync::Mutex::new(Vec::new());
+        let mut baked = BAKED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = baked.iter().find(|env| env.preset() == preset) {
+            return env.clone();
+        }
+        let env = StudioEnvironment::bake(preset);
+        baked.push(env.clone());
+        env
     }
 
     /// A PBR square over the whole fixed view, facing the viewer (+Z).
@@ -6658,7 +6663,7 @@ pub(crate) mod glass_tests {
             // The look, with no studio and exposure 1: the same radiance through PBR Neutral, dithered.
             let mut frame = test_frame(scene.clone(), 1.0);
             frame.product_lights = Some(vec![key]);
-            frame.product_look = Some(ProductLook { intensity: 0.0, ..ProductLook::default() });
+            frame.product_look = Some(ProductLook { intensity: 0.0, ..ProductLook::product() });
             let pixels = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
             let Some(surface) = solidcraft_viewport::surface::OpaqueSurface::new(base, metallic, roughness, ior).ok() else {
                 panic!("valid surface")
@@ -6677,12 +6682,12 @@ pub(crate) mod glass_tests {
             assert!(distinct.len() > 1, "the look dithers a flat surface");
             // A look naming a studio that is not installed draws without it: the renderer never
             // bakes one (that would stall the window).
-            frame.product_look = Some(ProductLook::default());
+            frame.product_look = Some(ProductLook::product());
             let unlit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
-            assert!(!r.has_studio_environment(StudioPreset::default()), "prepare bakes no studio");
+            assert!(!r.has_studio_environment(StudioPreset::product()), "prepare bakes no studio");
             assert!(unlit.iter().zip(&pixels).all(|(a, b)| close(*a, *b, 1)), "without its studio the look is the lights alone");
             // Installed, the studio adds its light.
-            r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
+            r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
             let lit = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
             r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
             let mean = |p: &[[u8; 3]]| p.iter().map(|c| c.iter().map(|&x| f64::from(x)).sum::<f64>()).sum::<f64>() / p.len().max(1) as f64;
@@ -6705,11 +6710,11 @@ pub(crate) mod glass_tests {
         let first = plain.first().copied().unwrap_or_default();
         assert!(plain.iter().all(|p| *p == first), "the default filter adds no noise");
         // A studio baked off the window thread and installed (a second install replaces it).
-        let env = std::thread::spawn(|| studio(StudioPreset::Soft)).join().unwrap_or_else(|_| studio(StudioPreset::Soft));
+        let env = std::thread::spawn(|| studio(StudioPreset::soft())).join().unwrap_or_else(|_| studio(StudioPreset::soft()));
         r.set_studio_environment(&device, &queue, &env);
         r.set_studio_environment(&device, &queue, &env);
-        assert!(r.has_studio_environment(StudioPreset::Soft) && !r.has_studio_environment(StudioPreset::Product));
-        frame.product_look = Some(ProductLook { studio: StudioPreset::Soft, ..ProductLook::default() });
+        assert!(r.has_studio_environment(StudioPreset::soft()) && !r.has_studio_environment(StudioPreset::product()));
+        frame.product_look = Some(ProductLook { studio: StudioPreset::soft(), ..ProductLook::product() });
         let look = inner_pixels(&render_frame(&mut r, &device, &queue, &frame, true));
         let distinct: std::collections::BTreeSet<[u8; 3]> = look.iter().copied().collect();
         assert!(distinct.len() > 1, "the look's filter dithers");
@@ -6792,9 +6797,9 @@ pub(crate) mod glass_tests {
                 Frame { key: number, ao_radius: radius, product_lights: Some(lights), product_look: Some(look), ..test_frame(scene.clone(), 1.0) };
             render_frame(r, &device, &queue, &frame, true)
         };
-        r.set_studio_environment(&device, &queue, &studio(StudioPreset::default()));
-        let open = draw(&mut r, 60, 0.0, Vec::new(), ProductLook::default());
-        let shut = draw(&mut r, 61, 4.0, Vec::new(), ProductLook::default());
+        r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
+        let open = draw(&mut r, 60, 0.0, Vec::new(), ProductLook::product());
+        let shut = draw(&mut r, 61, 4.0, Vec::new(), ProductLook::product());
         let sum = |p: [u8; 3]| p.iter().map(|&c| u32::from(c)).sum::<u32>();
         // World (2.6, 0) beside the block, and (8.5, -8.5) far from it.
         let (near, far) = ((40, 32), (59, 59));
@@ -6805,7 +6810,7 @@ pub(crate) mod glass_tests {
             pixel(&open, near.0, near.1)
         );
         assert!(close(pixel(&shut, far.0, far.1), pixel(&open, far.0, far.1), 1), "far from the block nothing changes");
-        let direct = ProductLook { intensity: 0.0, ..ProductLook::default() };
+        let direct = ProductLook { intensity: 0.0, ..ProductLook::product() };
         let lit = draw(&mut r, 62, 0.0, vec![key], direct);
         let lit_occluded = draw(&mut r, 63, 4.0, vec![key], direct);
         assert_eq!(lit, lit_occluded, "direct light is not occluded");

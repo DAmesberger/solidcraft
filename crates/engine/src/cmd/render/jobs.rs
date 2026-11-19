@@ -91,6 +91,8 @@ struct ProgressiveStart {
     environment: Option<super::environment::Input>,
     denoise: bool,
     clamp_indirect: Option<f64>,
+    /// A studio of the library lighting the job by its rig (`GpuJob::studio`).
+    studio: Option<solidcraft_doc::render_job::StudioChoice>,
 }
 
 pub(crate) struct Prepared {
@@ -196,11 +198,13 @@ pub(crate) fn form_refusal(params: &Value, progressive: bool) -> Option<&'static
     }
     let refused = raytrace.is_some_and(|o| ["clear_coats", "textures"].iter().any(|key| o.contains_key(*key)))
         || environment.is_some_and(|e| e.get("kind").is_some())
-        || ["lens", "lighting", "tone_map", "supersampling", "denoise_settings", "denoise_diagnostics"].iter().any(|key| params.get(*key).is_some())
+        || ["lens", "lighting", "studio", "tone_map", "supersampling", "denoise_settings", "denoise_diagnostics"]
+            .iter()
+            .any(|key| params.get(*key).is_some())
         || params.get("denoise").is_some_and(|value| value != &json!(false))
         || params.get("clamp_indirect").is_some_and(|value| !value.is_null());
     refused.then_some(
-        "runtime GPU transmission, texture, lens, environment, lighting, tone-map, denoise and clamp_indirect controls require progressive rendering",
+        "runtime GPU transmission, texture, lens, environment, lighting, studio, tone-map, denoise and clamp_indirect controls require progressive rendering",
     )
 }
 
@@ -253,7 +257,7 @@ fn normalize_saved_job(s: &Session, params: &Value, command: &str) -> Result<Opt
             "progressive":true,
             "transparent_background":transparent_background,
             "samples":options.samples,"max_depth":options.max_depth,"seed":options.seed,
-            "lens":options.lens,"lighting":options.lighting,"tone_map":options.tone_map,
+            "lens":options.lens,"lighting":options.lighting,"tone_map":options.tone_map,"studio":options.studio,
             "denoise":options.denoise,"clamp_indirect":options.clamp_indirect,"environment":options.environment,
             "supersampling":options.supersampling,"denoise_settings":options.denoise_settings,"denoise_diagnostics":options.denoise_diagnostics,
             "finishing":options.finishing,"backdrop":options.backdrop,"linear_exr":options.linear_exr,
@@ -784,6 +788,8 @@ fn prepare_progressive(
     if !input.progressive && (input.samples.is_some() || input.max_depth.is_some() || input.seed.is_some() || settings.exposure_ev != 0.0) {
         return Err(bad(command, "sampling and exposure controls require progressive rendering"));
     }
+    // The studio stands about the subject, not about the stage it is given.
+    let subject = scene.bounds;
     super::staging::apply(&mut scene, &settings, command)?;
     let mut options = solidcraft_render::job::JobOptions::default();
     if let Some(samples) = input.samples {
@@ -839,6 +845,18 @@ fn prepare_progressive(
         ))
     } else {
         input.environment.as_ref().map(|source| source.capture(&s.doc.render.resources, command)).transpose()?
+    };
+    let environment = match &input.studio {
+        Some(choice) => {
+            if environment.is_some() || options.lighting.is_some() {
+                return Err(bad(command, "a studio replaces lighting and an environment; choose one"));
+            }
+            let (lighting, studio_environment) = super::studios::job_lighting(s, choice, subject, command)?;
+            options.lighting = Some(lighting);
+            options.validate().map_err(job_error)?;
+            Some(studio_environment)
+        }
+        None => environment,
     };
     let mut features = scene.required_features();
     if environment.is_some() {

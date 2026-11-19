@@ -449,12 +449,8 @@ fn lighting_review() {
     let started = std::time::Instant::now();
     // `LIGHTING_REVIEW_STUDIO=product|soft|contrast` draws the set in that preset (the
     // brightness comparison); the default studio otherwise.
-    let preset = match std::env::var("LIGHTING_REVIEW_STUDIO").as_deref() {
-        Ok("soft") => StudioPreset::Soft,
-        Ok("contrast") => StudioPreset::Contrast,
-        Ok("product") => StudioPreset::Product,
-        _ => StudioPreset::default(),
-    };
+    let name = std::env::var("LIGHTING_REVIEW_STUDIO").unwrap_or_else(|_| "Product".into());
+    let preset: StudioPreset = crate::studio_library::builtin_preset(&name).unwrap_or_else(|| panic!("no built-in studio {name}"));
     let studio = Arc::new(StudioEnvironment::bake(preset));
     // `LIGHTING_REVIEW_INTENSITY=<scale>`: the studio's radiance scaled (a moodier variant).
     let intensity = std::env::var("LIGHTING_REVIEW_INTENSITY").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);

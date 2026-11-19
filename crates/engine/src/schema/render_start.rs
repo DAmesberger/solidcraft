@@ -47,6 +47,7 @@ pub(crate) const GPU_ONLY: &[&str] = &[
     "linear_exr",
     "metal_energy_compensation",
     "nested_media",
+    "studio",
     "supersampling",
     "texture_filtering",
     "tone_map",
@@ -267,9 +268,21 @@ impl JsonSchema for RenderRequest {
         put("lens", section("GPU: a thin lens, `{aperture_radius_mm, focus_distance_mm}`. Default: none, a pinhole camera."));
         put("lighting", section("GPU: studio lighting in place of the implicit studio. Default: none."));
         put(
+            "studio",
+            json!({"description": "GPU: a studio of the studio library with a rig (`render.studio.list` with `kind: realistic`), \
+            `{id, rotation_rad}`: its lights around the subject and its cyclorama, at its calibrated exposure, in place of \
+            `lighting` and `environment`. With `tone_map: pbr_neutral` and exposure 0 the image matches the Realistic view's \
+            exposure. Default: none.",
+            "type": ["object", "null"],
+            "required": ["id"],
+            "properties": {"id": {"type": "string"}, "rotation_rad": {"type": "number"}},
+            "additionalProperties": false}),
+        );
+        put(
             "tone_map",
-            json!({"description": "GPU: the tone response, `reinhard` or `aces_fitted`. Default: reinhard.",
-            "type": ["string", "null"], "enum": ["reinhard", "aces_fitted", null]}),
+            json!({"description": "GPU: the tone response, `reinhard`, `aces_fitted` or `pbr_neutral` (the Realistic view's). \
+            Default: reinhard.",
+            "type": ["string", "null"], "enum": ["reinhard", "aces_fitted", "pbr_neutral", null]}),
         );
 
         let null_only = json!({"type": "null"});

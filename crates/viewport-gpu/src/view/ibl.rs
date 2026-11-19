@@ -19,6 +19,9 @@
 //! split-sum terms of the viewport's own BRDF ([`env_brdf`] and its test).
 
 use std::f64::consts::PI;
+use std::sync::Arc;
+
+use solidcraft_viewport::studio::{self as rig, Room, StudioLight, StudioRig};
 
 use wgpu::util::DeviceExt;
 
@@ -35,41 +38,83 @@ const SH_LEVEL: usize = 2;
 /// (half size, floor, ceiling, 0) and four lights of four `vec4`s ([`StudioEnvironment::uniform_bytes`]).
 const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
 
-/// A studio the product look lights with: each binds one of upstream's starter lighting rigs
-/// (`assets/render/starter/lighting/`) over a cyclorama.
+/// A studio the product look lights with: a handle to a studio's rig (`solidcraft_viewport::studio`,
+/// an entry of the app's studio library, data the user can manage), registered with
+/// [`StudioPreset::register`]. The handle is the rig's content key, so the same rig registered
+/// twice is the same studio, and an edited rig is a new one. The default handle names no rig: its
+/// bake is a neutral grey surround without lights, until an app registers the studio it uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum StudioPreset {
-    /// `STU-002`, three-point product studio: a graded key above front-left, a fill card
-    /// front-right and a strip rim behind, in a mid-bright room. The Realistic default.
-    #[default]
-    Product,
-    /// `STU-004`: two broad side panels and a bright cyclorama: low contrast, soft highlights.
-    Soft,
-    /// `STU-005`: two tall strips and a low front fill in a darker room: crisp highlights on metal,
-    /// dark materials darker on faces turned from the light, and a soft overhead scrim so flat
-    /// metal seen from above reads light.
-    Contrast,
+pub struct StudioPreset(u64);
+
+/// Most rigs kept registered; past it the oldest is forgotten (a studio baked from it stays
+/// installed).
+const MAX_REGISTERED: usize = 64;
+
+fn registry() -> &'static std::sync::Mutex<Vec<(u64, Arc<StudioRig>)>> {
+    static REGISTRY: std::sync::OnceLock<std::sync::Mutex<Vec<(u64, Arc<StudioRig>)>>> = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
 }
 
 impl StudioPreset {
-    pub const ALL: [StudioPreset; 3] = [StudioPreset::Product, StudioPreset::Soft, StudioPreset::Contrast];
+    /// The handle that names no rig (the default).
+    pub const NONE: StudioPreset = StudioPreset(0);
 
-    /// The number a [`ProductLook`] record carries.
-    pub fn id(self) -> u32 {
-        match self {
-            StudioPreset::Product => 0,
-            StudioPreset::Soft => 1,
-            StudioPreset::Contrast => 2,
+    /// The handle of `rig`, kept so a bake on any thread can read it.
+    pub fn register(rig: &StudioRig) -> Self {
+        let key = rig.content_key().max(1);
+        if let Ok(mut rigs) = registry().lock()
+            && !rigs.iter().any(|(k, _)| *k == key)
+        {
+            if rigs.len() >= MAX_REGISTERED {
+                rigs.remove(0);
+            }
+            rigs.push((key, Arc::new(rig.clone())));
         }
+        StudioPreset(key)
     }
 
-    pub fn from_id(id: u32) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
+    /// The rig this handle names, while it is registered.
+    pub fn rig(self) -> Option<Arc<StudioRig>> {
+        registry().lock().ok().and_then(|rigs| rigs.iter().find(|(k, _)| *k == self.0).map(|(_, rig)| rig.clone()))
     }
 
-    /// The upstream starter rig the studio binds (`STU-*`).
-    pub fn rig_id(self) -> &'static str {
-        studio(self).preset
+    /// The rig's content key (0: no rig).
+    pub fn key(self) -> u64 {
+        self.0
+    }
+}
+
+/// The built-in studios' rigs for tests: a copy of the app's `assets/render/catalog/studios.json`
+/// (the app's GPU crate checks the copy stays identical).
+#[cfg(test)]
+pub(crate) fn test_rig(name: &str) -> StudioRig {
+    let text = include_str!("../../tests/fixtures/studios.json");
+    let file: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    let studios: Vec<solidcraft_viewport::studio::Studio> = serde_json::from_value(file["items"].clone()).unwrap_or_default();
+    studios.into_iter().find(|s| s.name == name).and_then(|s| s.realistic).unwrap_or_else(|| panic!("no built-in rig {name}"))
+}
+
+#[cfg(test)]
+impl ProductLook {
+    /// The look lit by the built-in Product studio.
+    pub(crate) fn product() -> Self {
+        ProductLook { studio: StudioPreset::product(), ..ProductLook::default() }
+    }
+}
+
+#[cfg(test)]
+impl StudioPreset {
+    pub(crate) fn product() -> Self {
+        Self::register(&test_rig("Product"))
+    }
+    pub(crate) fn soft() -> Self {
+        Self::register(&test_rig("Soft"))
+    }
+    pub(crate) fn contrast() -> Self {
+        Self::register(&test_rig("Contrast"))
+    }
+    pub(crate) fn all() -> [Self; 3] {
+        [Self::product(), Self::soft(), Self::contrast()]
     }
 }
 
@@ -199,11 +244,6 @@ fn unit(a: Rgb) -> Rgb {
     if l > 0.0 { [a[0] / l, a[1] / l, a[2] / l] } else { [0.0, 0.0, 1.0] }
 }
 
-fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// `acc += c × w`.
 fn add(acc: &mut Rgb, c: Rgb, w: f64) {
     for (a, c) in acc.iter_mut().zip(c) {
@@ -215,12 +255,8 @@ fn mix(a: Rgb, b: Rgb, t: f64) -> Rgb {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
-fn studio(preset: StudioPreset) -> &'static rig::Rig {
-    match preset {
-        StudioPreset::Product => &rig::PRODUCT,
-        StudioPreset::Soft => &rig::SOFT,
-        StudioPreset::Contrast => &rig::CONTRAST,
-    }
+fn studio(preset: StudioPreset) -> Option<Arc<StudioRig>> {
+    preset.rig()
 }
 
 /// The unit direction through cube face `face` (+X, −X, +Y, −Y, +Z, −Z) at face coordinates
@@ -322,57 +358,66 @@ fn hammersley(i: u32, n: u32) -> (f64, f64) {
 pub struct StudioEnvironment {
     preset: StudioPreset,
     levels: Vec<Level>,
-    /// The rig's lights (none for a test furnace), at [`StudioEnvironment::calibration`].
-    lights: &'static [rig::RigLight],
+    /// The rig's lights (none for a surround without a rig), at
+    /// [`StudioEnvironment::calibration`].
+    lights: Vec<StudioLight>,
+    /// The room reflections are box-projected against.
+    room: Room,
     /// The cyclorama's irradiance E(n) = Σ k_i p_i(n) over p = (1, x, y, z, xy, yz, xz, z²,
     /// x² − y²); the rig's lights reach diffuse surfaces directly instead ([`rig`]).
     irradiance: [Rgb; 9],
-    /// The scale the studio's radiance is baked at ([`rig::Rig::calibration`]).
+    /// The scale the studio's radiance is baked at ([`StudioRig::calibration`]).
     calibration: f64,
 }
 
 /// Where a bake's radiance comes from.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Radiance {
-    /// A rig at its calibrated scale, with its key white ([`rig::Rig::key_white`]).
-    Studio(&'static rig::Rig, f64, f64),
-    /// The same radiance everywhere (the white furnace of the tests).
-    #[cfg(test)]
+    /// A rig at its calibrated scale, with its key white ([`StudioRig::key_white`]).
+    Studio(Arc<StudioRig>, f64, f64),
+    /// The same radiance everywhere: the white furnace of the tests, and the neutral surround of
+    /// a handle that names no registered rig.
     Constant(f64),
 }
 
+/// The neutral surround's radiance (a mid grey) for a handle without a rig.
+const SURROUND: f64 = 0.18;
+
 impl Radiance {
     /// Everything seen from the studio's centre along `d`: what reflections show.
-    fn at(self, d: Rgb) -> Rgb {
+    fn at(&self, d: Rgb) -> Rgb {
         match self {
-            Radiance::Studio(r, scale, white) => r.radiance_in(d, white).map(|c| c * scale),
-            #[cfg(test)]
-            Radiance::Constant(c) => [c; 3],
+            Radiance::Studio(r, scale, white) => r.radiance_in(d, *white).map(|c| c * scale),
+            Radiance::Constant(c) => [*c; 3],
         }
     }
 
     /// The radiance without the rig's lights (which diffuse shading takes directly).
-    fn ambient(self, d: Rgb) -> Rgb {
+    fn ambient(&self, d: Rgb) -> Rgb {
         match self {
-            Radiance::Studio(r, scale, white) => r.ambient_in(d, white).map(|c| c * scale),
-            #[cfg(test)]
-            Radiance::Constant(c) => [c; 3],
+            Radiance::Studio(r, scale, white) => r.ambient_in(d, *white).map(|c| c * scale),
+            Radiance::Constant(c) => [*c; 3],
         }
     }
 
-    fn calibration(self) -> f64 {
+    fn calibration(&self) -> f64 {
         match self {
-            Radiance::Studio(_, scale, _) => scale,
-            #[cfg(test)]
+            Radiance::Studio(_, scale, _) => *scale,
             Radiance::Constant(_) => 1.0,
         }
     }
 
-    fn lights(self) -> &'static [rig::RigLight] {
+    fn lights(&self) -> Vec<StudioLight> {
         match self {
-            Radiance::Studio(r, _, _) => r.lights,
-            #[cfg(test)]
-            Radiance::Constant(_) => &[],
+            Radiance::Studio(r, _, _) => r.lights.iter().take(rig::MAX_LIGHTS).cloned().collect(),
+            Radiance::Constant(_) => Vec::new(),
+        }
+    }
+
+    fn room(&self) -> Room {
+        match self {
+            Radiance::Studio(r, _, _) => r.room,
+            Radiance::Constant(_) => Room::default(),
         }
     }
 }
@@ -409,8 +454,14 @@ impl StudioBake {
     pub const FRAME_WORK: usize = 16_384;
 
     pub fn new(preset: StudioPreset) -> Self {
-        let rig = studio(preset);
-        Self::with_radiance(preset, Radiance::Studio(rig, rig.calibration(), rig.key_white()))
+        let radiance = match studio(preset) {
+            Some(rig) => {
+                let (calibration, white) = (rig.calibration(), rig.key_white());
+                Radiance::Studio(rig, calibration, white)
+            }
+            None => Radiance::Constant(SURROUND),
+        };
+        Self::with_radiance(preset, radiance)
     }
 
     fn with_radiance(preset: StudioPreset, radiance: Radiance) -> Self {
@@ -453,9 +504,8 @@ impl StudioBake {
 
     /// The baked studio, once [`StudioBake::is_done`] (`None` before).
     pub fn finish(self) -> Option<StudioEnvironment> {
-        let (preset, calibration) = (self.preset, self.radiance.calibration());
-        let lights = self.radiance.lights();
-        self.is_done().then_some(StudioEnvironment { preset, levels: self.levels, irradiance: self.irradiance, calibration, lights })
+        let (preset, calibration, lights, room) = (self.preset, self.radiance.calibration(), self.radiance.lights(), self.radiance.room());
+        self.is_done().then_some(StudioEnvironment { preset, levels: self.levels, irradiance: self.irradiance, calibration, lights, room })
     }
 
     /// One row of the level in progress; its work units.
@@ -597,7 +647,14 @@ impl StudioEnvironment {
     fn run(mut bake: StudioBake) -> Self {
         let preset = bake.preset;
         while !bake.step(usize::MAX) {}
-        bake.finish().unwrap_or(StudioEnvironment { preset, levels: Vec::new(), irradiance: [[0.0; 3]; 9], calibration: 1.0, lights: &[] })
+        bake.finish().unwrap_or(StudioEnvironment {
+            preset,
+            levels: Vec::new(),
+            irradiance: [[0.0; 3]; 9],
+            calibration: 1.0,
+            lights: Vec::new(),
+            room: Room::default(),
+        })
     }
 
     /// The studio this was baked from.
@@ -608,7 +665,7 @@ impl StudioEnvironment {
     /// A studio of constant radiance `c` everywhere.
     #[cfg(test)]
     fn constant(c: f64) -> Self {
-        Self::run(StudioBake::with_radiance(StudioPreset::Product, Radiance::Constant(c)))
+        Self::run(StudioBake::with_radiance(StudioPreset::default(), Radiance::Constant(c)))
     }
 
     /// The irradiance polynomial of a level's radiance: its nine spherical-harmonic terms, each
@@ -665,7 +722,7 @@ impl StudioEnvironment {
     }
 
     /// The scale the studio's radiance is baked at: its exposure calibration
-    /// ([`rig::Rig::calibration`]; 1 for a test furnace).
+    /// ([`StudioRig::calibration`]; 1 for a surround without a rig).
     pub fn calibration(&self) -> f64 {
         self.calibration
     }
@@ -677,7 +734,7 @@ impl StudioEnvironment {
         let mut v: Vec<f32> = self.irradiance.iter().flat_map(|t| [t[0] as f32, t[1] as f32, t[2] as f32, 0.0]).collect();
         let lights = &self.lights[..self.lights.len().min(rig::MAX_LIGHTS)];
         v.extend([self.levels.len().saturating_sub(1) as f32, lights.len() as f32, 0.0, 0.0]);
-        v.extend([rig::ROOM.half, rig::ROOM.floor, rig::ROOM.ceiling, 0.0].map(|x| x as f32));
+        v.extend([self.room.half, self.room.floor, self.room.ceiling, 0.0].map(|x| x as f32));
         for slot in 0..rig::MAX_LIGHTS {
             match lights.get(slot) {
                 Some(l) => {
@@ -934,7 +991,11 @@ pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// The renderer's studios: the stand-in and each preset uploaded so far (at most one per preset).
+/// Most studios the renderer keeps on the GPU at once.
+const MAX_INSTALLED: usize = 8;
+
+/// The renderer's studios: the stand-in and the studios uploaded so far (one per rig, at most
+/// [`MAX_INSTALLED`]).
 pub(crate) struct Studios {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -965,6 +1026,10 @@ impl Studios {
     pub(crate) fn install(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, env: &StudioEnvironment) {
         let gpu = upload(device, queue, &self.layout, &self.sampler, env);
         self.baked.retain(|(p, _)| *p != env.preset());
+        // At most a few studios stay on the GPU; the oldest goes first.
+        if self.baked.len() >= MAX_INSTALLED {
+            self.baked.remove(0);
+        }
         self.baked.push((env.preset(), gpu));
         self.generation += 1;
     }
@@ -1075,8 +1140,6 @@ pub(crate) fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     let g = 1.0 - 1.0 / (DESATURATION * (peak - new_peak) + 1.0);
     c.map(|v| v + (new_peak - v) * g)
 }
-
-mod rig;
 
 #[cfg(test)]
 mod reference;

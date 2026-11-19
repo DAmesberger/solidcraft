@@ -34,6 +34,7 @@ mod navigation;
 mod panel_layout;
 mod security;
 mod sketch;
+pub(crate) mod studios;
 mod theme_picker;
 mod tools;
 

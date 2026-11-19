@@ -1062,9 +1062,9 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   surround (wall 0.9, spill 0.2) and a wider horizon band, so metals read as metal and dark
   materials may go darker on faces turned away from the light. `Product` (mid), `Soft` (bright)
   and `Contrast` are ordered by surround brightness. Every preset keeps the radiance floor and
-  the per-preset exposure calibration. An app selects one through `ProductLook::studio`.
+  the per-preset exposure calibration. An app selects one with `render.studio.default` (below).
 - **Studio-added lights; `Contrast`'s soft top light.** A studio may add its own lights after
-  the exported rig's (`Rig::exported`). `STU-005`'s strips sit about 10° high, so a flat metal
+  the exported rig's (`rig_lights`). `STU-005`'s strips sit about 10° high, so a flat metal
   face seen from above or from a three-quarter view mirrored only the dim ceiling or wall and
   read dull (gold read olive). `Contrast` therefore adds a soft overhead scrim nearly the room's
   width (3.9 B square, 1.3 B above the centre), graded over 70 % of its half size.
@@ -1073,6 +1073,37 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   - The graded edge falls off between about 60° and 34° of elevation, so a top face seen from a
     three-quarter view mirrors a gradient instead of the flat wall. The walls below stay dark.
   - Metals keep their measured F0: the look comes from the light, not from brighter materials.
+
+- **Studios are data, in one studio library.** Every studio is a record
+  (`solidcraft_viewport::studio::Studio`): an optional **rig** (lights in subject extents B, the
+  cyclorama, the room, the white-under-key calibration target and the §5.9 acceptance thresholds)
+  for the Realistic view and the path tracer, and an optional **composition** (HDR, intensity,
+  exposure, ground, starter rig) for `render.preset.*`. The built-in studios ship as data
+  (`assets/render/catalog/studios.json`): upstream's 25 native compositions
+  (`NATIVE-STUDIO-001…025`) and the three Realistic rigs, Product (`NATIVE-STUDIO-026`, `STU-002`),
+  Soft (`-027`, `STU-004`) and Contrast (`-028`, `STU-005`, with its overhead scrim). Nothing of a
+  studio is in code: the viewport takes a registered rig (`StudioPreset::register`), the
+  engine reads the catalog.
+- **The user manages studios** with `render.studio.list`, `get`, `duplicate`, `edit`, `import`,
+  `export` (`solidcraft-studios/1` files) and `delete`; built-in studios are read-only and are
+  duplicated to change a copy. User studios belong to the user, not to a design: the desktop app
+  keeps them with its preferences (as settings profiles), and Preferences › Graphics › Realistic
+  studios lists, chooses, duplicates, adjusts (lights and room in stops), renames, imports,
+  exports and deletes them.
+- **The Realistic studio is a setting naming a studio** (`render.studio.default`; Product unless
+  set). An app chooses its studio through that command, not through code.
+- **The same studio in the GPU path tracer.** A GPU path setup may be lit by a library studio
+  with a rig (`job.options.studio`: `{id, rotation_rad}`) instead of explicit lighting and an
+  environment. The engine turns it into the job's lighting with the same definitions
+  (`solidcraft_render::job::studio`): the rig's lights become area lights, placed in multiples of B
+  about the studio's centre at their mean radiance, and the cyclorama without them becomes the
+  job's environment, both at the rig's calibrated scale. With `tone_map: pbr_neutral` (Khronos PBR
+  Neutral, the view's curve) at exposure 0, metals reflect the room rather than black. Two
+  approximations: the cyclorama is at infinity, where the view box-projects it, and a graded light
+  is uniform at its mean, so Contrast's large graded scrim sends about 6 % less toward the centre
+  than the view's. A design keeps the records of the user studios its setups name
+  (`render.studios`), so it renders the same on another machine; built-in studios are named only.
+  The pending format change `path-realistic-studio` covers both.
 
 Track L builds this, and the acceptance frames (§5.9) judge it.
 
@@ -1182,6 +1213,13 @@ Their natural word, "Shaded", is already a visual style, so reusing it would be 
   - one viewport serves all design tabs, as visual style does. The Render workspace preview
     is a separate view with its own look. If Solidcraft gains split views, each view carries
     its own look as it would its own visual style.
+- **The Render preview's Realistic look** draws graph and `pbr` looks through the same material
+  stream as the modelling view (`render_preview_graphs`, `viewport_graphs::add_body` over the
+  product scene's bodies), lit by the studio and the preview's own product lights: patterns,
+  images and coats show, and see-through graph faces (a dome of clear silicone) are drawn by the
+  stream alone, blended, so the preview leaves them out of its own blocks. Faces the
+  appearance-assign preview recolours keep the tried look. The Standard preview builds none of
+  this; its scene and key are as before.
 
 ### 6.2 Realistic keeps modelling clear
 

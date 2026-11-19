@@ -279,7 +279,7 @@ fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
     let target =
         GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(device, true)), samples: 1, tess: false, oit: false };
     let mut r = Renderer::new(device, target, None);
-    r.set_studio_environment(device, queue, &studio(StudioPreset::default()));
+    r.set_studio_environment(device, queue, &studio(StudioPreset::product()));
     r.materials_mut().no_time_budget = true;
     r
 }
@@ -456,7 +456,7 @@ fn pipeline_and_edit_costs() {
     let mut r = renderer(&device, &queue);
     let none = BTreeMap::new();
     let small_frame =
-        |scene: &GpuScene, key: u64| crate::view::Frame { key, product_look: Some(ProductLook::default()), ..test_frame(scene.clone(), 1.0) };
+        |scene: &GpuScene, key: u64| crate::view::Frame { key, product_look: Some(ProductLook::product()), ..test_frame(scene.clone(), 1.0) };
     // The fallback and the frame's other pipelines first.
     let warm = graph_layers(&lowered(&serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"))), &none);
     for k in 0..4 {

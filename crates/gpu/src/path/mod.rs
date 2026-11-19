@@ -28,6 +28,8 @@ mod media_hierarchy;
 mod photons;
 mod scene;
 #[cfg(test)]
+mod studio_tests;
+#[cfg(test)]
 mod tests;
 mod textures;
 // Opaque producers specialize away dielectric traversal and use a single

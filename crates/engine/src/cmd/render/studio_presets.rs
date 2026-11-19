@@ -17,39 +17,23 @@ use solidcraft_render::{
 };
 use std::sync::Arc;
 
+/// The built-in native studios (the studio library's built-in studios with a composition), in
+/// the catalog's shape: `{id, name, description, hdr, intensity, exposure_ev, ground, rig}`.
 pub(super) fn entries() -> Value {
-    json!([
-        {"id":"NATIVE-STUDIO-001","name":"Neutral product studio","description":"Original side-softbox HDR and a fitted passive ground. Preserves the camera, all appearances and native geometry.","hdr":"HDR-001","intensity":1.0,"exposure_ev":-0.9,"ground":[0.32,0.34,0.38],"rig":null},
-        {"id":"NATIVE-STUDIO-002","name":"Soft enveloping studio","description":"Original broad white HDR and a neutral ground for product inspection. No automatic appearance assignment.","hdr":"HDR-002","intensity":1.0,"exposure_ev":-2.0,"ground":[0.18,0.19,0.21],"rig":null},
-        {"id":"NATIVE-STUDIO-003","name":"Electronics inspection studio","description":"Original electronics-bench HDR, neutral passive ground and explicit exposure. Retains board and component appearances.","hdr":"HDR-014","intensity":1.0,"exposure_ev":-1.0,"ground":[0.22,0.24,0.27],"rig":null},
-        {"id":"NATIVE-STUDIO-004","name":"Three-light product studio","description":"Original RIG-002 with an explicit 1/16 creative radiance gain, HDR-002 fill and passive ground. This is not the unmodified reference calibration.","hdr":"HDR-002","intensity":0.12,"exposure_ev":-1.1,"ground":[0.32,0.34,0.38],"rig":"RIG-002"},
-        {"id":"NATIVE-STUDIO-005","name":"Dark metal reflection studio","description":"Original black-strip HDR for readable metal reflections, with a dark diffuse ground. Preserves all product optics.","hdr":"HDR-003","intensity":1.0,"exposure_ev":-0.9,"ground":[0.025,0.03,0.04],"rig":null},
-        {"id":"NATIVE-STUDIO-006","name":"Warm DIY workbench studio","description":"Original home-workbench window radiance and a warm diffuse ground. Not a textured workshop reconstruction.","hdr":"HDR-013","intensity":1.0,"exposure_ev":-1.0,"ground":[0.27,0.22,0.16],"rig":null},
-        {"id":"NATIVE-STUDIO-007","name":"Spacecraft inspection bay","description":"Original clean-bay HDR and pale neutral ground. A terrestrial inspection composition, not lunar illumination or vacuum physics.","hdr":"HDR-023","intensity":1.0,"exposure_ev":-2.0,"ground":[0.42,0.44,0.48],"rig":null},
-        {"id":"NATIVE-STUDIO-008","name":"Woodshop soft-window studio","description":"Original broad-window woodshop HDR with a warm neutral ground. Does not automatically assign a wood material or geometry.","hdr":"HDR-010","intensity":1.0,"exposure_ev":-1.0,"ground":[0.30,0.25,0.20],"rig":null},
-        {"id":"NATIVE-STUDIO-009","name":"Aerospace hangar inspection","description":"Hangar skylight reflections for airframe hardware. This is a finite product stage, not a reconstructed hangar.","hdr":"HDR-004","intensity":1.0,"exposure_ev":-1.2,"ground":[0.25,0.28,0.32],"rig":null},
-        {"id":"NATIVE-STUDIO-010","name":"Neutral comparison studio","description":"Neutral comparison field and an 18-percent diffuse ground. Relative authored radiance, not a colorimetric calibration.","hdr":"HDR-005","intensity":1.0,"exposure_ev":-1.0,"ground":[0.18,0.18,0.18],"rig":null},
-        {"id":"NATIVE-STUDIO-011","name":"Warm tabletop presentation","description":"Warm table-window reflections and a muted warm ground for household and DIY objects.","hdr":"HDR-006","intensity":1.0,"exposure_ev":-1.2,"ground":[0.26,0.22,0.16],"rig":null},
-        {"id":"NATIVE-STUDIO-012","name":"Automotive showroom ribbons","description":"Long showroom reflection bands with a dark passive ground. Paint optics and material assignments are preserved.","hdr":"HDR-007","intensity":1.0,"exposure_ev":-0.9,"ground":[0.04,0.05,0.07],"rig":null},
-        {"id":"NATIVE-STUDIO-013","name":"Mechanical service bay","description":"Mechanical-bay window reflections for industrial assemblies and workshop hardware.","hdr":"HDR-008","intensity":1.0,"exposure_ev":-1.0,"ground":[0.21,0.23,0.25],"rig":null},
-        {"id":"NATIVE-STUDIO-014","name":"CNC tooling overhead studio","description":"Overhead lane reflections for machined parts. Does not add manufacturing marks or simulate a cutting process.","hdr":"HDR-009","intensity":1.0,"exposure_ev":-1.1,"ground":[0.25,0.27,0.28],"rig":null},
-        {"id":"NATIVE-STUDIO-015","name":"Garage doorway product studio","description":"Broad garage-doorway reflections and a neutral dark ground for automotive and DIY components.","hdr":"HDR-011","intensity":1.0,"exposure_ev":-1.0,"ground":[0.16,0.17,0.18],"rig":null},
-        {"id":"NATIVE-STUDIO-016","name":"Makerspace worklight studio","description":"Authored worklight environment for printed fixtures, enclosures and tools. Retains the actual source geometry.","hdr":"HDR-012","intensity":1.0,"exposure_ev":-1.0,"ground":[0.27,0.26,0.23],"rig":null},
-        {"id":"NATIVE-STUDIO-017","name":"Sun-free overcast inspection","description":"Diffuse overcast environment without a solar disc. No extra sun or atmospheric medium is introduced.","hdr":"HDR-015","intensity":1.0,"exposure_ev":-1.0,"ground":[0.3,0.32,0.34],"rig":null},
-        {"id":"NATIVE-STUDIO-018","name":"Automotive turntable presentation","description":"Turntable-style reflections on a stationary finite ground. This composition does not animate the subject.","hdr":"HDR-016","intensity":1.0,"exposure_ev":-1.0,"ground":[0.045,0.05,0.06],"rig":null},
-        {"id":"NATIVE-STUDIO-019","name":"Paint reflection-band review","description":"Authored inspection bands reveal the currently assigned surface. Flakes, spectral paint and coating thickness are not added.","hdr":"HDR-017","intensity":1.0,"exposure_ev":-1.0,"ground":[0.05,0.055,0.065],"rig":null},
-        {"id":"NATIVE-STUDIO-020","name":"Assembly bench soft studio","description":"Soft assembly-bench lighting for mechanisms, bearings and electronic enclosures; engineering materials remain unchanged.","hdr":"HDR-018","intensity":1.0,"exposure_ev":-1.0,"ground":[0.24,0.25,0.26],"rig":null},
-        {"id":"NATIVE-STUDIO-021","name":"Electronics rework reflection studio","description":"Offset strips for solder and component inspection. No physical PCB or solder geometry is synthesized.","hdr":"HDR-019","intensity":1.0,"exposure_ev":-1.0,"ground":[0.12,0.14,0.16],"rig":null},
-        {"id":"NATIVE-STUDIO-022","name":"FDM surface inspection","description":"Neutral authored lighting for real printed-part surface detail. Layer geometry is not invented by this preset.","hdr":"HDR-020","intensity":1.0,"exposure_ev":-1.0,"ground":[0.28,0.29,0.3],"rig":null},
-        {"id":"NATIVE-STUDIO-023","name":"Printed-part photography","description":"Broad photographic environment and a pale ground for printed housings and DIY products.","hdr":"HDR-021","intensity":1.0,"exposure_ev":-1.0,"ground":[0.45,0.46,0.48],"rig":null},
-        {"id":"NATIVE-STUDIO-024","name":"Robot LED editorial studio","description":"Colored editorial environment for robotics. Does not assign emitters, diode photometry or a physical lunar atmosphere.","hdr":"HDR-022","intensity":1.0,"exposure_ev":-1.4,"ground":[0.025,0.027,0.035],"rig":null},
-        {"id":"NATIVE-STUDIO-025","name":"Black-environment three-light studio","description":"Black environment with an explicit three-light rig and dark ground. Not solar or lunar illumination.","hdr":"HDR-024","intensity":1.0,"exposure_ev":-1.1,"ground":[0.08,0.08,0.09],"rig":"RIG-002"}
-    ])
+    Value::Array(super::studios::builtin().iter().filter_map(entry).collect())
 }
-fn recipe(id: &str, command: &str) -> Result<Value> {
-    entries()
-        .as_array()
-        .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(id)).cloned())
+
+fn entry(studio: &solidcraft_viewport::studio::Studio) -> Option<Value> {
+    let path = studio.path.as_ref()?;
+    Some(json!({"id": studio.id, "name": studio.name, "description": studio.description, "hdr": path.hdr, "intensity": path.intensity,
+        "exposure_ev": path.exposure_ev, "ground": path.ground, "rig": path.rig}))
+}
+
+/// A studio of the library (built-in or the user's) with a composition, in the catalog's shape.
+fn recipe(s: &Session, id: &str, command: &str) -> Result<Value> {
+    s.studios
+        .get(id)
+        .and_then(entry)
         .ok_or_else(|| bad(command, "unknown native studio identity; SCENE-* specifications are not executable compositions"))
 }
 pub(super) const PRESET_CONTRACT: TypedContract<PresetParams> = TypedContract::new();
@@ -65,7 +49,7 @@ fn candidate(s: &Session, input: &PresetParams, command: &str) -> Result<Candida
     if input.expected_revision.is_some_and(|revision| revision != s.revision) {
         return Err(bad(command, "scene or saved settings changed after review; resolve the composition again"));
     }
-    let source = recipe(&input.id, command)?;
+    let source = recipe(s, &input.id, command)?;
     let mut setup = super::patched_settings(s, &input.name, &input.set, command)?;
     if !matches!(&setup.job, Some(RenderJob::CpuRaytrace { .. } | RenderJob::GpuPath { .. })) {
         return Err(bad(command, "native studio compositions require an explicitly selected CPU or GPU raytrace setup; no executor is substituted"));
