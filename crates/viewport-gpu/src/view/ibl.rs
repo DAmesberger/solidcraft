@@ -27,14 +27,46 @@ use wgpu::util::DeviceExt;
 
 /// Side of the prefiltered cube map's sharpest level, in texels.
 pub(crate) const ENV_SIZE: u32 = 128;
-/// Levels of the prefiltered cube map: level `m` holds perceptual roughness `m / (ENV_MIPS - 1)`.
+/// Levels of the prefiltered cube map: level `m` holds perceptual roughness [`level_roughness`]`(m)`.
 pub(crate) const ENV_MIPS: u32 = 6;
+/// The perceptual roughness level 0 holds: a GGX lobe about one of its texels wide (128 a face),
+/// so it shows the studio as sharply as the level can. Level 0 was the unfiltered studio, and a
+/// glossy coat (roughness 0.12, between levels 0 and 1 at 0.2) read 40 % of that mirror: its sharp
+/// edges, which a slight orange peel then dragged into ragged blotches. A lobe this narrow or
+/// narrower reads level 0 alone.
+pub(crate) const LEVEL_ZERO_ROUGHNESS: f64 = 0.1;
+
+/// The perceptual roughness prefiltered level `m` holds: [`LEVEL_ZERO_ROUGHNESS`] at level 0, then
+/// `m / (ENV_MIPS − 1)` up to 1 at the top level.
+pub(crate) fn level_roughness(m: usize) -> f64 {
+    match m {
+        0 => LEVEL_ZERO_ROUGHNESS,
+        m => m as f64 / f64::from(ENV_MIPS - 1),
+    }
+}
+
+/// The (fractional) level to read for perceptual `roughness` on a map whose top level is `top`:
+/// the inverse of [`level_roughness`] between levels, level 0 below its own roughness
+/// (`pbr_env_level` in the shader; this copy is the CPU reference's).
+#[cfg(test)]
+pub(crate) fn roughness_level(roughness: f64, top: f64) -> f64 {
+    let r = roughness.clamp(0.0, 1.0);
+    if top < 1.0 {
+        return 0.0;
+    }
+    let one = 1.0 / top;
+    if r >= one {
+        return r * top;
+    }
+    ((r - LEVEL_ZERO_ROUGHNESS) / (one - LEVEL_ZERO_ROUGHNESS)).max(0.0)
+}
 /// GGX samples per texel of each rough level (filtered importance sampling keeps them smooth).
 const SPECULAR_SAMPLES: u32 = 64;
 /// The irradiance terms are projected from the cyclorama at this level's size (32 × 32 texels a
 /// face).
 const SH_LEVEL: usize = 2;
-/// The environment uniform: nine irradiance terms, (largest level, light count, 0, 0), the room
+/// The environment uniform: nine irradiance terms, (largest level, light count, level 0's
+/// roughness, 0), the room
 /// (half size, floor, ceiling, 0) and four lights of four `vec4`s ([`StudioEnvironment::uniform_bytes`]).
 const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
 
@@ -555,9 +587,6 @@ impl StudioBake {
                 source.push(next);
             }
             self.irradiance = StudioEnvironment::project(Some(&self.ambient_level()));
-            if let Some(sharp) = source.first() {
-                self.levels.push(sharp.clone());
-            }
             self.source = source;
             self.row = 0;
         }
@@ -587,11 +616,10 @@ impl StudioBake {
 /// The GGX samples (cos θ, φ, source lod) prefiltering level `m` takes, with the source level
 /// each reads (filtered importance sampling).
 fn specular_samples(m: usize) -> Vec<(f64, f64, f64)> {
-    let top = (ENV_MIPS - 1) as f64;
     let n = ENV_SIZE as f64;
     // One texel's solid angle at the sharpest level.
     let texel_angle = 4.0 * PI / (6.0 * n * n);
-    let roughness = m as f64 / top;
+    let roughness = level_roughness(m);
     let a2 = roughness.powi(4);
     (0..SPECULAR_SAMPLES)
         .map(|i| {
@@ -733,7 +761,7 @@ impl StudioEnvironment {
     fn uniform_bytes(&self) -> Vec<u8> {
         let mut v: Vec<f32> = self.irradiance.iter().flat_map(|t| [t[0] as f32, t[1] as f32, t[2] as f32, 0.0]).collect();
         let lights = &self.lights[..self.lights.len().min(rig::MAX_LIGHTS)];
-        v.extend([self.levels.len().saturating_sub(1) as f32, lights.len() as f32, 0.0, 0.0]);
+        v.extend([self.levels.len().saturating_sub(1) as f32, lights.len() as f32, LEVEL_ZERO_ROUGHNESS as f32, 0.0]);
         v.extend([self.room.half, self.room.floor, self.room.ceiling, 0.0].map(|x| x as f32));
         for slot in 0..rig::MAX_LIGHTS {
             match lights.get(slot) {

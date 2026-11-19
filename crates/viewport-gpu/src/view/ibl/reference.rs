@@ -128,7 +128,7 @@ pub(crate) fn shade_parts(
     let ess = (a + b).max(1e-4);
     let r = [2.0 * nv * n[0] - v[0], 2.0 * nv * n[1] - v[1], 2.0 * nv * n[2] - v[2]];
     let top = env.level_count().saturating_sub(1) as f64;
-    let prefiltered = env.prefiltered(unturn(r, rotation), roughness * top);
+    let prefiltered = env.prefiltered(unturn(r, rotation), super::roughness_level(roughness, top));
     let irradiance = env.irradiance_at(unturn(n, rotation)).map(|e| e.max(0.0));
     let mut specular = [0.0; 3];
     let mut diffuse = [0.0; 3];
@@ -144,6 +144,6 @@ pub(crate) fn shade_parts(
     let coat_ratio = (coat_ior - 1.0) / (coat_ior + 1.0);
     let (ca, cb) = env_brdf(nv as f32, coat_roughness as f32);
     let albedo = weight * (coat_ratio * coat_ratio * f64::from(ca) + f64::from(cb));
-    let seen = env.prefiltered(unturn(r, rotation), coat_roughness * top);
+    let seen = env.prefiltered(unturn(r, rotation), super::roughness_level(coat_roughness, top));
     [specular.map(|s| s * (1.0 - albedo)), seen.map(|c| c * albedo), diffuse.map(|d| d * (1.0 - albedo))]
 }

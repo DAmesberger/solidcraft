@@ -273,7 +273,9 @@ With the look, the PBR shader:
   the studio and shows a gradient instead of one colour. Where a reflection meets the floor
   under the subject it is darkened like the ground shadow's ellipse. The cube is a
   prefiltered Rgba16Float cube map, 128 × 128 texels a face at perceptual roughness 0 and
-  five more levels to roughness 1, sampled at level `roughness × 5`, times an analytic
+  five more levels: level 1 at roughness 0.1 (a lobe about one of its texels wide), then evenly
+  to 1. A roughness reads between the two levels around it (`pbr_env_level`), so a glossy coat
+  (0.12) is not 40 % the unfiltered mirror, as `roughness × 5` made it. Times an analytic
   environment-BRDF fit, with single-to-multiple-scattering compensation
   `1 + F0 (1 / (A + B) − 1)`;
 - lights the diffuse layer from the rig's lights directly (each rectangle's exact,

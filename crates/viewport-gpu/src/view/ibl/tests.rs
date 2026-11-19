@@ -168,6 +168,47 @@ fn the_sharpest_level_shows_the_studio() {
     assert!(env.prefiltered(turned, 0.0)[0] < 0.5 * env.prefiltered([ca * ce, sa * ce, se], 0.0)[0], "turned away from the key light");
 }
 
+/// A glossy lobe reads prefiltered levels only, never the unfiltered studio: level 0 is a GGX
+/// lobe of roughness 0.1, not a mirror, and a coat of roughness 0.12 reads between it and level 1.
+/// Read as `roughness × 5` with an unfiltered level 0, such a coat was 40 % mirror, whose sharp
+/// edges a slight orange peel dragged into ragged blotches. Swept across the studio, level 0 is
+/// smoother than the studio itself; the levels' roughnesses round-trip through the lookup.
+#[test]
+fn a_glossy_lobe_reads_no_unfiltered_studio() {
+    let top = f64::from(ENV_MIPS - 1);
+    for m in 1..ENV_MIPS as usize {
+        assert!((roughness_level(level_roughness(m), top) - m as f64).abs() < 1e-12, "level {m}");
+    }
+    assert_eq!(roughness_level(LEVEL_ZERO_ROUGHNESS, top), 0.0);
+    assert_eq!(roughness_level(0.05, top), 0.0, "a smoother lobe reads level 0 alone");
+    assert!((roughness_level(0.12, top) - 0.2).abs() < 1e-12, "a glossy coat: level 0, a fifth of the way to level 1");
+    let env = StudioEnvironment::bake(StudioPreset::product());
+    let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    // Sweeps around the studio at several elevations, a quarter degree a step: the largest step
+    // between neighbours relative to the brightest value, of the studio and of level 0.
+    let jump = |f: &dyn Fn([f64; 3]) -> f64| {
+        let (mut most, mut peak) = (0.0_f64, 0.0_f64);
+        for elevation in [0.05, 0.3, 0.55, 0.8, 1.2] {
+            let at = |k: i32| {
+                let a = (0.25 * f64::from(k)).to_radians();
+                f(unit([a.cos(), a.sin(), elevation]))
+            };
+            let mut last = at(0);
+            for k in 1..=1440 {
+                let next = at(k);
+                most = most.max((next - last).abs());
+                peak = peak.max(next);
+                last = next;
+            }
+        }
+        most / peak.max(1e-9)
+    };
+    let studio = jump(&|d| luminance(env.source(d)));
+    let level0 = jump(&|d| luminance(env.prefiltered(d, 0.0)));
+    eprintln!("largest step: the studio {studio:.4}, level 0 {level0:.4}");
+    assert!(level0 < 0.8 * studio, "level 0 is filtered: {level0} against the studio's {studio}");
+}
+
 /// Every cube texel's direction maps back to the same texel.
 #[test]
 fn cube_faces_round_trip() {

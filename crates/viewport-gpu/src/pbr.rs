@@ -14,8 +14,8 @@ pub const STUDIO_GROUP: u32 = 3;
 macro_rules! shade_source {
     () => {
         r#"
-// The product look's studio (`view::ibl`, group 3): the prefiltered radiance cube (level m at
-// perceptual roughness m / levels.x), its sampler, the cyclorama's irradiance polynomial over
+// The product look's studio (`view::ibl`, group 3): the prefiltered radiance cube (level m ≥ 1 at
+// perceptual roughness m / levels.x, level 0 at levels.z: `pbr_env_level`), its sampler, the cyclorama's irradiance polynomial over
 // (1, x, y, z, xy, yz, xz, z², x² − y²), the light count (levels.y), the room (half size, floor,
 // ceiling, in subject extents) and the rig's lights, four `vec4`s each: (centre, half width),
 // (width axis, half height), (height axis, 0), (radiance, 0). Read only while `look_on()`.
@@ -167,6 +167,22 @@ const PBR_STRETCH_SCALE: f32 = 1.28;
 // therefore that much wider than its minor axis, though still sharper than the isotropic one.
 const PBR_STRETCH_FLOOR: f32 = 0.36;
 
+// The prefiltered level to read for perceptual `roughness` (`ibl::roughness_level`): level m ≥ 1
+// holds m / levels.x, level 0 holds levels.z (a lobe about one of its texels wide), and a
+// smoother lobe reads level 0 alone.
+fn pbr_env_level(roughness: f32) -> f32 {
+    let r = clamp(roughness, 0.0, 1.0);
+    let top = studio.levels.x;
+    if (top < 1.0) {
+        return 0.0;
+    }
+    let one = 1.0 / top;
+    if (r >= one) {
+        return r * top;
+    }
+    return max(r - studio.levels.z, 0.0) / max(one - studio.levels.z, 0.0001);
+}
+
 // The prefiltered studio for an anisotropic GGX lobe of perceptual `roughness` and `anisotropy`
 // (OpenPBR's axes, `sc_aniso_alpha`), reflected along `lookup` (studio frame; a direction or a
 // room hit point, not necessarily unit) and stretched along the unit studio-frame `tangent`: five
@@ -178,12 +194,12 @@ fn pbr_stretched_studio(lookup: vec3<f32>, tangent: vec3<f32>, roughness: f32, a
     let d = sc_unit(lookup);
     let side = tangent - d * dot(tangent, d);
     if (dot(side, side) < 0.000001) {
-        return textureSampleLevel(studio_cube, studio_smp, d, roughness * studio.levels.x).rgb;
+        return textureSampleLevel(studio_cube, studio_smp, d, pbr_env_level(roughness)).rgb;
     }
     let across = sc_unit(side);
     let alpha = sc_aniso_alpha(roughness, anisotropy);
     let own = max(alpha.y, PBR_STRETCH_FLOOR * alpha.x);
-    let level = clamp(sqrt(own), 0.0, 1.0) * studio.levels.x;
+    let level = pbr_env_level(sqrt(own));
     let spread = PBR_STRETCH_SCALE * sqrt(max(alpha.x * alpha.x - own * own, 0.0));
     var sum = vec3<f32>(0.0);
     var total = 0.0;
@@ -291,7 +307,7 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, co
     if (stretch.w > 0.0) {
         prefiltered = pbr_stretched_studio(lookup, stretch.xyz, roughness, stretch.w) * contact;
     } else {
-        prefiltered = textureSampleLevel(studio_cube, studio_smp, lookup, roughness * studio.levels.x).rgb * contact;
+        prefiltered = textureSampleLevel(studio_cube, studio_smp, lookup, pbr_env_level(roughness)).rgb * contact;
     }
     // The diffuse layer takes what the specular lobe does not reflect, so a white lossless
     // surface reflects exactly what it receives.
@@ -303,7 +319,7 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, co
         let coat_ratio = (coat.z - 1.0) / (coat.z + 1.0);
         let cab = pbr_env_brdf(cv, coat.y);
         let albedo = coat.x * (coat_ratio * coat_ratio * cab.x + cab.y);
-        let seen = textureSampleLevel(studio_cube, studio_smp, coat_lookup, coat.y * studio.levels.x).rgb * coat_contact;
+        let seen = textureSampleLevel(studio_cube, studio_smp, coat_lookup, pbr_env_level(coat.y)).rgb * coat_contact;
         out = PbrIbl(out.specular * (1.0 - albedo), seen * albedo, out.diffuse * (1.0 - albedo));
     }
     if (coat.x > 0.0 && any(coat_color != vec3<f32>(1.0))) {
