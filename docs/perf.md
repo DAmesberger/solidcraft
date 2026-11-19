@@ -48,6 +48,85 @@ While bodies are being meshed, the estimate now runs on a thread of its own and 
 on a later frame; a design changed meanwhile gets no offer. The same frame now takes 136–168 ms,
 none of it in the offer.
 
+## Material graphs: shape compiles off the frame, and the driver's inlining cliff (2026-11-19)
+
+Round 2 of the material package (fork branch `mg-r2-B`), measured on an Apple M5 Max (Metal)
+under heavy load (1-minute load average 100–430), so every number is one day's record. GPU
+times are minima of wall time from `prepare` to the end of the GPU wait, over 60 frames and
+three rounds, of 8 full-screen 1920 × 1080 layers; "units" are the cost model's (§3.6 of the
+note), one unit being 0.5 × `fs_pbr` / 2000 (0.27 µs here).
+
+```sh
+cargo test --release -p solidcraft-viewport-gpu --lib material::perf_tests::<name> -- --ignored --nocapture --test-threads=1
+cargo test -p solidcraft-viewport-gpu --lib material::tests::a_new_shape_compiles_off_the_frame -- --nocapture
+```
+
+**First compile of a shape.** Where the device makes pipelines from any thread (Vulkan,
+Metal, D3D12 with FXC) a worker thread makes them; the frame draws the base response until
+the shape is ready. A shape no driver cache holds (a 71- or 76-node chain): the frame while it
+compiles 1.8–1.9 ms; the compile itself 611–831 ms on the worker; the same compile on the
+frame's thread made that frame 605–787 ms. Met (no frame waits for a compile). OpenGL, WebGL2
+and DXC keep the per-frame budget on the frame's thread, as before.
+
+**Constant graph.** Without the scalar underlay 1.21–1.37 ms against `fs_pbr` 1.06–1.34 ms
+(1.1–1.2×); with the underlay the viewport draws under every graph face 2.12–2.26 ms (about
+2×). A fragment entry without the object frame for shapes that read no object space was
+tried and measured no faster (best case 1.25 ms with the frame, 1.28 ms without), so it was
+not kept. The rest of the 2× is the underlay: in the Realistic view each graph face is shaded
+twice, once by the scalar pass and once by its graph. Not met; removing the underlay's shading
+for graph faces is the remaining lever.
+
+**The inlining cliff.** Once a shape calls a few patterns, Metal stops inlining them, and a
+library function that branches on an argument (a noise's kind, a slope flag, even a constant
+one) or is called from several sites then runs about ten times slower. That, not the price of
+3-D noise, is most of the "7.7× at the budget" of 2026-11-04. Fixed by the code's shape
+(note §5.1): one fBm loop per noise kind and dimensions, named in generated code; sloped
+patterns as their own functions; a sloped pattern's samples taken in a loop.
+
+| Graph (8 layers, no underlay) | Before | After |
+|---|---|---|
+| 8 one-octave 2D value noises | 21–25 ms | 2.2–2.4 ms |
+| 8 brushed patterns | 21–26 ms | 1.8–2.5 ms |
+| 8 plain weaves | 17–21 ms | 1.5–2.2 ms |
+| library orange-peel gloss (two sloped noises, triplanar) | 14.2 ms (12.9× `fs_pbr`) | 2.0 ms (1.84×) |
+| library printed ink | 13.9 ms (12.6×) | 1.9 ms (1.79×) |
+| library coated woven laminate | 15.3 ms (13.9×) | 2.1 ms (1.95×) |
+
+The cliff is not gone for every shape: eight copies of a flat 3-D value or gradient noise, or
+of a flat 2D gradient noise, or a value noise on its own triplanar texcoord, still run
+1.2–2.4 ms a copy against 0.03–0.5 ms at two copies; the budget graph (ten 8-octave 3-D
+gradient noises, 1,924 units) is 6.8–7.0 ms (about 6×, was 7.7×). The octave loop holding a
+3-D noise is the likely remaining shape.
+
+**The cost model against real graphs** (`library_graph_costs`; time over the constant graph
+in units, against the units the model gives):
+
+| Graph | × `fs_pbr` | Measured units | Model units |
+|---|---|---|---|
+| library black epoxy, clear coat (2-octave 3-D cellular) | 2.07 | 3,864 | 242 |
+| library coated woven laminate | 1.95 | 3,402 | 572 |
+| library orange-peel gloss | 1.84 | 2,943 | 378 |
+| library printed ink | 1.79 | 2,744 | 384 |
+| library laser-etched nickel silver | 1.68 | 2,305 | 208 |
+| library tinted coat over copper | 1.48 | 1,531 | 136 |
+| library woven laminate | 1.46 | 1,450 | 585 |
+| library brushed nickel silver | 1.40 | 1,176 | 39 |
+| library printed sleeve | 1.26 | 618 | 31 |
+| showcase carbon twill | 1.46 | 1,425 | 216 |
+| showcase brushed aluminium | 1.39 | 1,144 | 39 |
+| showcase red ABS (constant, coat 0) | 1.29 | 736 | 0 |
+
+The model under-prices every real graph by 3–30×. Linear per-copy costs at two copies, where
+no cliff interferes (`node_costs`): one octave of 2D value noise about 70 units, 3-D value
+150, 2D gradient 200, 3-D gradient 500, 2D cellular 400, 3-D cellular 1,300–1,500, plus about
+100 fixed; brushed about 100, weave about 120, `hsv_adjust` about 40; arithmetic, checker,
+grid, gradient and projections within the noise of the measurement (0). Priced so, five of
+the nine library graphs and the showcase's black epoxy cost 2,700–3,900 units, over the
+2,000-unit budget, and they really are 1.8–2.1× `fs_pbr`, over the 1.5× target. The prices are
+therefore not changed yet: either the budget rises (about 4,000 units for 2×) or those graphs
+get cheaper, which is a decision on the note's limits. The clear silicone (a see-through graph,
+drawn blended in every layer) is not comparable here.
+
 ## Material graphs and the Realistic view against their targets (2026-11-04)
 
 The targets of [the material graph note](material-graph.md) §5.4, measured on the package tip
