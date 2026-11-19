@@ -490,14 +490,18 @@ impl Gen<'_> {
                     }
                 }
                 "pattern.noise" => {
-                    let noise_kind = Self::param(&instr, 0).clamp(0, 2);
+                    let noise_kind = match Self::param(&instr, 0) {
+                        1 => "gradient",
+                        2 => "cellular",
+                        _ => "value",
+                    };
                     let octaves = Self::param(&instr, 2).clamp(1, 8);
-                    let slope = self.slope_flag(index, &instr);
+                    let sloped = self.sloped_name(index, &instr);
                     let [scale, lacunarity, gain, seed] = self.args_at(&instr, 2, [Kind::F, Kind::F, Kind::F, Kind::Seed])?;
                     let texcoord = Self::operand(&instr, 0);
                     if texcoord != Operand::Absent {
                         self.pattern(n, &texcoord, |t| {
-                            format!("sc_pattern_noise({t}, {noise_kind}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope})")
+                            format!("sc_pattern_noise_{noise_kind}{sloped}({t}, {octaves}u, {scale}, {lacunarity}, {gain}, {seed})")
                         })?;
                     } else {
                         let position = Self::operand(&instr, 1);
@@ -510,7 +514,7 @@ impl Gen<'_> {
                             "c.fp_world"
                         };
                         self.line(&format!(
-                            "let s{n} = sc_pattern_noise3({p}, {fp}, {noise_kind}u, {octaves}u, {scale}, {lacunarity}, {gain}, {seed}, {slope});"
+                            "let s{n} = sc_pattern_noise3_{noise_kind}{sloped}({p}, {fp}, {octaves}u, {scale}, {lacunarity}, {gain}, {seed});"
                         ));
                         if object && instr.slope {
                             // An object-space gradient is a covector: into world space by the transpose.
@@ -526,19 +530,19 @@ impl Gen<'_> {
                     }
                 }
                 "pattern.brushed" => {
-                    let slope = self.slope_flag(index, &instr);
+                    let sloped = self.sloped_name(index, &instr);
                     let [density, streak, contrast, jitter, seed] = self.args_at(&instr, 1, [Kind::F, Kind::F, Kind::F, Kind::F, Kind::Seed])?;
                     let texcoord = Self::operand(&instr, 0);
-                    self.pattern(n, &texcoord, |t| format!("sc_pattern_brushed({t}, {density}, {streak}, {contrast}, {jitter}, {seed}, {slope})"))?;
+                    self.pattern(n, &texcoord, |t| format!("sc_pattern_brushed{sloped}({t}, {density}, {streak}, {contrast}, {jitter}, {seed})"))?;
                     self.pattern_value(n, instr.slope, &mut grad);
                     kind = Kind::F;
                 }
                 "pattern.weave" => {
-                    let slope = self.slope_flag(index, &instr);
+                    let sloped = self.sloped_name(index, &instr);
                     let twill = if Self::param(&instr, 0) == 1 { "true" } else { "false" };
                     let [pitch, crown, fibres, contrast] = self.args_at(&instr, 1, [Kind::V2, Kind::F, Kind::F, Kind::F])?;
                     let texcoord = Self::operand(&instr, 0);
-                    self.pattern(n, &texcoord, |t| format!("sc_pattern_weave({t}, {pitch}, {crown}, {fibres}, {contrast}, {twill}, {slope})"))?;
+                    self.pattern(n, &texcoord, |t| format!("sc_pattern_weave{sloped}({t}, {pitch}, {crown}, {fibres}, {contrast}, {twill})"))?;
                     self.pattern_value(n, instr.slope, &mut grad);
                     kind = Kind::F;
                 }
@@ -694,6 +698,13 @@ impl Gen<'_> {
     }
 
     /// Whether a pattern call computes its slope: it carries one, or its `slope` output is read.
+    /// The suffix of a costly pattern's function: `_sloped` where its slope is needed. Those
+    /// patterns have no `slope` flag: a branch on it, even on a constant, slows the whole shader
+    /// several times over once the driver stops inlining the pattern (docs/perf.md).
+    fn sloped_name(&self, index: usize, instr: &Instr) -> &'static str {
+        if self.slope_flag(index, instr) == "true" { "_sloped" } else { "" }
+    }
+
     fn slope_flag(&self, index: usize, instr: &Instr) -> &'static str {
         if instr.slope || self.slope_read.get(index).copied().unwrap_or(false) { "true" } else { "false" }
     }

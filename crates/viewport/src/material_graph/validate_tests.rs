@@ -584,3 +584,27 @@ fn a_full_size_graph_validates_and_lowers() {
     // A record, not an assertion: the target (§5.4) is ≤ 1 ms optimised.
     eprintln!("128-node graph: validate + lower in {elapsed:?}");
 }
+
+#[path = "../../../../assets/appearances/graphs/library.rs"]
+mod library;
+
+/// The built-in library and the Realistic showcase's graphs fit the cost budget under the
+/// calibrated cost model (§3.6).
+#[test]
+fn the_built_in_library_and_the_showcase_fit_the_budget() {
+    let mut graphs: Vec<(String, MaterialGraph)> =
+        library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap())).collect();
+    let showcase: Value = serde_json::from_str(include_str!("../../../../examples/realistic-showcase.json")).unwrap();
+    for c in showcase["commands"].as_array().into_iter().flatten().filter(|c| c["command"] == "appearance.graph.create") {
+        graphs.push((format!("showcase {}", c["params"]["id"].as_str().unwrap_or("?")), from_json(c["params"]["graph"].clone())));
+    }
+    assert!(graphs.len() > library::GRAPHS.len(), "the showcase creates graphs");
+    let mut over = Vec::new();
+    for (name, graph) in &graphs {
+        match validate(graph).and_then(|v| lower(&v)) {
+            Ok(ir) => eprintln!("{name}: {} units", ir.cost),
+            Err(e) => over.push(format!("{name}: {e}")),
+        }
+    }
+    assert!(over.is_empty(), "over the budget: {over:#?}");
+}

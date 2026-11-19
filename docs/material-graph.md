@@ -736,6 +736,13 @@ fn material_eval(c: MatCtx) -> Surface {
   arithmetic and `select`. Prelude functions (the shared modules of §5.7) are tested once, against analytic values,
 golden GPU frames and the test-only reference;
   generated code adds only composition.
+- Shape params that change what a library function computes (a noise's kind and
+  dimensions, whether a pattern's slope is needed) pick the function by name
+  (`sc_pattern_noise_gradient_sloped`), never a branch on an argument, and a sloped pattern
+  takes its samples in a loop, so each sampling function has one call site. Once a shape
+  calls a few patterns the driver stops inlining them, and a branch on an argument (even a
+  constant one) or many call sites then make the shader up to ten times slower (measured on
+  Metal, `docs/perf.md`).
 - Identifiers are generated (`t0`, `v1`, …). No user string ever reaches WGSL. Constants
   are uniforms, not literals; only shape params (octaves, enum kinds) appear as code. The
   generated module is validated by naga before pipeline creation. A failure is an error

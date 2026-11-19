@@ -39,43 +39,138 @@ fn sc_pattern_blend(a: sc_Pattern, b: sc_Pattern, c: sc_Pattern, w: vec3<f32>) -
         w.x * a.grad + w.y * b.grad + w.z * c.grad);
 }
 
-// `pattern.noise` in 2D at `uv`: `sc_fbm` at (uv / scale_mm, 0), its deviation from 0.5 scaled by `k`.
-fn sc_noise2_at(uv: vec2<f32>, k: f32, kind: u32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
-    return 0.5 + k * (sc_fbm(kind, 2u, vec3<f32>(uv / scale_mm, 0.0), seed, octaves, lacunarity, gain) - 0.5);
+// The `i`-th sample point's offset of a sloped pattern: none, then `h.x` along u, then `h.y`
+// along v. Sloped patterns take their three samples in a loop, so each sampling function has one
+// call site: three calls each, in a shape that calls a few patterns, make the driver stop
+// inlining them, and the shader then runs up to ten times slower (Apple M5 Max, Metal;
+// docs/perf.md).
+fn sc_slope_step(i: u32, h: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(select(0.0, h.x, i == 1u), select(0.0, h.y, i == 2u));
 }
 
-// `pattern.noise` over a texcoord, faded by `sc_fade(footprint, scale_mm)`; with `slope`, its slope.
-fn sc_pattern_noise(t: sc_Texcoord, kind: u32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32, slope: bool) -> sc_Pattern {
+// `pattern.noise`, one set of functions per noise kind (`_value`, `_gradient`, `_cellular`) and per
+// slope (`_sloped`): generated code names the one it needs, so no function branches on a kind or
+// a slope flag. A branch on such a parameter, even a constant one, makes the shader several
+// times slower once a shape calls the pattern a few times and the driver stops inlining it
+// (Apple M5 Max, Metal; docs/perf.md).
+//
+// In 2D at `uv`: the kind's `sc_fbm` at (uv / scale_mm, 0), its deviation from 0.5 scaled by
+// `k`, faded by `sc_fade(footprint, scale_mm)`. In 3D at a position `q` (mm) with footprint `fp`
+// (mm): at q / scale_mm, faded by `sc_fade(fp, scale_mm)`; `grad` is along the position's own
+// axes (per mm), and its slope output is zero.
+
+fn sc_noise2_value_at(uv: vec2<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_value2(vec3<f32>(uv / scale_mm, 0.0), seed, octaves, lacunarity, gain) - 0.5);
+}
+
+fn sc_pattern_noise_value(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
     let k = sc_fade(sc_tc_footprint(t), scale_mm);
-    let m = sc_noise2_at(t.uv, k, kind, octaves, scale_mm, lacunarity, gain, seed);
-    if (!slope) {
-        return sc_pattern_flat(m);
-    }
+    return sc_pattern_flat(sc_noise2_value_at(t.uv, k, octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise_value_sloped(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), scale_mm);
     let h = 0.05 * scale_mm;
-    let a = sc_noise2_at(t.uv + vec2<f32>(h, 0.0), k, kind, octaves, scale_mm, lacunarity, gain, seed);
-    let b = sc_noise2_at(t.uv + vec2<f32>(0.0, h), k, kind, octaves, scale_mm, lacunarity, gain, seed);
-    return sc_pattern_of(t, m, a, b, vec2<f32>(h));
+    var v = array<f32, 3>(0.0, 0.0, 0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        v[i] = sc_noise2_value_at(t.uv + sc_slope_step(i, vec2<f32>(h)), k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_pattern_of(t, v[0], v[1], v[2], vec2<f32>(h));
 }
 
-fn sc_noise3_at(q: vec3<f32>, k: f32, kind: u32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
-    return 0.5 + k * (sc_fbm(kind, 3u, q / scale_mm, seed, octaves, lacunarity, gain) - 0.5);
+fn sc_noise3_value_at(q: vec3<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_value3(q / scale_mm, seed, octaves, lacunarity, gain) - 0.5);
 }
 
-// `pattern.noise` in 3D at a position `q` (mm) with footprint `fp` (mm): `sc_fbm` at q / scale_mm,
-// faded by `sc_fade(fp, scale_mm)`. `grad` is along the position's own axes (per mm); its slope
-// output is zero.
-fn sc_pattern_noise3(q: vec3<f32>, fp: f32, kind: u32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32, slope: bool) -> sc_Pattern {
+fn sc_pattern_noise3_value(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    return sc_pattern_flat(sc_noise3_value_at(q, sc_fade(fp, scale_mm), octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise3_value_sloped(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
     let k = sc_fade(fp, scale_mm);
-    let m = sc_noise3_at(q, k, kind, octaves, scale_mm, lacunarity, gain, seed);
-    if (!slope) {
-        return sc_pattern_flat(m);
-    }
     let h = 0.05 * scale_mm;
-    let g = vec3<f32>(
-        sc_noise3_at(q + vec3<f32>(h, 0.0, 0.0), k, kind, octaves, scale_mm, lacunarity, gain, seed),
-        sc_noise3_at(q + vec3<f32>(0.0, h, 0.0), k, kind, octaves, scale_mm, lacunarity, gain, seed),
-        sc_noise3_at(q + vec3<f32>(0.0, 0.0, h), k, kind, octaves, scale_mm, lacunarity, gain, seed)) - vec3<f32>(m);
-    return sc_Pattern(m, vec2<f32>(0.0), g / h);
+    var v = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0u; i < 4u; i += 1u) {
+        let d = vec3<f32>(select(0.0, h, i == 1u), select(0.0, h, i == 2u), select(0.0, h, i == 3u));
+        v[i] = sc_noise3_value_at(q + d, k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_Pattern(v[0], vec2<f32>(0.0), (vec3<f32>(v[1], v[2], v[3]) - vec3<f32>(v[0])) / h);
+}
+
+fn sc_noise2_gradient_at(uv: vec2<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_gradient2(vec3<f32>(uv / scale_mm, 0.0), seed, octaves, lacunarity, gain) - 0.5);
+}
+
+fn sc_pattern_noise_gradient(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), scale_mm);
+    return sc_pattern_flat(sc_noise2_gradient_at(t.uv, k, octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise_gradient_sloped(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), scale_mm);
+    let h = 0.05 * scale_mm;
+    var v = array<f32, 3>(0.0, 0.0, 0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        v[i] = sc_noise2_gradient_at(t.uv + sc_slope_step(i, vec2<f32>(h)), k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_pattern_of(t, v[0], v[1], v[2], vec2<f32>(h));
+}
+
+fn sc_noise3_gradient_at(q: vec3<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_gradient3(q / scale_mm, seed, octaves, lacunarity, gain) - 0.5);
+}
+
+fn sc_pattern_noise3_gradient(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    return sc_pattern_flat(sc_noise3_gradient_at(q, sc_fade(fp, scale_mm), octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise3_gradient_sloped(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(fp, scale_mm);
+    let h = 0.05 * scale_mm;
+    var v = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0u; i < 4u; i += 1u) {
+        let d = vec3<f32>(select(0.0, h, i == 1u), select(0.0, h, i == 2u), select(0.0, h, i == 3u));
+        v[i] = sc_noise3_gradient_at(q + d, k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_Pattern(v[0], vec2<f32>(0.0), (vec3<f32>(v[1], v[2], v[3]) - vec3<f32>(v[0])) / h);
+}
+
+fn sc_noise2_cellular_at(uv: vec2<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_cellular2(vec3<f32>(uv / scale_mm, 0.0), seed, octaves, lacunarity, gain) - 0.5);
+}
+
+fn sc_pattern_noise_cellular(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), scale_mm);
+    return sc_pattern_flat(sc_noise2_cellular_at(t.uv, k, octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise_cellular_sloped(t: sc_Texcoord, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), scale_mm);
+    let h = 0.05 * scale_mm;
+    var v = array<f32, 3>(0.0, 0.0, 0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        v[i] = sc_noise2_cellular_at(t.uv + sc_slope_step(i, vec2<f32>(h)), k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_pattern_of(t, v[0], v[1], v[2], vec2<f32>(h));
+}
+
+fn sc_noise3_cellular_at(q: vec3<f32>, k: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> f32 {
+    return 0.5 + k * (sc_fbm_cellular3(q / scale_mm, seed, octaves, lacunarity, gain) - 0.5);
+}
+
+fn sc_pattern_noise3_cellular(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    return sc_pattern_flat(sc_noise3_cellular_at(q, sc_fade(fp, scale_mm), octaves, scale_mm, lacunarity, gain, seed));
+}
+
+fn sc_pattern_noise3_cellular_sloped(q: vec3<f32>, fp: f32, octaves: u32, scale_mm: f32, lacunarity: f32, gain: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(fp, scale_mm);
+    let h = 0.05 * scale_mm;
+    var v = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var i = 0u; i < 4u; i += 1u) {
+        let d = vec3<f32>(select(0.0, h, i == 1u), select(0.0, h, i == 2u), select(0.0, h, i == 3u));
+        v[i] = sc_noise3_cellular_at(q + d, k, octaves, scale_mm, lacunarity, gain, seed);
+    }
+    return sc_Pattern(v[0], vec2<f32>(0.0), (vec3<f32>(v[1], v[2], v[3]) - vec3<f32>(v[0])) / h);
 }
 
 // `pattern.brushed` at `uv`: p = (u / streak_mm, v · density_per_mm),
@@ -89,16 +184,20 @@ fn sc_brushed_at(uv: vec2<f32>, k: f32, density: f32, streak: f32, contrast: f32
 }
 
 // `pattern.brushed`: faded by `sc_fade(footprint, 1 / density_per_mm)`.
-fn sc_pattern_brushed(t: sc_Texcoord, density: f32, streak: f32, contrast: f32, jitter: f32, seed: u32, slope: bool) -> sc_Pattern {
+fn sc_pattern_brushed(t: sc_Texcoord, density: f32, streak: f32, contrast: f32, jitter: f32, seed: u32) -> sc_Pattern {
     let k = sc_fade(sc_tc_footprint(t), 1.0 / density);
-    let m = sc_brushed_at(t.uv, k, density, streak, contrast, jitter, seed);
-    if (!slope) {
-        return sc_pattern_flat(m);
-    }
+    return sc_pattern_flat(sc_brushed_at(t.uv, k, density, streak, contrast, jitter, seed));
+}
+
+// `sc_pattern_brushed` with its slope (see `pattern.noise`).
+fn sc_pattern_brushed_sloped(t: sc_Texcoord, density: f32, streak: f32, contrast: f32, jitter: f32, seed: u32) -> sc_Pattern {
+    let k = sc_fade(sc_tc_footprint(t), 1.0 / density);
     let h = 0.05 * vec2<f32>(streak, 1.0 / density);
-    let a = sc_brushed_at(t.uv + vec2<f32>(h.x, 0.0), k, density, streak, contrast, jitter, seed);
-    let b = sc_brushed_at(t.uv + vec2<f32>(0.0, h.y), k, density, streak, contrast, jitter, seed);
-    return sc_pattern_of(t, m, a, b, h);
+    var v = array<f32, 3>(0.0, 0.0, 0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        v[i] = sc_brushed_at(t.uv + sc_slope_step(i, h), k, density, streak, contrast, jitter, seed);
+    }
+    return sc_pattern_of(t, v[0], v[1], v[2], h);
 }
 
 // A yarn's crown at `t` across it, flattened by `crown`: mix(1, sqrt(max(1 − 4t², 0)), crown).
@@ -132,19 +231,26 @@ fn sc_weave_at(uv: vec2<f32>, k: f32, pitch: vec2<f32>, twill: bool, crown: f32,
 
 // `pattern.weave`: faded by `sc_fade_sharp(footprint, min(pitch))`, its fibres by
 // `sc_fade_sharp(footprint, min(pitch) / max(fibres, 1))`.
-fn sc_pattern_weave(t: sc_Texcoord, pitch: vec2<f32>, crown: f32, fibres: f32, fibre_contrast: f32, twill: bool, slope: bool) -> sc_Pattern {
+fn sc_pattern_weave(t: sc_Texcoord, pitch: vec2<f32>, crown: f32, fibres: f32, fibre_contrast: f32, twill: bool) -> sc_Pattern {
     let fp = sc_tc_footprint(t);
     let period = min(pitch.x, pitch.y);
     let k = sc_fade_sharp(fp, period);
     let fc = fibre_contrast * sc_fade_sharp(fp, period / max(fibres, 1.0));
-    let m = sc_weave_at(t.uv, k, pitch, twill, crown, fibres, fc);
-    if (!slope) {
-        return sc_pattern_flat(m);
-    }
+    return sc_pattern_flat(sc_weave_at(t.uv, k, pitch, twill, crown, fibres, fc));
+}
+
+// `sc_pattern_weave` with its slope (see `pattern.noise`).
+fn sc_pattern_weave_sloped(t: sc_Texcoord, pitch: vec2<f32>, crown: f32, fibres: f32, fibre_contrast: f32, twill: bool) -> sc_Pattern {
+    let fp = sc_tc_footprint(t);
+    let period = min(pitch.x, pitch.y);
+    let k = sc_fade_sharp(fp, period);
+    let fc = fibre_contrast * sc_fade_sharp(fp, period / max(fibres, 1.0));
     let h = 0.05 * pitch;
-    let a = sc_weave_at(t.uv + vec2<f32>(h.x, 0.0), k, pitch, twill, crown, fibres, fc);
-    let b = sc_weave_at(t.uv + vec2<f32>(0.0, h.y), k, pitch, twill, crown, fibres, fc);
-    return sc_pattern_of(t, m, a, b, h);
+    var v = array<f32, 3>(0.0, 0.0, 0.0);
+    for (var i = 0u; i < 3u; i += 1u) {
+        v[i] = sc_weave_at(t.uv + sc_slope_step(i, h), k, pitch, twill, crown, fibres, fc);
+    }
+    return sc_pattern_of(t, v[0], v[1], v[2], h);
 }
 
 // One axis of the checker: the square wave (+1 on even cells, −1 on odd ones) box-filtered over
