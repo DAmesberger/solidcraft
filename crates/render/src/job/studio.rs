@@ -1,16 +1,14 @@
 //! A studio's rig as a path job's lighting (docs/material-graph.md §5.8): the same lights and
 //! cyclorama the Realistic view bakes (`solidcraft_viewport::studio::StudioRig`), not a second
 //! description. The rig's lights become the job's area lights, placed in multiples of the
-//! subject's extent B about the studio's centre, uniform at their mean radiance; the cyclorama,
-//! which the view bakes into its cube around those lights, becomes the job's environment without
-//! them, so no light is counted twice. Both are at the rig's calibrated scale, so with PBR
+//! subject's extent B about the studio's centre, at their mean radiance and graded as the view
+//! grades them; the cyclorama, which the view bakes into its cube around those lights, becomes
+//! the job's environment without them, so no light is counted twice. Both are at the rig's calibrated scale, so with PBR
 //! Neutral at exposure 0 a path-traced frame and the Realistic view agree in exposure.
 //!
-//! Two approximations, both reported here rather than hidden: the cyclorama is an environment at
+//! One approximation, reported here rather than hidden: the cyclorama is an environment at
 //! infinity (the view box-projects it against a room sized to the scene, so reflections of the
-//! room's walls sit slightly differently near its edges), and a graded light is uniform at its
-//! mean (a large, strongly graded light, such as an overhead scrim, then sends a little less
-//! toward the centre than the view's).
+//! room's walls sit slightly differently near its edges).
 
 use std::sync::Arc;
 
@@ -47,7 +45,8 @@ pub fn lighting(rig: &StudioRig, min: [f64; 3], max: [f64; 3], rotation_rad: f64
     let placed = rig
         .placed_lights(min, max, rotation_rad, calibration)
         .ok_or_else(|| JobError::new(ErrorCode::InvalidScene, "a studio needs a finite, non-empty subject"))?;
-    let lights: Vec<AreaLight> = placed.iter().map(|l| AreaLight { center: l.centre, u: l.u, v: l.v, radiance: l.radiance }).collect();
+    let lights: Vec<AreaLight> =
+        placed.iter().map(|l| AreaLight { center: l.centre, u: l.u, v: l.v, radiance: l.radiance, grade: l.grade }).collect();
     let lighting = StudioLighting { area_lights: AreaLights::new(&lights)?, ..Default::default() };
     lighting.validate()?;
     let [width, height] = CYCLORAMA_SIZE;

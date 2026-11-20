@@ -97,7 +97,8 @@ fn request(camera: Camera, size: u32) -> ImageRequest {
 }
 
 /// The radiance a point at the studio's centre sees along unit `d` in the path tracer's studio:
-/// the baked cyclorama plus the area light the direction meets (uniform, at its mean).
+/// the baked cyclorama plus the area light the direction meets, graded as the path tracer grades
+/// it ([`AreaLight::profile`]).
 fn path_radiance(env: &PreparedEnvironment, lights: &[AreaLight], centre: [f64; 3], d: Vec3) -> [f64; 3] {
     let (rgb, _) = env.evaluate(d).unwrap();
     let mut c = rgb.map(f64::from);
@@ -114,9 +115,11 @@ fn path_radiance(env: &PreparedEnvironment, lights: &[AreaLight], centre: [f64; 
             continue;
         }
         let hit = d * t - o;
-        if (hit.dot(u) / u.dot(u)).abs() <= 1.0 && (hit.dot(v) / v.dot(v)).abs() <= 1.0 {
+        let (x, y) = (hit.dot(u) / u.dot(u), hit.dot(v) / v.dot(v));
+        if x.abs() <= 1.0 && y.abs() <= 1.0 {
+            let profile = l.profile(x, y);
             for (a, b) in c.iter_mut().zip(l.radiance) {
-                *a += b;
+                *a += b * profile;
             }
         }
     }
@@ -130,9 +133,9 @@ fn luminance(c: [f64; 3]) -> f64 {
 /// The backdrop's mean radiance, what a rig's lights and cyclorama send toward the studio's
 /// centre averaged over the sphere, matches the real-time studio's (what the view's cube bakes):
 /// the cyclorama alone within 0.5 % for every rig, and with the lights within 2 % for rigs of
-/// ungraded or small lights. A large, strongly graded light is uniform at its mean in the path
-/// tracer (`job::studio`), which sends less toward the centre than the view's graded one: within
-/// 7 % for Contrast's overhead scrim.
+/// ungraded or small lights and within 7 % for a large, strongly graded light such as Contrast's
+/// overhead scrim. The path tracer grades a studio's lights as the view does
+/// (`a_graded_light_shines_as_the_view_grades_it`).
 #[test]
 fn the_backdrops_mean_radiance_matches_the_real_time_studios() {
     let (min, max) = ([-50.0, -50.0, 0.0], [50.0, 50.0, 100.0]);
@@ -232,4 +235,117 @@ fn a_white_card_under_the_key_renders_at_the_views_calibration() {
     let got = luminance([0, 1, 2].map(|k| f64::from(centre[k])));
     eprintln!("white under the key: {got:.4} (view {})", rig.white_under_key);
     assert!((got / rig.white_under_key - 1.0).abs() < 0.03, "{got} against {}", rig.white_under_key);
+}
+
+/// A flat quad of `half` size about `centre` in the plane z = `centre.z`, facing +Z.
+fn floor_mesh(centre: [f64; 3], half: f64) -> Mesh {
+    let mut mesh = Mesh::default();
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        mesh.positions.push(Vec3::new(centre[0] + x * half, centre[1] + y * half, centre[2]));
+        mesh.normals.push(Vec3::new(0.0, 0.0, 1.0));
+    }
+    mesh.triangles.extend([[0, 1, 2], [0, 2, 3]]);
+    mesh.tri_face.extend([0, 0]);
+    mesh
+}
+
+/// A graded light shines in the path tracer as the Realistic view grades it
+/// (`solidcraft_viewport::studio::graded_profile`), with its mean radiance kept:
+///
+/// - seen directly, each pixel of a graded rectangle over the same rectangle uniform is the
+///   profile where the pixel's ray meets it (within 0.04, a pixel's footprint across the graded
+///   edge), and summed over the frame the two agree within 2 % (the mean is kept);
+/// - a white Lambertian floor under the graded rectangle's middle reflects its irradiance (a
+///   direct integral of the profile), within 4 % of sampling noise, not the uniform rectangle's,
+///   which is more than 20 % lower there.
+#[test]
+fn a_graded_light_shines_as_the_view_grades_it() {
+    let Some(executor) = executor() else { return };
+    let grade = 0.55;
+    let uniform = AreaLight { center: [0.0, 0.0, 50.0], u: [40.0, 0.0, 0.0], v: [0.0, -40.0, 0.0], radiance: [2.0; 3], grade: 0.0 };
+    let graded = AreaLight { grade, ..uniform };
+    let render = |scene: ProductScene, camera: Camera, size: u32, light: AreaLight, samples: u32| {
+        let lighting =
+            solidcraft_render::job::StudioLighting { area_lights: solidcraft_render::job::AreaLights::new(&[light]).unwrap(), ..Default::default() };
+        let options = JobOptions { samples, max_depth: 2, seed: 11, lighting: Some(lighting), ..Default::default() };
+        // No background: a pixel is only what the light and the floor send.
+        let image = ImageRequest { transparent_background: true, ..request(camera, size) };
+        let mut task = Task::new(executor.context.clone(), scene, image, options, CancelToken::default()).unwrap();
+        for _ in 0..samples {
+            task.complete_sample().unwrap();
+        }
+        task.read_linear().unwrap().iter().map(|p| f64::from(p[1])).collect::<Vec<_>>()
+    };
+
+    // Seen directly from below: the light emits toward -Z; a speck far off frame sets the bounds.
+    let speck = || {
+        let meshes = vec![body("speck", sphere_mesh([400.0, 400.0, -400.0], 1.0, 6), white())];
+        let bounds = meshes.iter().fold(Aabb3::EMPTY, |a, m| a.union(&m.mesh.bounds()));
+        ProductScene { meshes, bounds }
+    };
+    let size = 33;
+    let camera =
+        Camera { target: Vec3::new(0.0, 0.0, 50.0), distance: 200.0, fov: 0.5, ..Default::default() }.looking_from(Vec3::new(0.0, 0.0, -1.0));
+    let (flat, shaded) = (render(speck(), camera, size, uniform, 64), render(speck(), camera, size, graded, 64));
+    let (mut checked, mut sum_flat, mut sum_shaded) = (0, 0.0, 0.0);
+    for row in 0..size {
+        for column in 0..size {
+            let k = (row * size + column) as usize;
+            sum_flat += flat[k];
+            sum_shaded += shaded[k];
+            // Pixels whose whole footprint lies on the light: its centre's ray, and the four corners'.
+            let local = |x: f64, y: f64| {
+                let (o, d) = camera.ray(x, y, f64::from(size), f64::from(size));
+                let t = (50.0 - o.z) / d.z;
+                let p = o + d * t;
+                (p.x / 40.0, -p.y / 40.0)
+            };
+            let (x, y) = (f64::from(column), f64::from(row));
+            let inside = [(x, y), (x + 1.0, y), (x, y + 1.0), (x + 1.0, y + 1.0)].iter().all(|&(a, b)| {
+                let (s, t) = local(a, b);
+                s.abs() < 1.0 && t.abs() < 1.0
+            });
+            if !inside || flat[k] <= 0.0 {
+                continue;
+            }
+            let (s, t) = local(x + 0.5, y + 0.5);
+            let want = graded.profile(s, t);
+            let got = shaded[k] / flat[k];
+            assert!((got - want).abs() < 0.04, "pixel ({column}, {row}) at ({s:.3}, {t:.3}): graded/uniform {got:.4}, profile {want:.4}");
+            checked += 1;
+        }
+    }
+    eprintln!("graded light seen directly: {checked} pixels checked, mean ratio {:.4}", sum_shaded / sum_flat);
+    assert!(checked > 300, "only {checked} pixels lie wholly on the light");
+    assert!((sum_shaded / sum_flat - 1.0).abs() < 0.02, "mean {} against the uniform light's {}", sum_shaded, sum_flat);
+
+    // A white floor under the graded light's middle, seen from the side below the light.
+    let p = [0.0, 0.0, 0.0];
+    let irradiance = |light: AreaLight| {
+        let n = 400;
+        let mut e = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                let (s, t) = (-1.0 + 2.0 * (f64::from(i) + 0.5) / f64::from(n), -1.0 + 2.0 * (f64::from(j) + 0.5) / f64::from(n));
+                let q = [light.center[0] + light.u[0] * s, light.center[1] + light.v[1] * t, light.center[2]];
+                let d = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+                let d2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                let cosine = d[2] / d2.sqrt();
+                e += light.radiance[1] * light.profile(s, t) * cosine * cosine / d2;
+            }
+        }
+        e * (4.0 * 40.0 * 40.0) / f64::from(n * n)
+    };
+    let (want, flat_want) = (irradiance(graded) / PI, irradiance(uniform) / PI);
+    let floor = || {
+        let meshes = vec![body("floor", floor_mesh([0.0, 0.0, 0.0], 200.0), white())];
+        let bounds = meshes.iter().fold(Aabb3::EMPTY, |a, m| a.union(&m.mesh.bounds()));
+        ProductScene { meshes, bounds }
+    };
+    let camera =
+        Camera { target: Vec3::new(p[0], p[1], p[2]), distance: 300.0, fov: 0.01, ..Default::default() }.looking_from(Vec3::new(1.0, 0.0, 0.3));
+    let got = render(floor(), camera, 5, graded, 1024)[12];
+    eprintln!("floor under the graded light: {got:.4} (graded {want:.4}, uniform {flat_want:.4})");
+    assert!((want / flat_want - 1.0).abs() > 0.2, "the grading must matter here: {want} against {flat_want}");
+    assert!((got / want - 1.0).abs() < 0.04, "{got} against the graded light's {want}");
 }

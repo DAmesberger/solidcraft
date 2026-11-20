@@ -9,6 +9,9 @@ pub const MAX_AREA_LIGHTS: usize = 4;
 
 /// A one-sided rectangle: `center + u*s + v*t`, with s,t in [-1,1].
 /// Its emitting normal is `u cross v`; u and v are orthogonal half-edges.
+/// `radiance` is its mean; `grade` (0 to 1) grades it toward the edges as a Realistic studio's
+/// light ([`solidcraft_viewport::studio::graded_profile`]), 0 for a uniform rectangle. Only a
+/// studio's lights (`job::studio`) are graded: the grade is not part of a saved setup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AreaLight {
@@ -16,6 +19,8 @@ pub struct AreaLight {
     pub u: [f64; 3],
     pub v: [f64; 3],
     pub radiance: [f64; 3],
+    #[serde(skip)]
+    pub grade: f64,
 }
 
 fn vector(a: [f64; 3]) -> Vec3 {
@@ -35,10 +40,11 @@ impl AreaLight {
             || !(1e-4..=1e6).contains(&vl)
             || u.dot(v).abs() > 1e-6 * ul * vl
             || self.radiance.into_iter().any(|x| !x.is_finite() || !(0.0..=1e6).contains(&x))
+            || !(0.0..=1.0).contains(&self.grade)
         {
             return Err(JobError::new(
                 ErrorCode::InvalidRequest,
-                "area light requires finite center, orthogonal half-edges of 0.0001..1000000 mm and radiance 0..1000000",
+                "area light requires finite center, orthogonal half-edges of 0.0001..1000000 mm, radiance 0..1000000 and grade 0..1",
             ));
         }
         Ok(())
@@ -46,6 +52,12 @@ impl AreaLight {
 
     pub fn area(self) -> f64 {
         4.0 * vector(self.u).cross(vector(self.v)).len()
+    }
+
+    /// The radiance's relative profile at local coordinates `s`, `t` in [-1, 1]: 1 everywhere
+    /// for a uniform rectangle, its mean 1 over the rectangle when graded.
+    pub fn profile(self, s: f64, t: f64) -> f64 {
+        solidcraft_viewport::studio::graded_profile(self.grade, s, t)
     }
 }
 
@@ -297,7 +309,7 @@ mod tests {
     use super::*;
 
     fn light() -> AreaLight {
-        AreaLight { center: [0.0, 0.0, 4.0], u: [2.0, 0.0, 0.0], v: [0.0, -3.0, 0.0], radiance: [5.0; 3] }
+        AreaLight { center: [0.0, 0.0, 4.0], u: [2.0, 0.0, 0.0], v: [0.0, -3.0, 0.0], radiance: [5.0; 3], grade: 0.0 }
     }
 
     #[test]
@@ -312,6 +324,9 @@ mod tests {
             AreaLight { v: [1.0, 1.0, 0.0], ..light() },
             AreaLight { radiance: [-1.0; 3], ..light() },
             AreaLight { center: [f64::NAN; 3], ..light() },
+            AreaLight { grade: -0.1, ..light() },
+            AreaLight { grade: 1.5, ..light() },
+            AreaLight { grade: f64::NAN, ..light() },
         ] {
             assert!(bad.validate().is_err());
         }

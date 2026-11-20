@@ -381,8 +381,13 @@ mod tests {
                 outer_half_angle_radians: 0.5,
             });
             assert!(point.validate().is_err());
-            let area =
-                solidcraft_render::job::AreaLight { center: [coordinate, 0.0, 0.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0], radiance: [1.0; 3] };
+            let area = solidcraft_render::job::AreaLight {
+                center: [coordinate, 0.0, 0.0],
+                u: [1.0, 0.0, 0.0],
+                v: [0.0, 1.0, 0.0],
+                radiance: [1.0; 3],
+                grade: 0.0,
+            };
             assert!(area.validate().is_err());
             let frame = solidcraft_render::job::textures::PlanarFrame { origin: [coordinate, 0.0, 0.0], u: [1.0, 0.0, 0.0], v: [0.0, 1.0, 0.0] };
             assert!(frame.validate().is_err());

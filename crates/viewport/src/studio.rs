@@ -202,11 +202,7 @@ impl StudioLight {
     /// The relative radiance profile at local coordinates `x`, `y` in [−1, 1]: 1 in the middle,
     /// falling smoothly to 0 at the edges over `grade`, scaled so that its mean is 1.
     pub fn profile(&self, x: f64, y: f64) -> f64 {
-        let g = self.grade.clamp(0.0, 1.0);
-        let edge = |t: f64| 1.0 - smoothstep(1.0 - g, 1.0, t.abs());
-        // The mean of `edge` over [−1, 1] is 1 − g/2 (smoothstep's mean is a half).
-        let mean = (1.0 - 0.5 * g) * (1.0 - 0.5 * g);
-        edge(x) * edge(y) / mean
+        graded_profile(self.grade, x, y)
     }
 
     /// The radiance seen from the studio's centre along unit `d`, and how far along `d` it is
@@ -230,6 +226,21 @@ impl StudioLight {
         let p = self.profile(x, y);
         Some((t, self.radiance.map(|c| c * p)))
     }
+}
+
+/// The relative radiance profile of a rectangular light graded over `grade` (0 uniform, 1 graded
+/// from the middle) at local coordinates `x`, `y` in [−1, 1]: 1 in the middle, falling smoothly
+/// to 0 at the edges over `grade` of the half size, scaled so that its mean over the rectangle is
+/// 1. Every renderer that draws a studio's graded lights uses this one definition.
+pub fn graded_profile(grade: f64, x: f64, y: f64) -> f64 {
+    let g = if grade.is_finite() { grade.clamp(0.0, 1.0) } else { 0.0 };
+    if g <= 0.0 {
+        return 1.0;
+    }
+    let edge = |t: f64| 1.0 - smoothstep(1.0 - g, 1.0, t.abs());
+    // The mean of `edge` over [−1, 1] is 1 − g/2 (smoothstep's mean is a half).
+    let mean = (1.0 - 0.5 * g) * (1.0 - 0.5 * g);
+    edge(x) * edge(y) / mean
 }
 
 /// The finite room reflections are projected against, in subject extents B about the studio's
@@ -401,14 +412,15 @@ pub struct StudioRig {
 }
 
 /// One of a rig's lights placed in the world ([`StudioRig::placed_lights`]): a rectangle about
-/// `centre` spanned by the half axes `u` and `v` (world units; it emits toward `u × v`), of
-/// uniform linear Rec. 709 `radiance`.
+/// `centre` spanned by the half axes `u` and `v` (world units; it emits toward `u × v`), of mean
+/// linear Rec. 709 `radiance`, graded toward its edges over `grade` ([`graded_profile`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlacedStudioLight {
     pub centre: Rgb,
     pub u: Rgb,
     pub v: Rgb,
     pub radiance: Rgb,
+    pub grade: f64,
 }
 
 impl StudioRig {
@@ -512,7 +524,7 @@ impl StudioRig {
 
     /// The rig's lights for a renderer that lights a scene by the studio itself (a path tracer),
     /// around a subject of bounds `min`..`max` (world units), turned by `rotation` radians about
-    /// +Z: each a uniform rectangle at its mean radiance, scaled by `calibration`
+    /// +Z: each a rectangle at its mean radiance, graded as the view grades it, scaled by `calibration`
     /// ([`StudioRig::calibration`]), the key first. They stand where the view's do: in multiples of
     /// the subject's extent B about the studio's centre, half an extent above the ground over the
     /// subject's centre. `None` for bounds that are not finite or have no extent.
@@ -537,6 +549,7 @@ impl StudioRig {
                         u: turn(l.width_axis).map(|c| c * l.half_width * extent),
                         v: turn(l.height_axis).map(|c| c * l.half_height * extent),
                         radiance: l.radiance.map(|c| c * calibration),
+                        grade: l.grade,
                     }
                 })
                 .collect(),

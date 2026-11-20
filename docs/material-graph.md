@@ -1097,11 +1097,13 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
   environment. The engine turns it into the job's lighting with the same definitions
   (`solidcraft_render::job::studio`): the rig's lights become area lights, placed in multiples of B
   about the studio's centre at their mean radiance, and the cyclorama without them becomes the
-  job's environment, both at the rig's calibrated scale. With `tone_map: pbr_neutral` (Khronos PBR
-  Neutral, the view's curve) at exposure 0, metals reflect the room rather than black. Two
-  approximations: the cyclorama is at infinity, where the view box-projects it, and a graded light
-  is uniform at its mean, so Contrast's large graded scrim sends about 6 % less toward the centre
-  than the view's. A design keeps the records of the user studios its setups name
+  job's environment, both at the rig's calibrated scale. Each area light keeps its light's grade
+  (`AreaLight::grade`, not saved in a setup): the path tracer's emission, direct-light samples and
+  photons weight it by the view's profile (`studio::graded_profile`), so a graded light shines as
+  the view grades it and keeps its mean. The CPU raytracer refuses a graded rectangle instead of
+  drawing it uniform. With `tone_map: pbr_neutral` (Khronos PBR Neutral, the view's curve) at
+  exposure 0, metals reflect the room rather than black. One approximation: the cyclorama is at
+  infinity, where the view box-projects it. A design keeps the records of the user studios its setups name
   (`render.studios`), so it renders the same on another machine; built-in studios are named only.
   The pending format change `path-realistic-studio` covers both.
 

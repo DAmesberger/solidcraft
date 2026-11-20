@@ -271,7 +271,9 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
     } else if area {
         let light=u.area_lights[min(area_index,3u)];
         origin=light.center.xyz;
-        origin_low=(2.0*random(&rng)-1.0)*light.u.xyz+(2.0*random(&rng)-1.0)*light.v.xyz;
+        let area_s=2.0*random(&rng)-1.0;
+        let area_t=2.0*random(&rng)-1.0;
+        origin_low=area_s*light.u.xyz+area_t*light.v.xyz;
         let normal=unit(cross(light.u.xyz,light.v.xyz));
         let radius_squared=random(&rng);let phi=2.0*PI*random(&rng);
         let radius=sqrt(radius_squared);
@@ -287,7 +289,7 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
             if cosine<=0.0 {return;}
             angular_weight=cosine/photon_mixture_pdf(cone,direction,cosine/PI,sampled_cone);
         }
-        flux=light.radiance.xyz*(angular_weight*light.center.w*inverse_source_probability/f32(count));
+        flux=light.radiance.xyz*(area_profile(light,vec2<f32>(area_s,area_t))*angular_weight*light.center.w*inverse_source_probability/f32(count));
     } else {
         let sample=env_sample(&rng);
         if !(sample.pdf>0.0) || !any(sample.radiance>vec3<f32>(0.0)) {return;}

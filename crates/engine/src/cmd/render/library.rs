@@ -812,6 +812,7 @@ fn rig_projection(input: &RigInput, command: &str) -> Result<(StudioLighting, Ri
                     u: x.map(|v| v * width),
                     v: y.map(|v| v * height),
                     radiance,
+                    grade: 0.0,
                 });
             }
             Some("uniform_distant_disk") => {
@@ -919,6 +920,9 @@ pub(super) fn cpu_studio_lighting(options: &mut CpuJob, lighting: &StudioLightin
     let mut areas = Vec::new();
     areas.try_reserve_exact(lighting.area_lights.iter().count()).map_err(|_| bad(command, "could not reserve CPU studio lights"))?;
     for (index, light) in lighting.area_lights.iter().enumerate() {
+        if light.grade != 0.0 {
+            return Err(bad(command, format!("authored rectangle {index} is graded; the CPU raytracer draws only uniform rectangles")));
+        }
         let [r, g, b] = light.radiance;
         if r.to_bits() != g.to_bits() || r.to_bits() != b.to_bits() {
             return Err(bad(
