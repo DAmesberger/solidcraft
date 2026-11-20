@@ -834,22 +834,34 @@ fn the_bound_rigs_are_upstreams() {
     }
 }
 
-/// The moody studio (`Contrast`) reads a flat metal face from above as light, by its soft overhead scrim:
-/// straight up it is light yet below 0.9 scene-referred (a metal's F0 keeps the reflection off
-/// the tone curve's top), and toward the default three-quarter view's mirror direction (about
-/// 35° high) the scrim's graded edge falls off, so top faces mirror a gradient, not a flat wall.
+/// The moody studio (`Contrast`) reads a flat metal face as light from above and from a
+/// three-quarter view, by its broad overhead scrim, while its walls stay dark. A flat face on the
+/// ground seen from about 30–45° mirrors the room's upper wall, which from the studio's centre
+/// lies about 20–45° high (the reflection is box-projected against the room), so there, away
+/// from the front fill, the studio reads at least 0.7 scene-referred: enough for flat gold to
+/// read gold, not khaki. Nothing up there reaches 0.9 (a metal's F0 keeps the reflection off the
+/// tone curve's top), and the horizon, where the strips stand, stays under 0.45.
 #[test]
 fn the_moody_studio_lights_tops_softly_from_above() {
     let luminance = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
     let env = StudioEnvironment::bake(StudioPreset::contrast());
-    let at = |elevation: f64| {
-        let e = elevation.to_radians();
-        luminance(env.source([e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.cos() * std::f64::consts::FRAC_1_SQRT_2, e.sin()]))
+    let at = |azimuth: f64, elevation: f64| {
+        let (a, e) = (azimuth.to_radians(), elevation.to_radians());
+        luminance(env.source([e.cos() * a.cos(), e.cos() * a.sin(), e.sin()]))
     };
     let up = luminance(env.source([0.0, 0.0, 1.0]));
     assert!((0.5..0.9).contains(&up), "straight up {up}");
-    let (low, high) = (at(29.0), at(41.0));
-    assert!(high > 1.3 * low && high < up, "three-quarter mirror directions: 29° {low}, 41° {high}, up {up}");
+    // Right, back-right, back and back-left: the mirror directions of views from the front half.
+    for azimuth in [0.0, 45.0, 90.0, 135.0] {
+        for elevation in [25.0, 29.0, 35.0, 41.0, 45.0] {
+            let l = at(azimuth, elevation);
+            assert!((0.7..0.9).contains(&l), "azimuth {azimuth}°, elevation {elevation}°: {l}");
+        }
+        for elevation in [0.0, 5.0, 10.0] {
+            let l = at(azimuth, elevation);
+            assert!(l < 0.45, "the wall stays dark: azimuth {azimuth}°, elevation {elevation}°: {l}");
+        }
+    }
 }
 
 /// A light's graded profile keeps its calibrated mean: the radiance falls off toward the edges and

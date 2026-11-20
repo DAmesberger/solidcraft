@@ -255,9 +255,9 @@ With the look, the PBR shader:
   card front-right at EV −2, a strip rim behind at EV −0.5; the Realistic default), `Soft`
   binds `STU-004` (two broad side panels) and `Contrast` binds `STU-005` (two tall strips
   and a low front fill). A studio may add its own lights after the exported ones:
-  `Contrast` adds a soft overhead scrim, so flat metal seen from above reads light while
-  the room stays dark (docs/material-graph.md, studio-added lights). The rig's rectangular lights sit in multiples of the subject's
-  extent B about it, inside a room 4 B across with its floor at the ground
+  `Contrast` adds a broad overhead scrim, so flat metal seen from above or from a
+  three-quarter view reads light (flat gold reads gold) while the walls stay dark (docs/material-graph.md, studio-added lights). The rig's rectangular lights sit in multiples of the subject's
+  extent B about it, inside a room (4 B across for Product and Soft, 8 B for Contrast) with its floor at the ground
   (`ProductLook::room`; without a room the studio is at infinity). Around them runs a
   cyclorama: a floor with a pool of light under the subject sweeping up into the walls, a
   bright horizon band and a soft ceiling, lit like a white cyclorama (its radiances are

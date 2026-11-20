@@ -1066,12 +1066,20 @@ view is redesigned, generically and procedurally, with no bundled image (decisio
 - **Studio-added lights; `Contrast`'s soft top light.** A studio may add its own lights after
   the exported rig's (`rig_lights`). `STU-005`'s strips sit about 10° high, so a flat metal
   face seen from above or from a three-quarter view mirrored only the dim ceiling or wall and
-  read dull (gold read olive). `Contrast` therefore adds a soft overhead scrim nearly the room's
-  width (3.9 B square, 1.3 B above the centre), graded over 70 % of its half size.
-  - A neutral polished metal seen from straight above reads light (about 0.63 scene-referred,
-    against 0.24 without the scrim) without reaching the tone curve's shoulder.
-  - The graded edge falls off between about 60° and 34° of elevation, so a top face seen from a
-    three-quarter view mirrors a gradient instead of the flat wall. The walls below stay dark.
+  read dull (gold read olive). `Contrast` therefore adds a broad overhead scrim (7.8 B wide,
+  5.4 B deep, 1 B above the centre and shifted 1.2 B toward the back, graded over 55 % of its half
+  size) in a larger room (8 B across, its ceiling 4 B above the centre).
+  - A flat face on the ground seen from a three-quarter view (30–45°) mirrors the room's upper
+    wall, which, box-projected, lies only about 20–30° high from the centre. A white mirror there
+    read about 0.27 scene-referred under the first, smaller scrim (1.3 B high, 3.9 B square), so
+    flat ENIG gold read khaki. The scrim now covers the whole upper room from about 20° up, away
+    from the front: a white mirror at a flat pad reads about 0.7, flat gold reads gold
+    (sRGB about 216, 186, 119), and straight up reads about 0.75, below the tone curve's shoulder.
+  - Its front edge stops short of the front fill, so the two do not add up, and the room above
+    the fill stays dark. The walls below about 15°, where the strips stand, stay dark.
+  - The scrim lowers the calibration by about 13 %, so the strips are a little dimmer; flat metal
+    tops read lighter (the brushed lid about 212, the Sample Plate about 172 in the model view),
+    within the bar.
   - Metals keep their measured F0: the look comes from the light, not from brighter materials.
 
 - **Studios are data, in one studio library.** Every studio is a record

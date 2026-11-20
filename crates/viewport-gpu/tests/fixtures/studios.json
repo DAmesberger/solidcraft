@@ -631,7 +631,7 @@
   {
    "id": "NATIVE-STUDIO-028",
    "name": "Contrast",
-   "description": "Mirror-metal vertical strips (STU-005): two tall strips and a low front fill in a darker cyclorama room, with a soft overhead scrim so flat metal seen from above reads light. Crisp highlights on metal; dark materials darker on faces turned from the light.",
+   "description": "Mirror-metal vertical strips (STU-005): two tall strips and a low front fill in a darker cyclorama room, with a broad overhead scrim so flat metal seen from above or from a three-quarter view reads light (flat gold reads gold). Crisp highlights on metal; dark materials darker on faces turned from the light.",
    "source": "STU-005",
    "realistic": {
     "lights": [
@@ -717,8 +717,8 @@
       "id": "top_scrim",
       "centre": [
        0.0,
-       0.0,
-       1.3
+       1.2,
+       1.0
       ],
       "width_axis": [
        1.0,
@@ -730,14 +730,14 @@
        -1.0,
        0.0
       ],
-      "half_width": 1.95,
-      "half_height": 1.95,
+      "half_width": 3.9,
+      "half_height": 2.7,
       "radiance": [
-       14.0,
-       14.0,
-       14.0
+       29.0,
+       29.0,
+       29.0
       ],
-      "grade": 0.7
+      "grade": 0.55
      }
     ],
     "rig_lights": 3,
@@ -765,9 +765,9 @@
      "spill": 0.2
     },
     "room": {
-     "half": 2.0,
+     "half": 4.0,
      "floor": -0.5,
-     "ceiling": 2.5
+     "ceiling": 4.0
     },
     "white_under_key": 0.6438,
     "acceptance": {
