@@ -219,7 +219,7 @@ fn standard_parity_frames() {
     let depth = crate::depth_format(&device, true);
     let mut written = 0usize;
     for format in FORMATS {
-        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false }, None);
         let mut number = 1000u64;
         for (si, (base, metallic, roughness, ior)) in SURFACES.into_iter().enumerate() {
             let Ok(surface) = solidcraft_viewport::surface::OpaqueSurface::new(Vec3::new(base[0], base[1], base[2]), metallic, roughness, ior) else {
@@ -255,7 +255,8 @@ fn standard_parity_frames() {
                     ao_radius: ao,
                     eye,
                     sky,
-                    clip,
+                    // The variant's plane is the section's first.
+                    clip: std::array::from_fn(|k| if k == 0 { clip } else { [0.0; 4] }),
                     cap: [0.8, 0.2, 0.2, 1.0],
                     outline,
                     analysis,

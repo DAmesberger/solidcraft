@@ -7,8 +7,14 @@ use solidcraft_engine::Session;
 use crate::{Services, SolveApp};
 
 fn with_gpu(app: &mut SolveApp) {
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
 }
 
 fn bodies(app: &SolveApp) -> Vec<String> {

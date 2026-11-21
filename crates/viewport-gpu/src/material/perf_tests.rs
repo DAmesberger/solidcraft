@@ -276,8 +276,14 @@ const SIZE: [u32; 2] = [1920, 1080];
 const LAYERS: usize = 8;
 
 fn renderer(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
-    let target =
-        GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(device, true)), samples: 1, tess: false, oit: false };
+    let target = GpuTarget {
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        depth: Some(crate::depth_format(device, true)),
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    };
     let mut r = Renderer::new(device, target, None);
     r.set_studio_environment(device, queue, &studio(StudioPreset::product()));
     r.materials_mut().no_time_budget = true;
@@ -918,8 +924,23 @@ fn print_copies_source() {
     println!("{}", &src[start..]);
 }
 
-#[path = "../../../../assets/appearances/graphs/library.rs"]
-mod library;
+/// The built-in library's graphs, read from the repository's `assets/appearances/graphs` (outside
+/// this crate, so not compiled in): every JSON file there that is a material graph.
+fn library_graphs() -> Vec<(String, MaterialGraph)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/appearances/graphs");
+    let mut out: Vec<(String, MaterialGraph)> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|x| x == "json"))
+        .filter_map(|path| {
+            let graph = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+            Some((path.file_stem()?.to_string_lossy().into_owned(), graph))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
 
 /// The real graphs (the built-in library and the showcase's) against the cost model: each one's
 /// GPU time over a constant graph on [`LAYERS`] full-screen 1080p layers, without the scalar
@@ -935,8 +956,7 @@ fn library_graph_costs() {
     let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
         .unwrap_or_else(|e| panic!("{e}"));
     let constant = lowered(&copper_graph);
-    let mut graphs: Vec<(String, MaterialGraph)> =
-        library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}")))).collect();
+    let mut graphs: Vec<(String, MaterialGraph)> = library_graphs().into_iter().map(|(id, g)| (format!("library {id}"), g)).collect();
     graphs.extend(showcase_graphs().into_iter().map(|(n, g)| (format!("showcase {n}"), g)));
     let none = BTreeMap::new();
     let mut key = 9000;

@@ -43,8 +43,8 @@ fn viewport_frame_costs() {
     app.run("doc.open", json!({"path": design})).unwrap_or_else(|e| panic!("{e}"));
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let depth = solidcraft_viewport_gpu::depth_format(&device, true);
-    app.viewport.gpu = Some(crate::gpu::GpuTarget { format, depth: None, samples: 1, tess: false, oit: false });
-    let target = crate::gpu::GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false };
+    app.viewport.gpu = Some(crate::gpu::GpuTarget { format, depth: None, samples: 1, tess: false, oit: false, edges: false });
+    let target = crate::gpu::GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false };
     let texture = |format, usage| {
         device
             .create_texture(&wgpu::TextureDescriptor {
@@ -110,7 +110,8 @@ fn viewport_frame_costs() {
                         turned_depth: Some(proj.vp.turned_depth_f32()),
                         back: proj.cam.back().to_f32(),
                         size_px: [SIZE[0] as f32, SIZE[1] as f32],
-                        clip: [0.0; 4],
+                        clip: [[0.0; 4]; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
+                        clip_hatch: [0; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
                         cap: [0.0; 4],
                         images: Vec::new(),
                         clouds: Vec::new(),

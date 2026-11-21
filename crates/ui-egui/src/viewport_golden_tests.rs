@@ -159,7 +159,7 @@ struct Target {
 fn draw(t: &Target, format: wgpu::TextureFormat, studio: Option<StudioPreset>, clear: wgpu::Color, frame: impl Fn() -> Frame) -> Option<Vec<u8>> {
     let (device, queue, [w, h]) = (&t.device, &t.queue, t.size);
     let depth = solidcraft_viewport_gpu::depth_format(device, true);
-    let mut renderer = Renderer::new(device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+    let mut renderer = Renderer::new(device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false }, None);
     if let Some(preset) = studio {
         renderer.set_studio_environment(device, queue, &StudioEnvironment::bake(preset));
     }
@@ -296,7 +296,8 @@ fn frame(
         turned_depth: None,
         back,
         size_px: [size[0] as f32, size[1] as f32],
-        clip: [0.0; 4],
+        clip: [[0.0; 4]; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
+        clip_hatch: [0; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
         cap: [0.0; 4],
         images: Vec::new(),
         clouds: Vec::new(),
@@ -446,7 +447,8 @@ fn golden_frames() {
     let target = Target { device, queue, size };
     let mut app = SolveApp::new(Session::default(), Services::default());
     app.run("doc.open", json!({"path": design})).unwrap_or_else(|e| panic!("{e}"));
-    app.viewport.gpu = Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu =
+        Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false, edges: false });
     let views: Vec<String> = match env("GOLDEN_VIEWS") {
         Some(v) => v.split(',').map(str::to_string).collect(),
         None => app.session.doc.named_views.iter().map(|v| v.name.clone()).collect(),
@@ -565,7 +567,8 @@ fn the_realistic_model_view_draws_the_ground_shadow() {
     app.set_origin_shown(false);
     app.ui.show_grid = false;
     app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap_or_else(|e| panic!("{e}"));
-    app.viewport.gpu = Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu =
+        Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false, edges: false });
     app.ui.view_look = crate::view_look::REALISTIC;
     app.fit_view();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
@@ -594,7 +597,7 @@ fn the_realistic_model_view_draws_the_ground_shadow() {
     };
     let (with, without) = (shot(true), shot(false));
     let (mut darker, mut lighter) = (0usize, 0usize);
-    for (a, b) in with.chunks_exact(4).zip(without.chunks_exact(4)) {
+    for (a, b) in with.as_chunks::<4>().0.iter().zip(without.as_chunks::<4>().0) {
         let d = luma(a) - luma(b);
         if d < -3.0 {
             darker += 1;

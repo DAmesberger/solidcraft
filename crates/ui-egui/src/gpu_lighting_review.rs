@@ -211,7 +211,7 @@ struct Shot {
 /// Draw `shot` offscreen through the viewport's frame callback: straight RGBA, `SIZE` × `SIZE`.
 fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64, shot: Shot) -> Option<Vec<u8>> {
     let depth = solidcraft_viewport_gpu::depth_format(device, true);
-    let target = GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false };
+    let target = GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false };
     let mut resources = egui_wgpu::CallbackResources::default();
     let mut renderer = Renderer::new(device, target, None);
     if let Some(env) = &shot.studio {
@@ -242,7 +242,8 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
         turned_depth: None,
         back: camera.back().to_f32(),
         size_px: [SIZE as f32; 2],
-        clip: [0.0; 4],
+        clip: [[0.0; 4]; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
+        clip_hatch: [0; solidcraft_viewport_gpu::view::MAX_SECTION_PLANES],
         cap: [0.0; 4],
         images: Vec::new(),
         clouds: Vec::new(),

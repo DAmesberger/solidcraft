@@ -11,7 +11,11 @@ const SIZE: usize = 64;
 
 fn renderer(device: &wgpu::Device) -> Renderer {
     let depth = crate::depth_format(device, true);
-    Renderer::new(device, GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false }, None)
+    Renderer::new(
+        device,
+        GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false },
+        None,
+    )
 }
 
 /// Two triangles covering `x0..x1` × `y0..y1` at height `z`, all with normal `n`.
@@ -79,7 +83,7 @@ fn realistic_lights_scalar_faces_and_keeps_every_overlay() {
         let mut r = renderer(&device);
         let mut frame = modelling_frame(ssaa);
         let standard = render_frame(&mut r, &device, &queue, &frame, true);
-        assert_eq!(r.ss_scaled, ssaa > 1.0, "drawn as asked: ×{ssaa}");
+        assert_eq!(r.pic.ss_scaled, ssaa > 1.0, "drawn as asked: ×{ssaa}");
         frame.product_look = Some(ProductLook::product());
         let waiting = render_frame(&mut r, &device, &queue, &frame, true);
         assert!(waiting == standard, "×{ssaa}: without its studio, the standard picture");
@@ -167,7 +171,8 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
-    for entry in ["fs_solid", "fs_solid_cut", "fs_solid_open", "fs_solid_flat", "fs_solid_cut_flat", "fs_solid_open_flat"] {
+    // The cut entries (`fs_solid_cut`, `fs_solid_cut_flat`) only write the cap's depth: they shade nothing.
+    for entry in ["fs_solid", "fs_solid_open", "fs_solid_flat", "fs_solid_open_flat"] {
         let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
@@ -211,6 +216,7 @@ fn an_instanced_highlight_draws_after_material_surfaces() {
     tris.indices = vec![0, 1, 2, 0, 2, 3];
     let mut selected = InstancedMesh {
         graph: None,
+        edges: None,
         key: 1,
         tris: Arc::new(tris),
         instances: Vec::new(),

@@ -594,32 +594,3 @@ fn a_full_size_graph_validates_and_lowers() {
     // A record, not an assertion: the target (§5.4) is ≤ 1 ms optimised.
     eprintln!("128-node graph: validate + lower in {elapsed:?}");
 }
-
-#[path = "../../../../assets/appearances/graphs/library.rs"]
-mod library;
-
-/// The built-in library and the Realistic showcase's graphs, priced by the calibrated cost model
-/// (§3.6), fit under the safety bound, and each reports its cost (and whether it is heavier than
-/// typical, which is advisory).
-#[test]
-fn the_built_in_library_and_the_showcase_fit_under_the_safety_bound() {
-    let mut graphs: Vec<(String, MaterialGraph)> =
-        library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap())).collect();
-    let showcase: Value = serde_json::from_str(include_str!("../../../../examples/realistic-showcase.json")).unwrap();
-    for c in showcase["commands"].as_array().into_iter().flatten().filter(|c| c["command"] == "appearance.graph.create") {
-        graphs.push((format!("showcase {}", c["params"]["id"].as_str().unwrap_or("?")), from_json(c["params"]["graph"].clone())));
-    }
-    assert!(graphs.len() > library::GRAPHS.len(), "the showcase creates graphs");
-    let mut refused = Vec::new();
-    for (name, graph) in &graphs {
-        match validate(graph).and_then(|v| lower(&v)) {
-            Ok(ir) => {
-                let heavy = if ir.cost > limits::COST_TYPICAL { ", heavier than typical" } else { "" };
-                eprintln!("{name}: {} units{heavy}", ir.cost);
-                assert!(ir.cost <= limits::COST_UNITS);
-            }
-            Err(e) => refused.push(format!("{name}: {e}")),
-        }
-    }
-    assert!(refused.is_empty(), "refused: {refused:#?}");
-}

@@ -77,7 +77,7 @@ fn realistic_parity_frames() {
     let mut written = 0usize;
     let mut fallbacks = Vec::new();
     for format in FORMATS {
-        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+        let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false }, None);
         r.materials_mut().no_time_budget = true;
         let mut installed = None;
         let mut install = |r: &mut Renderer, preset: StudioPreset| {

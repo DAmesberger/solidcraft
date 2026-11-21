@@ -30,11 +30,11 @@ use crate::{Feature, FeatureKind, ModelBody, ModelState};
 pub struct NamingOrigin {
     pub feature: Feature,
     pub before: Arc<ModelState>,
+    /// One more than the deepest chain of any body before the feature: the depth of a body whose
+    /// names may be read from any of them (see [`NameCell::depth`]).
     pub depth: usize,
     /// Instance transforms of a pattern or mirror (its copies are named after their sources).
     pub mats: Vec<crate::Mat>,
-    /// The sheet metal bodies after a sheet feature (their folds place moved faces).
-    pub sheets: Vec<crate::sheet::SheetBody>,
 }
 
 /// The lazily computed names of a body, shared by its clones.
@@ -49,18 +49,18 @@ pub struct NameCell {
     names: Arc<OnceLock<Arc<Names>>>,
     /// The body this one is a moved copy of (its names are that body's).
     copy_of: Option<Arc<ModelBody>>,
-    /// How deep the chain of features that named it is, for names taken from a saved model
-    /// (which has no origin): see [`NameCell::depth`].
-    saved_depth: Option<usize>,
+    /// How deep the chain of features that named it is: see [`NameCell::depth`].
+    depth: Option<usize>,
 }
 
 impl NameCell {
     pub fn new(origin: Option<Arc<NamingOrigin>>) -> Self {
-        Self::traced(origin, None)
+        Self::traced(origin, None, "")
     }
-    /// Names of a body made by `origin`'s feature, following `lineage` where it is known.
-    pub(crate) fn traced(origin: Option<Arc<NamingOrigin>>, lineage: Option<Arc<Lineage>>) -> Self {
-        NameCell { origin, cached_construction: None, lineage, names: Arc::new(OnceLock::new()), copy_of: None, saved_depth: None }
+    /// Names of the body `name` made by `origin`'s feature, following `lineage` where it is known.
+    pub(crate) fn traced(origin: Option<Arc<NamingOrigin>>, lineage: Option<Arc<Lineage>>, name: &str) -> Self {
+        let depth = origin.as_deref().map(|o| chain_depth(o, lineage.as_deref(), name));
+        NameCell { origin, cached_construction: None, lineage, names: Arc::new(OnceLock::new()), copy_of: None, depth }
     }
     /// Names already known, taken as they are.
     pub fn known(names: Arc<Vec<String>>) -> Self {
@@ -71,7 +71,7 @@ impl NameCell {
     /// Worked out on first request, from the source: moving a body (a transfer into a
     /// component, a placed instance) does not name every face of every moved body up front.
     pub fn same(body: &ModelBody) -> Self {
-        let mut cell = Self::traced(None, None);
+        let mut cell = Self::traced(None, None, "");
         cell.copy_of = Some(Arc::new(body.clone()));
         cell
     }
@@ -79,12 +79,15 @@ impl NameCell {
     /// features that named them.
     pub(crate) fn saved(names: Arc<Names>, depth: Option<usize>) -> Self {
         let mut cell = Self::shared(names);
-        cell.saved_depth = depth;
+        cell.depth = depth;
         cell
     }
-    /// How deep the chain of features that named the body is (`None`: not made by a feature).
+    /// How deep the chain of features that named the body is (`None`: not made by a feature):
+    /// deeper than every body its names may be read from, so working them out recurses at most
+    /// this many times. Measured along the bodies the names come from, not along the timeline, so
+    /// a design of many independent parts names each as deep as its own history ([`chain_depth`]).
     pub(crate) fn depth(&self) -> Option<usize> {
-        self.origin.as_ref().map(|o| o.depth).or(self.saved_depth)
+        self.depth
     }
     /// Identity of the names: clones of a cell share them.
     pub(crate) fn id(&self) -> usize {
@@ -93,15 +96,16 @@ impl NameCell {
     /// The same origin, lineage and depth with nothing worked out yet: for a body given a new
     /// name, whose faces' names may be made from it.
     pub(crate) fn renamed(&self) -> Self {
-        let mut cell = Self::traced(self.origin.clone(), self.lineage.clone());
+        let mut cell = Self::traced(None, self.lineage.clone(), "");
+        cell.origin = self.origin.clone();
         cell.copy_of = self.copy_of.clone();
-        cell.saved_depth = self.saved_depth;
+        cell.depth = self.depth;
         cell
     }
     fn shared(names: Arc<Names>) -> Self {
         let cell = OnceLock::new();
         let _ = cell.set(names);
-        NameCell { origin: None, cached_construction: None, lineage: None, names: Arc::new(cell), copy_of: None, saved_depth: None }
+        NameCell { origin: None, cached_construction: None, lineage: None, names: Arc::new(cell), copy_of: None, depth: None }
     }
 }
 
@@ -162,12 +166,35 @@ pub use crate::piece_names::parent_piece;
 /// Deeper chains than this are named by position only (bounded work and stack).
 const MAX_DEPTH: usize = 400;
 
+/// The depth of the body `name` made by `o`'s feature ([`NameCell::depth`]): one more than the
+/// deepest body its names may be read from. Where the feature reports exact history, those are
+/// the history's operands and the body's own earlier version: names are derived from them, and a
+/// fallback to geometry reads only bodies less deep ([`geometric_names`]). Otherwise (no history,
+/// a pattern or mirror, a body that passed through an intermediate stage) any body before the
+/// feature may be read, and the body is deeper than all of them.
+fn chain_depth(o: &NamingOrigin, lineage: Option<&Lineage>, name: &str) -> usize {
+    use crate::lineage::Operand;
+    let Some(lineage) = lineage.filter(|_| o.mats.is_empty()) else { return o.depth };
+    let mut deepest = o.before.body(name).and_then(|b| b.names.depth()).unwrap_or(0);
+    for operand in &lineage.operands {
+        let read = match operand.as_ref() {
+            Operand::Body(n) | Operand::Copy { body: n, .. } | Operand::Inner(n) | Operand::Grown { body: Some(n), .. } => n,
+            Operand::Made(_) | Operand::CopiedTool { .. } | Operand::Grown { body: None, .. } => continue,
+            Operand::Stage(_) => return o.depth,
+        };
+        deepest = deepest.max(o.before.body(read).and_then(|b| b.names.depth()).unwrap_or(0));
+    }
+    deepest.saturating_add(1).min(o.depth)
+}
+
+/// Whether the names of `x` may be read in working out those of `b`: `x` is less deep (a body
+/// not made by a feature, or one without a depth, is read as before).
+fn readable(b: &ModelBody, x: &ModelBody) -> bool {
+    b.names.depth().is_none_or(|own| x.names.depth().unwrap_or(0) < own)
+}
+
 /// Up to this many sample points per face.
 const SAMPLES: usize = 9;
-
-/// Up to this many sample points per face where a sheet's panel kept in place names the face it is
-/// part of (see [`geometric_names`]).
-const PANEL_SAMPLES: usize = 256;
 
 /// Unit normals of each face's triangles.
 fn normals(m: &Mesh, nf: usize) -> Vec<Vec<Vec3>> {
@@ -533,7 +560,7 @@ fn predecessor(b: &ModelBody) -> Option<&ModelBody> {
     if let Some(source) = &b.names.copy_of {
         return Some(source);
     }
-    let o = b.names.origin.as_ref().filter(|o| o.depth < MAX_DEPTH)?;
+    let o = b.names.origin.as_ref().filter(|_| b.names.depth().is_some_and(|d| d < MAX_DEPTH))?;
     o.before.body(&b.name)
 }
 
@@ -583,8 +610,9 @@ pub(crate) fn names(b: &ModelBody) -> Arc<Names> {
         .names
         .get_or_init(|| {
             // Exact history needs no mesh; geometry does (its face count is the mesh's).
-            let names = match b.names.origin.as_ref() {
-                Some(o) if o.depth < MAX_DEPTH => b.names.lineage.as_ref().and_then(|l| crate::history_names::derive(b, o, l)).unwrap_or_else(|| {
+            let shallow = b.names.depth().is_some_and(|d| d < MAX_DEPTH);
+            let names = match b.names.origin.as_ref().filter(|_| shallow) {
+                Some(o) => b.names.lineage.as_ref().and_then(|l| crate::history_names::derive(b, o, l)).unwrap_or_else(|| {
                     let centres = || face_centres(b);
                     Names::unverified(geometric_names(b, o, face_count(b)), &mesh_adjacency(b), crate::history_names::by_place(&o.feature, &centres))
                 }),
@@ -651,7 +679,7 @@ pub(crate) fn geometric_names(b: &ModelBody, o: &NamingOrigin, nf: usize) -> Vec
         .before
         .bodies
         .iter()
-        .filter(|x| !independent_solid && !x.body.is_mesh() && overlaps(x))
+        .filter(|x| !independent_solid && !x.body.is_mesh() && readable(b, x) && overlaps(x))
         .take(64)
         .map(|x| {
             let n = face_count(x);
@@ -668,7 +696,7 @@ pub(crate) fn geometric_names(b: &ModelBody, o: &NamingOrigin, nf: usize) -> Vec
             .before
             .bodies
             .iter()
-            .filter(|x| !x.body.is_mesh())
+            .filter(|x| !x.body.is_mesh() && readable(b, x))
             .take(64)
             .map(|x| (x, FaceIndex::new(&x.mesh(), face_count(x)), face_names(x)))
             .collect();
@@ -683,38 +711,6 @@ pub(crate) fn geometric_names(b: &ModelBody, o: &NamingOrigin, nf: usize) -> Vec
         }
         if let Some((_, k, got)) = best {
             names = got.into_iter().map(|n| n.map(|n| format!("{n}@F{fid}.{}", k + 1))).collect();
-        }
-    }
-    // A sheet feature that moved panels (a fold, an unfold): faces it carried along lie on the
-    // faces they were, taken back through the panel they are on.
-    if let (Some(after), Some(before), Some(input)) = (
-        o.sheets.iter().find(|s| s.body == b.name),
-        o.before.sheets.iter().find(|s| s.body == b.name),
-        inputs.iter().find(|(x, _, _)| x.name == b.name),
-    ) {
-        let input = std::slice::from_ref(input);
-        let mut dense: Option<Vec<Vec<Vec3>>> = None;
-        for (fi, (name, ps)) in names.iter_mut().zip(&pts).enumerate() {
-            if name.is_some() {
-                continue;
-            }
-            // The panel the feature kept in place (the base an unfold lays the flanges out beside)
-            // lies on its own face before, and that face names the whole face it is part of now:
-            // a flat face spans that panel, the panels laid out beside it and the bend strips
-            // between them, whatever share of it they take. The few sample points above may all
-            // miss it (a bend strip is many small triangles), so the face is looked at closer.
-            let dense = dense.get_or_insert_with(|| samples_up_to(&m, nf, PANEL_SAMPLES));
-            if let Some(kept) = dense.get(fi).and_then(|ps| plurality(ps, input, tol)) {
-                *name = Some(kept);
-                continue;
-            }
-            // A point on a bend lies on no panel and has no place before; the face's other points
-            // do. At least half of them must, so a face that is mostly bend is not named from a
-            // few points.
-            let back: Vec<Vec3> = ps.iter().filter_map(|p| after.point_before(before, *p)).collect();
-            if !back.is_empty() && back.len() * 2 >= ps.len() {
-                *name = vote(&back, input, tol, None);
-            }
         }
     }
     // A feature that built a tool and reported no history. Two meshes of one curved face are only
@@ -831,28 +827,6 @@ fn vote(ps: &[Vec3], inputs: &[(&ModelBody, FaceIndex, Arc<Vec<String>>)], tol: 
     }
     votes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     votes.first().filter(|(_, n)| *n * 2 >= ps.len().max(1) && votes.get(1).is_none_or(|(_, other)| n > other)).map(|(n, _)| n.clone())
-}
-
-/// The input face the most of `ps` lie on (pieces counted as their face), if at least two and a
-/// sixteenth of them lie on one: the face a sheet's unmoved panel was part of.
-fn plurality(ps: &[Vec3], inputs: &[(&ModelBody, FaceIndex, Arc<Vec<String>>)], tol: f64) -> Option<String> {
-    let mut votes: Vec<(String, usize)> = Vec::new();
-    for p in ps {
-        for (_, idx, nm) in inputs {
-            if let Some(f) = idx.face_at(*p, tol)
-                && let Some(n) = nm.get(f)
-            {
-                let n = strip_piece(n);
-                match votes.iter_mut().find(|(v, _)| v == n) {
-                    Some(v) => v.1 += 1,
-                    None => votes.push((n.to_string(), 1)),
-                }
-                break;
-            }
-        }
-    }
-    votes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    votes.first().filter(|(_, n)| *n >= 2 && *n * 16 >= ps.len()).map(|(n, _)| n.clone())
 }
 
 /// A face name without its piece qualifiers: the face it is a piece of (`F2:top` for
@@ -1606,8 +1580,7 @@ mod tests {
         let mut weak = vec![Arc::downgrade(&state)];
         for depth in 0..count {
             let mut next = body.clone();
-            next.names =
-                NameCell::new(Some(Arc::new(NamingOrigin { feature: feature.clone(), before: state, depth, mats: Vec::new(), sheets: Vec::new() })));
+            next.names = NameCell::new(Some(Arc::new(NamingOrigin { feature: feature.clone(), before: state, depth, mats: Vec::new() })));
             let mut next_state = ModelState::default();
             next_state.bodies.push(next);
             state = Arc::new(next_state);

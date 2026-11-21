@@ -40,8 +40,14 @@ fn draw_tilted(graph: &MaterialGraph, key: u64, slope: f32, lights: Option<Vec<[
         let p = [x, y, slope * y];
         scene.graphs.vertex(m, p, normal, p);
     }
-    let target =
-        GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(&device, true)), samples: 1, tess: false, oit: false };
+    let target = GpuTarget {
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        depth: Some(crate::depth_format(&device, true)),
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    };
     let mut r = Renderer::new(&device, target, None);
     r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
     r.materials_mut().no_time_budget = true;
@@ -184,7 +190,7 @@ fn draw_into_tilted(graph: &MaterialGraph, key: u64, format: wgpu::TextureFormat
         scene.graphs.vertex(m, p, normal, p);
     }
     let depth = crate::depth_format(&device, true);
-    let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
+    let mut r = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false, edges: false }, None);
     r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));
     r.materials_mut().no_time_budget = true;
     let frame = Frame { key, product_look: Some(ProductLook { exposure, ..ProductLook::product() }), ..test_frame(scene, 1.0) };
@@ -344,6 +350,7 @@ fn a_placed_mesh_shades_as_the_material_stream_does() {
             levels: Vec::new(),
             closed: true,
             graph: Some(material),
+            edges: None,
         };
         mesh.place([[1.0, 0.0, 0.0, 5.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], crate::view::PaletteIndex(0));
         scene.instanced.push(mesh);
@@ -353,6 +360,7 @@ fn a_placed_mesh_shades_as_the_material_stream_does() {
             samples: 1,
             tess: false,
             oit: false,
+            edges: false,
         };
         let mut r = Renderer::new(&device, target, None);
         r.set_studio_environment(&device, &queue, &studio(StudioPreset::product()));

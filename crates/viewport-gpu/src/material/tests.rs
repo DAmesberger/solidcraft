@@ -480,7 +480,14 @@ fn records_hold_the_base_response_then_the_slots() {
 const SIZE: u32 = 64;
 
 fn target(device: &wgpu::Device) -> GpuTarget {
-    GpuTarget { format: wgpu::TextureFormat::Rgba8Unorm, depth: Some(crate::depth_format(device, true)), samples: 1, tess: false, oit: false }
+    GpuTarget {
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        depth: Some(crate::depth_format(device, true)),
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    }
 }
 
 const SQUARE: [[f32; 3]; 6] =

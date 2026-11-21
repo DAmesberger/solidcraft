@@ -90,7 +90,10 @@ fn placed_step_body_uses_imported_opacity_until_a_design_look_overrides_it() {
     let mut document = doc::Document::default();
     let component = document.add_component(Some("Imported part"), 0).unwrap();
     let feature = document
-        .add_feature(doc::FeatureKind::Import { file: "glass.step".into(), step: step.into(), components: Vec::new(), skip: Vec::new() }, None)
+        .add_feature(
+            doc::FeatureKind::Import { file: "glass.step".into(), step: step.into(), components: Vec::new(), skip: Vec::new(), records: None },
+            None,
+        )
         .unwrap();
     document.features.iter_mut().find(|f| f.id == feature).unwrap().component = component;
     let mut session = Session::new(document);
@@ -156,7 +159,7 @@ fn selection_does_not_rebuild_the_model_scene() {
     h.app.set_origin_shown(false);
     h.app.run("solid.box", json!({"length": 20, "width": 15, "height": 10})).unwrap();
     h.app.viewport.gpu =
-        Some(super::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+        Some(super::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
     h.frame();
     let key = h.app.viewport.key;
     let highlight = h.app.viewport.hl_key;
@@ -264,8 +267,14 @@ fn appearance_edits_upload_palette_rows_only() {
     let mut app = SolveApp::new(Session::default(), Services::default());
     app.ui.ground_shadow = false;
     app.set_origin_shown(false);
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.run("solid.box", json!({"length": 20, "width": 15, "height": 10})).unwrap();
     app.fit_view();
     let name = app.session.world_state().unwrap().bodies[0].name.clone();
@@ -290,6 +299,95 @@ fn appearance_edits_upload_palette_rows_only() {
     let glass = draw(&app);
     assert_eq!(glass.geometry, 0, "a see-through body's colour edit uploads no geometry: {glass:?}");
     assert!(glass.palette > 0, "it writes the palette: {glass:?}");
+}
+
+/// A part placed many times goes to the GPU once: drawn indirectly, its triangles are uploaded
+/// to the indirect draws' buffer alone, not to buffers of their own as well, and its shared
+/// edges (where the device draws them) to the edges' buffer; a scene adding a part that fits
+/// the buffers' room uploads that part's triangles and edges alone, not again every part before
+/// it (a design being opened adds parts at every scene); and the same parts again upload none,
+/// nor a highlight lighting a placement's edges. Every placement is drawn each time. Skipped
+/// without a GPU adapter.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_placed_parts_triangles_and_edges_are_uploaded_once_and_a_part_added_alone_after() {
+    const SIZE: u32 = 64;
+    let Some(mut frames) = crate::gpu::OffscreenFrames::new(SIZE, false) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.ui.ground_shadow = false;
+    app.set_origin_shown(false);
+    app.viewport.gpu = frames.target();
+    app.run("solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [0, 0, 0], "operation": "new"})).unwrap();
+    app.run("solid.cylinder", json!({"radius": 5, "height": 10, "base": [30, 0, 0]})).unwrap();
+    app.fit_view();
+    // The cylinder first: the buffers made for it have room for half as much again, which the
+    // box added after fits in (a part that does not fit makes them again, with every part).
+    let meshes: Vec<_> = app.session.model.state().bodies.iter().rev().map(|b| std::sync::Arc::new(crate::gpu::SharedTris::new(&b.mesh()))).collect();
+    assert_eq!(meshes.len(), 2, "a cylinder and a box");
+    assert!(meshes[1].vertices.len() * 2 < meshes[0].vertices.len(), "the box is the smaller");
+    let with_edges = frames.target().is_some_and(|t| t.edges);
+    let edges: Vec<_> = app
+        .session
+        .model
+        .state()
+        .bodies
+        .iter()
+        .rev()
+        .map(|b| std::sync::Arc::new(solidcraft_viewport_gpu::view::SharedEdges::new(&b.mesh(), |_| true, Vec::new())))
+        .collect();
+    let edge_bytes = |k: usize| if with_edges { edges[k].levels.iter().map(|(r, _)| r.len() as u64).sum() } else { 0 };
+    let bytes = |k: usize| (meshes[k].vertices.len() + meshes[k].indices.len() * 4) as u64 + edge_bytes(k);
+    // Each part placed three times, close together (all in view).
+    let scene = |parts: usize| {
+        let mut sc = crate::gpu::GpuScene::default();
+        let red = sc.color([200, 30, 30, 255]);
+        for (k, tris) in meshes.iter().take(parts).enumerate() {
+            let mut inst = solidcraft_viewport_gpu::view::InstancedMesh {
+                key: k as u64 + 1,
+                tris: tris.clone(),
+                instances: Vec::new(),
+                look: solidcraft_viewport_gpu::view::InstanceLook::Opaque,
+                levels: Vec::new(),
+                closed: true,
+                graph: None,
+                edges: with_edges.then(|| edges[k].clone()),
+            };
+            for i in 0..3 {
+                inst.place([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.5 * i as f32], [0.0, 0.0, 1.0, 0.0]], red);
+            }
+            sc.instanced.push(inst);
+        }
+        sc
+    };
+    let none: crate::gpu::SceneSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut key = 0;
+    let mut draw = |parts: usize| {
+        key += 1;
+        let slot: crate::gpu::SceneSlot = std::sync::Arc::new(std::sync::Mutex::new(Some(scene(parts))));
+        frames.frame(crate::scale_tests::view_frame(&app, SIZE, (key, &slot), (0, &none)));
+        (frames.uploads(), frames.stats().triangles)
+    };
+    let drawn = |parts: usize| meshes.iter().take(parts).map(|t| 3 * (t.indices.len() as u64 / 3)).sum::<u64>();
+    let (one, triangles) = draw(1);
+    assert_eq!(one.geometry, bytes(0), "the first part's triangles and edges, once");
+    assert_eq!(triangles, drawn(1), "its three placements are drawn");
+    let (two, triangles) = draw(2);
+    assert_eq!(two.geometry, bytes(1), "the part added alone");
+    assert_eq!(triangles, drawn(2), "every placement of both parts is drawn");
+    let (again, triangles) = draw(2);
+    assert_eq!(again.geometry, 0, "the same parts upload no triangles or edges");
+    assert_eq!(triangles, drawn(2), "and are drawn as before");
+    // A placement lit (hovered or selected) draws its edges again from the model's segment
+    // buffer: the highlight uploads none of them.
+    if with_edges {
+        let lit = crate::gpu::GpuScene { lit_instanced_edges: scene(1).instanced, ..Default::default() };
+        let lit: crate::gpu::SceneSlot = std::sync::Arc::new(std::sync::Mutex::new(Some(lit)));
+        frames.frame(crate::scale_tests::view_frame(&app, SIZE, (key, &none), (1, &lit)));
+        assert_eq!(frames.highlight_uploads().geometry, 0, "a lit part's edges are the model's");
+    }
 }
 
 /// A body out of the view is left out of its block's draws: two boxes far apart, drawn with
@@ -345,7 +443,7 @@ fn theme_switches_refresh_cached_viewport_colours_without_remeshing() {
     h.app.set_origin_shown(false);
     h.app.run("solid.box", json!({"length": 20, "width": 15, "height": 10})).unwrap();
     h.app.viewport.gpu =
-        Some(super::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+        Some(super::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false, edges: false });
     let body = crate::open_meshing::session_world(&h.app.session).bodies[0].name.clone();
     h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: body.clone() }];
     h.frame();
@@ -643,8 +741,14 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
     };
     let (draws, vertices, _, _) = counts(&app);
     assert!(draws.is_empty() && vertices == 0, "the Standard view draws no graph");
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.ui.view_look = crate::view_look::REALISTIC;
     let (draws, vertices, pages, faces_drawn) = counts(&app);
     assert_eq!(draws.len(), 2, "two shapes: the body's graph and the top face's");
@@ -679,8 +783,14 @@ fn a_graph_look_waits_for_its_shape_in_its_own_colour() {
     let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
     app.run("appearance.assign", json!({"bodies": [body], "graph": "coated", "values": {"tint": [0.7, 0.6, 0.1], "coat": [0.04, 0.12, 0.42]}}))
         .unwrap();
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.ui.view_look = crate::view_look::REALISTIC;
     let sc = build_scene(&app);
     let page = sc.graphs.pages().first().map(|p| p.words.clone()).unwrap_or_default();
@@ -705,8 +815,14 @@ fn a_see_through_graph_look_is_drawn_blended() {
     .unwrap();
     let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
     app.run("appearance.assign", json!({"bodies": [body], "graph": "glass"})).unwrap();
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.ui.view_look = crate::view_look::REALISTIC;
     let sc = build_scene(&app);
     assert!(!sc.graphs.draws().is_empty() && sc.graphs.draws().iter().all(|d| d.blended), "drawn blended");
@@ -739,8 +855,14 @@ fn screenshot_graph_looks_in_the_realistic_view() {
     app.run("appearance.graph.create", json!({"id": "black", "name": "Black", "graph": {"name": "Black", "nodes": [{"id": "s", "kind": "standard_surface",
         "inputs": {"base_color": [0.022, 0.022, 0.024], "specular_roughness": 0.46, "specular_ior": 1, "coat_weight": std::env::var("C1_COAT").ok().and_then(|c| c.parse::<f64>().ok()).unwrap_or(1.0), "coat_roughness": 0.08, "coat_ior": 1.5}}], "output": "s"}})).unwrap();
     app.run("appearance.assign", json!({"bodies": [names[2]], "graph": "black"})).unwrap();
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.ui.ground_shadow = false;
     const SIZE: u32 = 1024;
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
@@ -806,8 +928,14 @@ fn screenshot_a_design_in_both_looks() {
     let (Ok(dir), Ok(design)) = (std::env::var("C1_APP_SHOTS"), std::env::var("C1_DESIGN")) else { return };
     let mut app = SolveApp::new(Session::default(), Services::default());
     app.run("doc.open", json!({"path": design})).unwrap();
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     const SIZE: u32 = 1024;
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
     let bounds = super::shown_body_bounds(&app);
@@ -853,8 +981,14 @@ fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
     )
     .unwrap();
     assert!(build_scene(&app).graphs.draws().is_empty(), "the Standard view draws no graph");
-    app.viewport.gpu =
-        Some(crate::gpu::GpuTarget { format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm, depth: None, samples: 1, tess: false, oit: false });
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
     app.ui.view_look = crate::view_look::REALISTIC;
     app.ui.ground_shadow = false;
     let scene = build_scene(&app);
