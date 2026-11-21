@@ -55,7 +55,7 @@ fn designs_without_graphs_save_as_a_build_without_the_change_does() {
         let doc = solidcraft_io::read_design(&std::fs::read(&path).unwrap()).unwrap();
         assert!(doc.appearances.tables.is_empty(), "{}", path.display());
         let expected = without_the_change(&doc);
-        let json = solidcraft_io::write_design(&doc);
+        let json = solidcraft_io::write_design(&doc).unwrap();
         assert_eq!(String::from_utf8(json.clone()).unwrap(), expected.to_json(), "{}: JSON", path.display());
         let saved: Value = serde_json::from_slice(&json).unwrap();
         assert!(!saved["format_pending"].as_array().into_iter().flatten().any(|n| n == "appearance-graphs"));
@@ -65,7 +65,7 @@ fn designs_without_graphs_save_as_a_build_without_the_change_does() {
         assert_eq!(stored["format"], Value::from(expected.format.clone()), "{}: container", path.display());
         assert_eq!(stored.get("format_pending").cloned(), saved.get("format_pending").cloned(), "{}: container", path.display());
         // Reading either back and saving again writes the same bytes.
-        assert_eq!(solidcraft_io::write_design(&solidcraft_io::read_design(&json).unwrap()), json, "{}", path.display());
+        assert_eq!(solidcraft_io::write_design(&solidcraft_io::read_design(&json).unwrap()).unwrap(), json, "{}", path.display());
         let again = solidcraft_io::write_design_container(&doc).unwrap();
         assert_eq!(document_json(&again), container, "{}", path.display());
         let reopened = solidcraft_io::read_design(&again).unwrap();
@@ -79,14 +79,14 @@ fn a_design_with_a_graph_takes_the_new_number_until_its_last_graph_is_deleted() 
     let graph = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut doc = Document::new("Graphs");
     doc.appearances.tables.graphs.insert(solidcraft_doc::appearance_graph::GraphId::new("copper").unwrap(), graph);
-    for saved in [solidcraft_io::write_design(&doc), document_json(&solidcraft_io::write_design_container(&doc).unwrap())] {
+    for saved in [solidcraft_io::write_design(&doc).unwrap(), document_json(&solidcraft_io::write_design_container(&doc).unwrap())] {
         let v: Value = serde_json::from_slice(&saved).unwrap();
         assert_eq!(v["format"], Value::from(format_string(FORMAT)));
         assert_eq!(v["format_pending"], Value::from(pending_names()));
     }
-    let back = solidcraft_io::read_design(&solidcraft_io::write_design(&doc)).unwrap();
+    let back = solidcraft_io::read_design(&solidcraft_io::write_design(&doc).unwrap()).unwrap();
     assert_eq!(back.appearances.tables.graphs, doc.appearances.tables.graphs);
     let mut deleted = back.clone();
     deleted.appearances.tables.graphs.clear();
-    assert_eq!(String::from_utf8(solidcraft_io::write_design(&deleted)).unwrap(), without_the_change(&deleted).to_json());
+    assert_eq!(String::from_utf8(solidcraft_io::write_design(&deleted).unwrap()).unwrap(), without_the_change(&deleted).to_json());
 }

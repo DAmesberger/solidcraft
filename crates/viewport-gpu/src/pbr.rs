@@ -452,7 +452,7 @@ macro_rules! vertex_source {
     () => {
         r#"
 struct PbrOut {
-    // Invariant as `TOut`'s: the AO term pass matches the prepass's depth exactly.
+    // Invariant as `TOut`'s.
     @invariant @builtin(position) pos: vec4<f32>,
     @location(0) n: vec3<f32>,
     @location(1) base: vec3<f32>,
@@ -478,12 +478,6 @@ fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) bas
 @fragment
 fn fs_ao_depth_pbr(i: PbrOut, @builtin(front_facing) front: bool) -> AoDepth {
     return opaque_depth(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp, 0u, 0.0, 0u), front);
-}
-
-/// The AO term of a PBR surface, on the prepass's depth (drawn only with the product look).
-@fragment
-fn fs_ao_term_pbr(i: PbrOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return ao_term(TOut(i.pos, i.n, vec4<f32>(i.base, 1.0), i.wp, 0u, 0.0, 0u), front);
 }
 
 // A material's input at a fragment of a PBR vertex stream: the fragment and the vertex's
