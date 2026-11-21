@@ -2498,3 +2498,28 @@ fn hostile_params_and_stale_selections_never_fail_badly() {
         assert!(s.execute("selection.get", &v).is_ok(), "{v}");
     }
 }
+
+/// Naming depth is measured along the chain of features a body's names come from, not along the
+/// whole timeline: a part with a round still finds its edge by name after hundreds of other,
+/// independent parts are made before it (a design holding many part designs, each a few features).
+#[test]
+fn a_round_keeps_its_edge_name_after_hundreds_of_independent_bodies_before_it() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "body_name": "Peg"}));
+    run(&mut s, "solid.fillet", json!({"body": "Peg", "radius": 1, "edges": [[5, 0, 10]]}));
+    let peg: Vec<u64> = s.doc.features.iter().map(|f| f.id).collect();
+    for i in 0..420 {
+        let corner = [20 * (i % 30) + 40, 20 * (i / 30), 0];
+        run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 5, "corner": corner, "body_name": format!("Block {i}")}));
+    }
+    let fillet = peg[1];
+    let end = s.doc.features.len();
+    run(&mut s, "timeline.move_many", json!({"features": peg, "position": end}));
+    assert_eq!(s.doc.features.last().map(|f| f.id), Some(fillet));
+    let result = s.model.result(fillet).cloned();
+    assert!(result.as_ref().is_some_and(|r| r.error.is_none() && r.warning.is_none()), "the round is made by its edge's name: {result:?}");
+    let body = s.model.state().bodies.iter().find(|b| b.name == "Peg").cloned().unwrap();
+    let names = solidcraft_doc::naming::face_names(&body);
+    assert!(names.iter().any(|n| n.contains(":blend(")), "the round's face is named after the edge it rounds: {names:?}");
+    assert!((0..names.len()).all(|i| solidcraft_doc::naming::face_name_exact(&body, i)), "names follow exact history: {names:?}");
+}

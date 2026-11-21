@@ -1045,7 +1045,7 @@ impl ModelState {
                     (key, &b.name).hash(&mut h);
                     b.key = h.finish();
                     if !matches!(f.kind, FeatureKind::BodyTransfer { .. }) {
-                        b.names = crate::naming::NameCell::traced(Some(origin.clone()), b.lineage());
+                        b.names = crate::naming::NameCell::traced(Some(origin.clone()), b.lineage(), &b.name);
                     }
                     // Faces split on purpose stay split through later features (for export).
                     if b.body.split_lines().is_none()
