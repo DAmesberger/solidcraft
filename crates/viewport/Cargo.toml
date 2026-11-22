@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 image = { workspace = true }
 serde = { workspace = true }
+# An appearance graph's shape key is a truncated SHA-256 of its canonical lowered form.
+sha2 = { workspace = true }
 solidcore-record = { workspace = true }
 solidcore-tess = { workspace = true }
 solidcraft-color = { workspace = true }
