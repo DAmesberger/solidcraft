@@ -908,6 +908,8 @@ pub(crate) fn render_look_offscreen(
     let frame = |key: u64| {
         solidcraft_viewport_egui::ViewportCallback(Frame {
             moving: None,
+            motions: Default::default(),
+            ground: None,
             preview_bounds: None,
             hatch: Default::default(),
             product_lights: product_lights.clone(),

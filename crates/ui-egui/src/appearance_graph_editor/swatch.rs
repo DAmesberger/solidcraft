@@ -197,6 +197,8 @@ pub(crate) fn frame(slot: Arc<Mutex<Option<GpuScene>>>, key: u64, size_px: [f32;
     let none = || Arc::new(Mutex::new(None));
     Frame {
         moving: None,
+        motions: Default::default(),
+        ground: None,
         preview_bounds: None,
         hatch: Default::default(),
         product_lights: None,

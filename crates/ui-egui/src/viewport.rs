@@ -2821,7 +2821,7 @@ fn body_scene(
         // glass that shows nothing (and writes no depth).
         let graph_see_through =
             if graph_looks && !faded { crate::viewport_graphs::see_through_faces(&s.doc, b, face_looks) } else { vec![false; faces] };
-                // A face falls back to the body's own slot only when its face slots run short (the arena
+        // A face falls back to the body's own slot only when its face slots run short (the arena
         // full): only then do the copies' faces differ, each copy having a colour slot of its own.
         let fallback = if slots.faces != u32::MAX && slots.face_capacity as usize >= faces { crate::gpu::PaletteIndex(u32::MAX) } else { slots.body };
         let copy_key = copy.map(|(definition, look)| (definition, look, faded, fallback, slots.faces));

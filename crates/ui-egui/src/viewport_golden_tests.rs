@@ -276,6 +276,8 @@ fn frame(
     let none = || Arc::new(Mutex::new(None));
     Frame {
         moving: None,
+        motions: Default::default(),
+        ground: None,
         preview_bounds: None,
         hatch: Default::default(),
         product_lights: lights,

@@ -189,11 +189,7 @@ pub fn paint_slots(
                         if editing.is_some() {
                             crate::navigation_button_editable(ui, slot.rect, button, true)
                         } else {
-                            let response = crate::navigation_button(ui, slot.rect, button);
-                            if slot.badge {
-                                crate::navigation_menu_badge(ui, slot.rect);
-                            }
-                            response
+                            crate::navigation_button(ui, slot.rect, button)
                         }
                     }
                 })

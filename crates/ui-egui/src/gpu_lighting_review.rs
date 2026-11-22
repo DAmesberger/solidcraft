@@ -222,6 +222,8 @@ fn draw(device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera, radius: f64
     let e = camera.eye().to_f32();
     let cb = ViewportCallback(Frame {
         moving: None,
+        motions: Default::default(),
+        ground: None,
         preview_bounds: None,
         hatch: Default::default(),
         product_lights: shot.lights,

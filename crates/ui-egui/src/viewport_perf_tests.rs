@@ -90,6 +90,8 @@ fn viewport_frame_costs() {
                     let e = proj.cam.eye().to_f32();
                     let frame = Frame {
                         moving: None,
+                        motions: Default::default(),
+                        ground: None,
                         preview_bounds: None,
                         hatch: Default::default(),
                         product_lights: None,
