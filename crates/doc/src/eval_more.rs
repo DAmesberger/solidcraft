@@ -62,7 +62,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                     }
                 };
                 if let Some(slot) = st.bodies.get_mut(i) {
-                    *slot = ModelBody::new(mb.name.clone(), result, mb.feature);
+                    *slot = ModelBody::new(mb.name, result, mb.feature);
                 }
                 return Ok(());
             }

@@ -894,57 +894,6 @@ impl Document {
         });
         Ok(id)
     }
-
-    /// [`Document::add_occurrence`] once per transform, all or nothing: a large design's thousands of
-    /// copies placed in one step, with the design looked through once rather than once per
-    /// placement. The new occurrences, in the transforms' order.
-    pub fn add_occurrences(&mut self, component: u64, parent: u64, transforms: &[Mat]) -> Result<Vec<u64>> {
-        if component == 0 || !self.components.iter().any(|c| c.id == component) {
-            return Err(DocError::Unknown(format!("component {component}")));
-        }
-        if self.inside_component(parent, component) {
-            return Err(DocError::Invalid("a component can't contain itself".into()));
-        }
-        if transforms.is_empty() {
-            return Ok(Vec::new());
-        }
-        if self.occurrences.len().saturating_add(transforms.len()) > 100_000 {
-            return Err(DocError::Invalid("too many occurrences".into()));
-        }
-        if !transforms.iter().all(is_placement) {
-            return Err(DocError::Invalid("an occurrence's placement must be a rigid motion (no scaling or mirroring) within 1e9 mm".into()));
-        }
-        let first = self.next_id.max(1);
-        let after = u64::try_from(transforms.len())
-            .ok()
-            .and_then(|n| first.checked_add(n))
-            .ok_or_else(|| DocError::Invalid("too many items in the design".into()))?;
-        let cname = self.components.iter().find(|c| c.id == component).map(|c| c.name.clone()).unwrap_or_default();
-        let placed = self.occurrences.iter().filter(|o| o.component == component).count();
-        // Named as `add_occurrence` names each: the next number, or the first one no occurrence
-        // has when that one is taken (#9738).
-        let mut taken: std::collections::HashSet<String> = self.occurrences.iter().map(|o| o.name.clone()).collect();
-        let ids: Vec<u64> = (first..after).collect();
-        self.next_id = after;
-        self.occurrences.reserve(transforms.len());
-        for (next, (id, transform)) in (placed + 1..).zip(ids.iter().zip(transforms)) {
-            let free = |k: &usize| !taken.contains(&format!("{cname}:{k}"));
-            let k = std::iter::once(next).chain(1..).find(free).unwrap_or(next);
-            let name = format!("{cname}:{k}");
-            taken.insert(name.clone());
-            self.occurrences.push(crate::Occurrence {
-                id: *id,
-                component,
-                parent,
-                name,
-                transform: *transform,
-                grounded: false,
-                expressed_moves: Vec::new(),
-                bom_type: None,
-            });
-        }
-        Ok(ids)
-    }
 }
 
 /// The names of a design's placed bodies ([`Document::world_body_name`]), with what naming one

@@ -78,9 +78,7 @@ pub static COMMANDS: &[CommandSpec] = &[
          is none, or a half turn where that turns b less, so faces that already meet stay as they are); name?; quiet?: bool (leave \
          out dof and fixed). An expression for offset, angle or a value is \
          kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
-         expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors. \
-         joints?: [{…as above}, …] instead: several joints made and solved together in one step, all or nothing \
-         (at most 10000; a large assembly's hundreds of placed parts) → joints: their ids in order",
+         expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
     CommandSpec::new("joint.as_built", "As-Built Joint", crate::checked!("joint.as_built", as_built))
         .at("SOLID", "ASSEMBLE")
@@ -1435,45 +1433,12 @@ fn new_joint_name(s: &Session, p: &Value, kind: JointKind) -> String {
 }
 
 fn joint(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(list) = p.get("joints") {
-        return joints_together(s, p, list);
-    }
-    let j = joint_from(s, p)?;
-    add_joint(s, j, p)
-}
-
-/// `joint.create` with `joints`: every joint made from its parameters as `joint.create` makes
-/// one, then the design solved once for all of them, not once per joint.
-fn joints_together(s: &mut Session, p: &Value, list: &Value) -> Result<Value> {
-    let cmd = "joint.create";
-    if p.as_object().is_some_and(|o| o.keys().any(|k| k != "joints" && k != "quiet")) {
-        return Err(bad(cmd, "give `joints` alone (each joint's parameters go in its own entry)"));
-    }
-    let list = list.as_array().filter(|l| !l.is_empty() && l.len() <= 10_000).ok_or_else(|| bad(cmd, "`joints` must list 1..10000 joints"))?;
-    if s.doc.assembly.joints.len().saturating_add(list.len()) > 10_000 {
-        return Err(EngineError::Other("too many joints".into()));
-    }
-    let mut ids = Vec::with_capacity(list.len());
-    for item in list {
-        if item.get("joints").is_some() {
-            return Err(bad(cmd, "a joint in `joints` can't list joints itself"));
-        }
-        let j = joint_from(s, item)?;
-        ids.push(push_joint(s, j)?);
-    }
-    let sol = resolve(s);
-    let mut out = sol_json(&sol, p);
-    out["joints"] = json!(ids);
-    Ok(out)
-}
-
-/// The joint `p` describes, with a fresh id, not yet in the design.
-fn joint_from(s: &mut Session, p: &Value) -> Result<Joint> {
     let cmd = "joint.create";
     let kind = kind_param(p, cmd)?;
     let a = origin_param(s, p.get("a"), cmd)?;
     let b = origin_param(s, p.get("b"), cmd)?;
-    new_joint(s, p, kind, a, b, cmd)
+    let j = new_joint(s, p, kind, a, b, cmd)?;
+    add_joint(s, j, p)
 }
 
 /// A joint of `kind` between origins `a` and `b`, with the values, limits, flip, offset, angle and
@@ -1516,25 +1481,6 @@ fn new_joint(s: &mut Session, p: &Value, kind: JointKind, a: JointOrigin, b: Joi
         j.angle = joints::least_turn_angle(&s.doc, &s.model.state(), &j);
     }
     Ok(j)
-}
-
-/// Put `j` in the design as [`add_joint`] does, unsolved, and return its id; the warnings
-/// of a value moved into its limits are not kept (the batch reply has none).
-fn push_joint(s: &mut Session, mut j: Joint) -> Result<u64> {
-    if s.doc.assembly.joints.len() >= 10_000 {
-        return Err(EngineError::Other("too many joints".into()));
-    }
-    if j.a.occurrence == j.b.occurrence {
-        return Err(bad("joint.create", "a joint needs two different occurrences: both origins are on one component"));
-    }
-    let mut q = j.values.clone();
-    q.resize(j.kind.dofs().len(), 0.0);
-    joints::clamp(&j, &mut q);
-    j.values = q;
-    let id = j.id;
-    s.visibility.hidden_joints.retain(|h| *h != id);
-    s.doc_mut().assembly.joints.push(j);
-    Ok(id)
 }
 
 fn as_built(s: &mut Session, p: &Value) -> Result<Value> {

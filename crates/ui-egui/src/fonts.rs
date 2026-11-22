@@ -727,7 +727,6 @@ mod tests {
     use super::*;
     use crate::ui_kit::type_face::{RichTextExt as _, SYMBOL_FALLBACK, bold, medium, semibold};
     use egui::{FontId, RichText};
-    use solidcraft_look::fonts::LANGUAGE_FALLBACKS;
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -763,7 +762,7 @@ mod tests {
     }
 
     /// The symbols the built-in Latin faces lack draw through the built-in Hack (#2955), which
-    /// comes once, before the language fallbacks, and goes in with the desktop's fonts.
+    /// comes last and once, after the system fallbacks, and goes in with the desktop's fonts.
     #[test]
     fn symbols_fall_back_to_the_built_in_hack() {
         let fonts = with_symbol_fallback(look::definitions());
@@ -779,49 +778,14 @@ mod tests {
         with_cjk.families.entry(egui::FontFamily::Proportional).or_default().push(CJK_FALLBACK.to_owned());
         let fonts = with_symbol_fallback(with_symbol_fallback(with_cjk));
         let list = &fonts.families[&egui::FontFamily::Proportional];
-        assert_eq!(list[list.len() - 2..], [SYMBOL_FALLBACK, CJK_FALLBACK], "{list:?}");
+        assert_eq!(list.last().map(String::as_str), Some(SYMBOL_FALLBACK), "{list:?}");
         assert_eq!(list.iter().filter(|name| *name == SYMBOL_FALLBACK).count(), 1, "{list:?}");
         assert_ne!(list.first().map(String::as_str), Some(SYMBOL_FALLBACK), "{list:?}");
         let ctx = egui::Context::default();
         setup_fonts_for(&ctx, "en", "");
         ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
         let installed = ctx.fonts(|f| f.definitions().families[&egui::FontFamily::Proportional].clone());
-        let symbols = installed.iter().position(|name| name == SYMBOL_FALLBACK);
-        let first_language = installed.iter().position(|name| LANGUAGE_FALLBACKS.contains(&name.as_str()));
-        assert!(symbols.is_some() && first_language.is_none_or(|at| symbols < Some(at)), "{installed:?}");
-    }
-
-    /// One laid-out glyph per character of `text`: its height on screen and its face's row height.
-    fn drawn(ctx: &egui::Context, text: &str) -> Vec<(char, f32, f32)> {
-        let font = egui::FontId::proportional(13.0);
-        let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE));
-        galley.rows.iter().flat_map(|row| row.row.glyphs.iter()).map(|g| (g.chr, g.uv_rect.size.y, g.font_face_height)).collect()
-    }
-
-    /// A CJK face has symbols too, and its ⇧ may stand far taller than the capital beside it: a
-    /// symbol Hack has comes from Hack. Text and punctuation of the language stay in the CJK face.
-    #[test]
-    fn a_symbol_hack_has_stays_out_of_the_cjk_fallback() {
-        let ctx = egui::Context::default();
-        install(&ctx, with_cjk_fallback(look::definitions(), japanese_font_bytes()).unwrap());
-        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
-
-        let glyphs = drawn(&ctx, "L⇧");
-        let (capital, shift) = (glyphs[0].1, glyphs[1].1);
-        assert!(shift <= capital + 1.0, "⇧ {shift} beside L {capital}");
-
-        let only_hack = egui::Context::default();
-        only_hack.set_fonts(look::definitions());
-        only_hack.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
-        let hack_row = drawn(&only_hack, "⇧")[0].2;
-        assert_eq!(glyphs[1].2, hack_row, "⇧ comes from Hack");
-
-        // Ideographs, kana and the punctuation of CJK text stay in the CJK face.
-        let cjk_row = drawn(&ctx, "日")[0].2;
-        assert_ne!(cjk_row, hack_row, "the two faces can be told apart");
-        for (c, _, row) in drawn(&ctx, "本語テストひら、。「」：") {
-            assert_eq!(row, cjk_row, "{c} comes from the CJK face");
-        }
+        assert_eq!(installed.last().map(String::as_str), Some(SYMBOL_FALLBACK), "{installed:?}");
     }
 
     #[test]
@@ -959,7 +923,8 @@ mod tests {
         for ((name, _), family) in look::WEIGHTS.into_iter().zip(sans_families()) {
             assert_eq!(reset.families[&family][0], name);
             let list = &reset.families[&family];
-            assert_eq!(list[list.len() - 2..], [SYMBOL_FALLBACK, CJK_FALLBACK]);
+            assert_eq!(list.get(list.len() - 2).map(String::as_str), Some(CJK_FALLBACK));
+            assert_eq!(list.last().map(String::as_str), Some(SYMBOL_FALLBACK));
         }
         install(&ctx, reset);
         let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -1216,13 +1181,12 @@ mod tests {
         for language in ["uk", "en", "de"] {
             let list = installed(language);
             assert_eq!(list.first(), Some(&latin), "{language} keeps the Latin face first: {list:?}");
-            assert_eq!(list.last().map(String::as_str), Some(CJK_FALLBACK), "{language} keeps CJK as the last fallback: {list:?}");
-            assert_eq!(list.get(list.len() - 2).map(String::as_str), Some(SYMBOL_FALLBACK), "{language} draws symbols before CJK: {list:?}");
+            assert_eq!(list.last().map(String::as_str), Some(SYMBOL_FALLBACK), "{language} ends with the symbol fallback: {list:?}");
+            assert!(list.iter().position(|name| name == CJK_FALLBACK).is_some_and(|at| at > 0), "{language} keeps CJK behind Latin: {list:?}");
         }
         for language in ["ja", "zh", "ko"] {
             let list = installed(language);
             assert_eq!(list.first().map(String::as_str), Some(CJK_FALLBACK), "{language} leads with the CJK face: {list:?}");
-            assert_eq!(list.last().map(String::as_str), Some(SYMBOL_FALLBACK), "{language} keeps the symbols after the bundled faces: {list:?}");
         }
     }
 

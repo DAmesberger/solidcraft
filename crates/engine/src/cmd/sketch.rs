@@ -524,9 +524,10 @@ pub(super) fn edit_solved<T>(
     analysis: Analysis,
     f: impl FnOnce(&mut Sketch, &mut solidcraft_doc::Document) -> Result<(T, Left)>,
 ) -> Result<(T, Option<SolveReport>)> {
-    let mut sk = sketch_store::read(&s.doc, id)?.clone();
+    let mut doc = (*s.doc).clone();
+    let mut sk = sketch_store::read(&doc, id)?.clone();
     if sk.patterns.iter().any(|p| p.count_expression.is_some() || !p.expressions.is_empty()) {
-        s.doc.apply_pattern_values(&s.doc.param_values().0, &mut sk)?;
+        doc.apply_pattern_values(&doc.param_values().0, &mut sk)?;
     }
     // The next frame of a live gesture on this sketch, nothing else run since the last one: its
     // links are as that frame projected them, from a model that hasn't changed (#3222).
@@ -535,32 +536,8 @@ pub(super) fn edit_solved<T>(
         .as_ref()
         .is_some_and(|(sketch, after, revision)| *sketch == id && std::sync::Arc::ptr_eq(after, &s.doc) && *revision == s.revision);
     if !fresh {
-        super::sketch_project::refresh(s, &s.doc, id, &mut sk);
+        super::sketch_project::refresh(s, &doc, id, &mut sk);
     }
-    // A light edit of a batch of put-off evaluation changes the design in place (the batch goes
-    // back to where it began should it fail): a copy of a design of thousands of features for
-    // each line drawn made every new sketch cost more than the last.
-    // A 3D sketch too large to solve refuses a strict edit only when the edit makes it so.
-    let was_big = strict && s.model.state().sketch(id).and_then(|k| k.report.wires.as_ref()).is_some_and(|w| w.oversized.is_some() || w.out_of_time);
-    if s.light {
-        return solve_edit(s.doc_mut(), id, strict, was_big, analysis, sk, f);
-    }
-    let mut doc = (*s.doc).clone();
-    let out = solve_edit(&mut doc, id, strict, was_big, analysis, sk, f)?;
-    s.set_doc(doc);
-    Ok(out)
-}
-
-/// [`edit_solved`] on `doc`: `f`'s edit of `sk`, solved and written into `doc`.
-fn solve_edit<T>(
-    doc: &mut solidcraft_doc::Document,
-    id: u64,
-    strict: bool,
-    was_big: bool,
-    analysis: Analysis,
-    mut sk: Sketch,
-    f: impl FnOnce(&mut Sketch, &mut solidcraft_doc::Document) -> Result<(T, Left)>,
-) -> Result<(T, Option<SolveReport>)> {
     // The stored sketch is solved for its stored values.
     let stored = sk.driving_values();
     // The constraints the sketch has before the edit: a conflict message must not name one the
@@ -571,6 +548,7 @@ fn solve_edit<T>(
     // curves or their constraints, and only constraints that held before it or that it adds
     // (#10608). A 3D sketch too large to solve refuses only an edit that makes it so.
     let before = strict.then(|| {
+        let big = s.model.state().sketch(id).and_then(|k| k.report.wires.as_ref()).is_some_and(|w| w.oversized.is_some() || w.out_of_time);
         (
             sk.points.clone(),
             sk.curves.clone(),
@@ -578,10 +556,10 @@ fn solve_edit<T>(
             sk.wires.clone(),
             sk.wire_constraints.clone(),
             sk.wire_constraints_holding(),
-            was_big,
+            big,
         )
     });
-    let (out, left) = f(&mut sk, doc)?;
+    let (out, left) = f(&mut sk, &mut doc)?;
     let strictness = match before {
         Some((points, curves, constraints, wires, wire_constraints, held, was_big)) => Strict {
             planar: sk.points != points || sk.curves != curves || sk.constraints != constraints,
@@ -617,10 +595,7 @@ fn solve_edit<T>(
         }
         // Solved for the document's values, continuing from the stored solved state.
         Left::Solved | Left::Unsolved => {
-            // Only a sketch whose dimensions, points or patterns name expressions reads the
-            // parameters: evaluating every one of a large design for each line drawn in it made
-            // every new sketch cost more than the last.
-            let vals = if reads_values(&sk) { doc.param_values().0 } else { Default::default() };
+            let (vals, _) = doc.param_values();
             sk.refresh_offsets()?;
             let unsolved = sk.clone();
             #[cfg(test)]
@@ -634,20 +609,9 @@ fn solve_edit<T>(
         doc.discount_traces(id, &sk, r);
     }
     sketch_store::checked(&sk)?;
-    sketch_store::write(doc, id, sk)?;
+    sketch_store::write(&mut doc, id, sk)?;
+    s.set_doc(doc);
     Ok((out, rep))
-}
-
-/// Whether solving `sk` reads the design's parameter values ([`solidcraft_doc::Document::apply_dimension_values`]):
-/// a dimension driven by a parameter, a point placed by expressions, a pattern, an equation
-/// curve or a 3D constraint.
-fn reads_values(sk: &Sketch) -> bool {
-    sk.constraints.iter().any(|c| c.param.is_some())
-        || sk.points.iter().any(|p| p.exprs.is_some())
-        || !sk.patterns.is_empty()
-        || !sk.equations.is_empty()
-        // 3D dimensions and fixed 3D points by expressions ([`solidcraft_doc::Document::apply_wire_values`]).
-        || !sk.wire_constraints.is_empty()
 }
 
 /// An edit's solve outcome: with `strict`, a solve that fails or turns the sketch over is an
@@ -1455,22 +1419,14 @@ pub(super) fn create_sketch_with_plane(s: &mut Session, p: &Value, plane: PlaneR
 
 /// A new sketch on `plane`, as `sketch.create` replies.
 fn sketch_on_plane(s: &mut Session, p: &Value, mut plane: PlaneRef, internal_body: Option<(&str, usize)>) -> Result<CreateResult> {
-    // A light edit of a batch of put-off evaluation keeps no design to cancel back to: holding
-    // one would make every edit of the sketch copy the whole design. The batch goes back to
-    // where it began should one fail, and Cancel Sketch is refused there (use Undo).
-    let before = (!s.light).then(|| entry_point(s));
+    let before = entry_point(s);
     if face::is_face(p) {
         face::capture_positions(s, &plane)?;
     }
     solidcraft_doc::capture_sketch_plane_placement(&s.design_document(), &mut plane, s.active_component, &s.active_component_frame())?;
-    // Validate the plane resolves: without the parameters first (an origin plane, an offset by
-    // a number), as evaluating every parameter of a large design for each new sketch made every
-    // sketch cost more than the last; a plane naming a parameter is resolved with them.
-    let state = s.model.state();
-    if s.doc.resolve_plane_in(&Default::default(), &plane, 0, s.active_component, Some(&state)).is_err() {
-        let (vals, _) = s.doc.param_values();
-        s.doc.resolve_plane_in(&vals, &plane, 0, s.active_component, Some(&state))?;
-    }
+    // Validate the plane resolves.
+    let (vals, _) = s.doc.param_values();
+    s.doc.resolve_plane_in(&vals, &plane, 0, s.active_component, Some(&s.model.state()))?;
     let name = str_(p, "name");
     let mut kind = FeatureKind::Sketch { plane, sketch: Sketch::new() };
     if !face::is_face(p) {
@@ -1482,7 +1438,7 @@ fn sketch_on_plane(s: &mut Session, p: &Value, mut plane: PlaneRef, internal_bod
         f.component = comp;
     }
     s.active_sketch = Some(id);
-    s.sketch_entry = before.map(|before| SketchEntry { sketch: id, ..before });
+    s.sketch_entry = Some(SketchEntry { sketch: id, ..before });
     let name = s.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
     // Sketching on a face projects the face's edges (unless turned off).
     let face = p.get("plane").and_then(|v| v.get("face")).and_then(vec3);
@@ -1659,13 +1615,6 @@ fn finish_sketch(s: &mut Session, p: &Value) -> Result<Value> {
         return super::drawing_sketch::finish(s, p);
     }
     let id = s.active_sketch.take();
-    // In a batch of put-off evaluation the sketch is solved with the rest at its end: its
-    // profiles are not counted yet.
-    if s.deferring && s.sketch_entry.as_ref().is_none_or(|entry| entry.restore_marker.is_none()) {
-        s.sketch_entry = None;
-        s.revision += 1;
-        return Ok(json!({"sketch": id, "profiles": null}));
-    }
     let profiles = id.and_then(|i| s.model.state().sketch(i).map(|ss| ss.profiles.len())).unwrap_or(0);
     if let Some(entry) = s.sketch_entry.take().filter(|entry| Some(entry.sketch) == id)
         && let Some(marker) = entry.restore_marker

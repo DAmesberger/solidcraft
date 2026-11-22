@@ -63,7 +63,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 append_warning(warning, format!("Stitch result `{}` remains open (boundary edges: {open}).", mb.name));
             }
             if let Some(slot) = st.bodies.get_mut(first) {
-                *slot = ModelBody::new(mb.name.clone(), sewn, mb.feature);
+                *slot = ModelBody::new(mb.name, sewn, mb.feature);
             }
             // The others are now part of the first.
             let gone: Vec<String> = idx.iter().skip(1).filter_map(|i| st.bodies.get(*i).map(|b| b.name.clone())).collect();
@@ -157,7 +157,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 }
             };
             if let Some(slot) = st.bodies.get_mut(i) {
-                *slot = ModelBody::new(mb.name.clone(), out, mb.feature);
+                *slot = ModelBody::new(mb.name, out, mb.feature);
             }
             Ok(())
         }
@@ -233,7 +233,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 let Some(mb) = st.bodies.get(i).cloned() else { return Err(DocError::Invalid("body".into())) };
                 let joined = kernel::boundary_join(&mb.body, &made)?;
                 if let Some(slot) = st.bodies.get_mut(i) {
-                    *slot = ModelBody::new(mb.name.clone(), joined, mb.feature);
+                    *slot = ModelBody::new(mb.name, joined, mb.feature);
                 }
                 return Ok(());
             }
@@ -259,7 +259,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
             // A match rebuilds the face in place: the body keeps its name, and whatever meets it
             // downstream still finds it.
             if let Some(slot) = st.bodies.get_mut(i) {
-                *slot = ModelBody::new(mb.name.clone(), made, mb.feature);
+                *slot = ModelBody::new(mb.name, made, mb.feature);
             }
             Ok(())
         }
@@ -297,7 +297,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 report.movement
             ));
             if let Some(slot) = st.bodies.get_mut(i) {
-                *slot = ModelBody::new(mb.name.clone(), faired, mb.feature);
+                *slot = ModelBody::new(mb.name, faired, mb.feature);
             }
             Ok(())
         }
@@ -802,15 +802,15 @@ fn mutual_trim(st: &mut ModelState, i: usize, other: &str, keeps: kernel::TrimKe
         }
         let sewn = Traced::step(sewn, &[&ta, &tb]);
         if let Some(slot) = st.bodies.get_mut(i) {
-            *slot = ModelBody::traced_new(a.name.clone(), sewn, a.feature);
+            *slot = ModelBody::traced_new(a.name, sewn, a.feature);
         }
         st.bodies.retain(|x| x.name != other);
     } else {
         if let Some(slot) = st.bodies.get_mut(i) {
-            *slot = ModelBody::traced_new(a.name.clone(), ta, a.feature);
+            *slot = ModelBody::traced_new(a.name, ta, a.feature);
         }
         if let Some(slot) = st.bodies.get_mut(j) {
-            *slot = ModelBody::traced_new(b.name.clone(), tb, b.feature);
+            *slot = ModelBody::traced_new(b.name, tb, b.feature);
         }
     }
     Ok(())

@@ -1202,7 +1202,7 @@ pub(crate) fn order_lumps(bodies: &mut [crate::ModelBody], origin: &Arc<crate::n
         }
         let least = |b: &crate::ModelBody| {
             let mut named = b.clone();
-            named.names = crate::naming::NameCell::traced(Some(origin.clone()), b.lineage(), &b.name);
+            named.names = crate::naming::NameCell::traced(Some(origin.clone()), b.lineage());
             crate::naming::face_names(&named).iter().min().cloned()
         };
         let keys: Option<Vec<(String, usize)>> = members.iter().map(|i| bodies.get(*i).and_then(least).map(|k| (k, *i))).collect();

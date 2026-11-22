@@ -922,65 +922,6 @@ pub struct Session {
     pub(crate) evaluations: usize,
     /// Resolved associative trace inputs, independent of the document revision and view state.
     pub(crate) motion_traces: cmd::motion::associative::Cache,
-    /// Evaluation put off while a program builds a design ([`Session::defer_evaluation`]).
-    deferred: Option<Deferred>,
-    /// The command running now is one [`DEFERRABLE`] while evaluation is put off: the feature it
-    /// adds is evaluated with the rest at [`Session::evaluate_deferred`].
-    pub(crate) deferring: bool,
-    /// The command running now is a light edit of a batch of put-off evaluation (see
-    /// [`Session::execute`]): should it fail, the batch goes back to where it began, so the
-    /// command may change the design in place instead of editing a copy of it.
-    pub(crate) light: bool,
-}
-
-/// Commands that only add to the design without reading the evaluated model, which a batch of
-/// [`Session::defer_evaluation`] runs without evaluating the model before or after them.
-const DEFERRABLE: &[&str] = &["component.activate", "component.create", "document.metadata.set", "parameters.add", "parameters.import", "solid.box"];
-
-/// Whether a command with these parameters only adds to the design without reading the evaluated
-/// model, so a batch of [`Session::defer_evaluation`] puts its evaluation off: a [`DEFERRABLE`]
-/// command, or a profile drawn from numbers alone (a sketch on an origin plane and a polyline of
-/// number points in it), finishing that sketch, and extruding every profile of a sketch into a
-/// new body (`profiles: "all"`, a distance and names alone). An extrude that leaves its profiles
-/// to the default reads the sketch's evaluated profiles (to keep a drawn hole a hole), and one
-/// that joins, cuts or reaches a face reads the model's bodies, so they evaluate what is pending
-/// first; so does anything naming geometry of the model (a face, a snapped or projected point).
-fn deferrable(id: &str, p: &Value) -> bool {
-    let only = |keys: &[&str]| p.as_object().is_some_and(|o| o.keys().all(|k| keys.contains(&k.as_str())));
-    match id {
-        "sketch.create" => {
-            only(&["plane", "offset", "name"])
-                && p.get("plane").and_then(Value::as_str).is_some_and(|plane| ["XY", "XZ", "YZ"].contains(&plane))
-                && p.get("offset").is_none_or(|v| v.is_number() || v.is_string())
-        }
-        "sketch.line" => {
-            only(&["points", "closed"])
-                && p.get("points")
-                    .and_then(Value::as_array)
-                    .is_some_and(|points| points.iter().all(|q| q.as_array().is_some_and(|q| q.len() == 2 && q.iter().all(Value::is_number))))
-        }
-        "sketch.finish" => only(&[]),
-        "solid.extrude" => {
-            let plain = |key: &str| p.get(key).is_some_and(|v| v.is_number() || v.is_string());
-            only(&["sketch", "distance", "operation", "profiles", "name", "body_name"])
-                && plain("sketch")
-                && plain("distance")
-                && p.get("operation").and_then(Value::as_str) == Some("new")
-                && p.get("profiles").and_then(Value::as_str).is_some_and(|v| v.eq_ignore_ascii_case("all"))
-        }
-        _ => DEFERRABLE.contains(&id),
-    }
-}
-
-/// A batch of commands whose evaluation is put off ([`Session::defer_evaluation`]).
-#[derive(Clone, Debug)]
-struct Deferred {
-    /// The design when the batch began: its one undo step, and where a failed batch returns.
-    start: Snapshot,
-    /// A command changed the design since the model was last evaluated.
-    dirty: bool,
-    /// Features that had failed already when the batch began.
-    failed: std::collections::HashSet<u64>,
 }
 
 /// A sketch changed by one frame of an interactive gesture (`live: true`).
@@ -1377,9 +1318,6 @@ impl Session {
             motion_traces: Default::default(),
             command_check: None,
             crash_journal: false,
-            deferred: None,
-            deferring: false,
-            light: false,
             #[cfg(feature = "usage-stats")]
             count_usage: false,
         }
@@ -2046,72 +1984,6 @@ impl Session {
             .filter(|id| *id != 0))
     }
 
-    /// Put off evaluating the model after every command until [`Session::evaluate_deferred`], for
-    /// a program that builds a large design in many commands (hundreds of
-    /// parts): each evaluation reads every feature again, so commands one by one cost the square
-    /// of their number. Commands that only add ([`deferrable`]: components, boxes, parameters,
-    /// metadata, and profiles drawn from numbers on an origin plane) run
-    /// on the model as it was and their features are evaluated together later;
-    /// any other command first evaluates what is pending, as it reads the model. The batch is
-    /// one undo step. A command that fails leaves the design as it was before that command, as
-    /// always, except an edit put off (a deferrable command that changes the design): that
-    /// returns the design to where the batch began and ends the batch. Refused while a batch, a
-    /// sketch edit or a live gesture is under way.
-    pub fn defer_evaluation(&mut self) -> Result<()> {
-        if self.deferred.is_some() || self.active_sketch.is_some() || self.live_links.is_some() {
-            return Err(EngineError::Other("evaluation cannot be put off now".into()));
-        }
-        if self.model.is_stale() {
-            self.refresh();
-        }
-        let start = Snapshot::of(self, "Build");
-        let failed = self.model.results.iter().filter(|r| r.error.is_some()).map(|r| r.id).collect();
-        self.deferred = Some(Deferred { start, dirty: false, failed });
-        Ok(())
-    }
-
-    /// Whether [`Session::defer_evaluation`] has put evaluation off.
-    pub fn evaluation_deferred(&self) -> bool {
-        self.deferred.is_some()
-    }
-
-    /// End a batch of [`Session::defer_evaluation`]: evaluate the design once and make the batch
-    /// one undo step. When a feature fails that did not fail when the batch began (one the batch
-    /// added, or one its changes broke), the design returns to where the batch began and the
-    /// error names that feature. Nothing to do without a batch.
-    pub fn evaluate_deferred(&mut self) -> Result<()> {
-        let Some(Deferred { start, dirty, failed }) = self.deferred.take() else { return Ok(()) };
-        if dirty || self.model.is_stale() {
-            self.refresh();
-            self.pin_body_names();
-        }
-        let failed = self.doc.features.iter().filter(|f| !failed.contains(&f.id)).find_map(|f| {
-            let error = self.model.result(f.id).and_then(|r| r.error.clone())?;
-            Some(format!("{}: {error}", f.name))
-        });
-        if let Some(error) = failed {
-            self.restore_deferred(start);
-            return Err(EngineError::Other(error));
-        }
-        if !Arc::ptr_eq(&self.doc, &start.doc) {
-            self.undo.push(start);
-            if self.undo.len() > MAX_UNDO {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
-        }
-        Ok(())
-    }
-
-    /// Back to where a batch of [`Session::defer_evaluation`] began.
-    fn restore_deferred(&mut self, start: Snapshot) {
-        self.doc = start.doc;
-        self.active_sketch = start.active_sketch;
-        self.pending_moves = start.pending_moves;
-        self.visibility = start.visibility;
-        self.refresh();
-    }
-
     /// Number of live-model evaluations after this session's initialization.
     /// Construction, other sessions and trial evaluations of cloned models are
     /// excluded. This is not a count of all geometry work. Reading the counter
@@ -2657,31 +2529,6 @@ impl Session {
         spec.allowed(self).map_err(|why| EngineError::Disabled(spec.id.to_string(), why))?;
         // Before anything changes: a refusal leaves the session exactly as it was.
         self.check_command(spec, params)?;
-        // A put-off evaluation is made before a command that is not one to put off (a nested
-        // command is part of the one that ran it).
-        if frames::Nested::idle()
-            && let Some(d) = &mut self.deferred
-        {
-            let defer = deferrable(spec.id, params) && live.is_none();
-            if d.dirty && !defer {
-                d.dirty = false;
-                self.refresh();
-                self.pin_body_names();
-            }
-            self.deferring = defer;
-        }
-        // An edit put off in a batch keeps no design of its own to go back to: holding one would
-        // make the edit copy the whole design (thousands of features) to change it. It goes
-        // back to where the batch began instead, should it fail (as the batch's evaluation
-        // does). Not while commands are journalled for crash recovery, which replays from them.
-        let light = self.deferring && spec.undoable && !crash::enabled() && frames::Nested::idle();
-        if light {
-            self.light = true;
-        }
-        let before_doc = match &self.deferred {
-            Some(d) if light => d.start.doc.clone(),
-            _ => self.doc.clone(),
-        };
         let open_drawing = self.open_drawing;
         let redo_watch_before = self.redo_watch.clone();
         let mut before = Snapshot {
@@ -2693,7 +2540,6 @@ impl Session {
                 cmd::Part::Open => cmd::delete::in_drawing(self, params),
                 cmd::Part::Model | cmd::Part::Any => false,
             }),
-            doc: before_doc,
             ..Snapshot::of(self, spec.label)
         };
         let ids = self.ids.clone();
@@ -2825,33 +2671,12 @@ impl Session {
         // Hiding or showing (`browser.visibility`) leaves the document alone, so it needs its own
         // test: it is saved with the design and has an undo step of its own.
         let hidden = self.visibility != before.visibility;
-        self.deferring = false;
-        if light {
-            self.light = false;
-        }
         // A Section Analysis is view state outside the design, with undo steps of its own.
         let sectioned = self.section_state() != section_before;
         if sectioned {
             before.section = Some(section_before);
         }
         let result = match r {
-            // A light edit that failed: the batch goes back to where it began and ends.
-            Err(e) if light => {
-                if let Some(Deferred { start, .. }) = self.deferred.take() {
-                    self.restore_deferred(start);
-                }
-                Err(e)
-            }
-            // In a batch of put-off evaluation the change waits for the batch's evaluation, and
-            // the batch is the undo step.
-            Ok((v, None)) if outermost && (changed || hidden) && self.deferred.is_some() => {
-                let v = if changed { self.with_created(spec.id, params, &before, v) } else { v };
-                if let Some(d) = &mut self.deferred {
-                    d.dirty = true;
-                }
-                self.revision += 1;
-                Ok(v)
-            }
             Ok((v, live_edit)) => {
                 let v = if changed { self.with_created(spec.id, params, &before, v) } else { v };
                 if changed && *self.doc != *before.doc && self.replacements == replacements && !matches!(spec.id, "file.save" | "file.save_as") {
@@ -3224,9 +3049,6 @@ impl Session {
             motion_traces: self.motion_traces.clone(),
             command_check: self.command_check.clone(),
             crash_journal: false,
-            deferred: None,
-            deferring: false,
-            light: false,
             #[cfg(feature = "usage-stats")]
             count_usage: false,
         }

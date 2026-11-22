@@ -21,7 +21,7 @@ fn schemas_and_the_key_check_agree() {
     );
     assert_keys(
         input_schema_for::<CreateJointParams>(),
-        &["a", "angle", "b", "flip", "joints", "limits", "name", "offset", "offset_x", "offset_y", "quiet", "type", "value", "values"],
+        &["a", "angle", "b", "flip", "limits", "name", "offset", "offset_x", "offset_y", "quiet", "type", "value", "values"],
     );
     assert_keys(input_schema_for::<EditConstraintParams>(), &["angle", "constraint", "flip", "name", "offset", "quiet", "suppressed", "type"]);
     assert_keys(input_schema_for::<CreateConstraintParams>(), &["a", "angle", "b", "flip", "name", "offset", "quiet", "type"]);
@@ -469,7 +469,6 @@ fn the_schemas_take_what_the_handlers_read() {
             (full.clone(), true),
             (with(json!({"values": [1, "w"], "limits": [[0, 90], null], "flip": true, "offset": "w", "angle": 5, "name": "J", "quiet": true})), true),
             (with(json!({"value": 3})), true),
-            (json!({"joints": [full.clone(), full.clone()], "quiet": true}), true),
             (
                 json!({"type": "revolute", "a": {"edge": {"x": 0, "y": 0, "z": 0}, "z": {"x": 0, "y": 0, "z": 1}}, "b": {"point": {"x": 1, "y": 2, "z": 3}}}),
                 true,

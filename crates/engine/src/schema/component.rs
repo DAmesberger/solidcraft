@@ -1725,10 +1725,6 @@ pub struct CopyKeys {
     #[serde(default, deserialize_with = "translate_key", skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Point3")]
     pub translate: Option<Point3>,
-    /// Instead of `translate`, and not with `in_place`: one copy per offset, in mm (1 to 100000
-    /// offsets), all in one step. The reply lists the new placements in `occurrences`, in order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub translations: Option<Vec<Point3>>,
     /// `false`: the copy has the selected transform within its parent. `true`: it sits where the
     /// selected placement is in the world, and `translate` is along the world axes. Default:
     /// `false`.
@@ -1766,12 +1762,8 @@ wraps_keys!(CopyParams, CopyKeys, "CopyParams");
 /// What `occurrence.copy` returns.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct CopyResult {
-    /// The new placement, by id (without `translations`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub occurrence: Option<u64>,
-    /// With `translations`: the new placements, by id, in the offsets' order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub occurrences: Vec<u64>,
+    /// The new placement, by id.
+    pub occurrence: u64,
     /// The component it places, by id.
     pub component: u64,
     /// In the warn parameter-check mode: what the call's parameters got wrong.
