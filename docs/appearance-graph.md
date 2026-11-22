@@ -1,9 +1,8 @@
 # Appearance graphs (design)
 
-Status: the first step of a series. This step adds the graph model only: its types, the node
-catalogue, validation, the cost model, the base response and the lowered form that later code
-generators read. Nothing saves, draws or edits a graph yet. Sections 1 to 5 describe the model;
-section 6 lists the later steps.
+Status: a series in steps. The graph model (its types, the node catalogue, validation, the cost
+model, the base response and the lowered form that later code generators read) and the design
+format (§4.2) are in. Nothing draws or edits a graph yet. Section 6 lists the later steps.
 
 ## 1. Why and what
 
@@ -271,6 +270,8 @@ interface input `label`.
 
 ## 4. Saved form
 
+### 4.1 A graph
+
 A graph is JSON (`appearance_graph::AppearanceGraph`):
 
 ```json
@@ -289,8 +290,48 @@ A graph is JSON (`appearance_graph::AppearanceGraph`):
   `layout` (editor-only canvas positions, which nothing in this model reads).
 - Unknown fields, kinds, params and inputs are refused rather than dropped.
 
-Where graphs live in a design, and the texture assets they name, come with the format step
-(§6). Reading a graph only parses it; validation checks it.
+Reading a graph only parses it; validation checks it.
+
+### 4.2 In a design
+
+Graphs live in a design-level table under `appearances`, and looks refer to them by id. Texture
+assets live beside them.
+
+```json
+"appearances": {
+  "graphs": {
+    "brushed-stainless": {"name": "Brushed stainless steel", "nodes": [ … ], "output": "surface"}
+  },
+  "textures": {
+    "9b2e…sha256": {"name": "logo.png", "format": "png", "width": 512, "height": 256, "data": "…base64…"}
+  },
+  "bodies": {
+    "Housing": {"name": "Brushed stainless steel", "color": [231, 227, 218], "opacity": 1,
+                "graph": "brushed-stainless", "values": {}}
+  }
+}
+```
+
+- `Look` gains `graph` (an id) and `values` (interface values by name), both omitted when
+  empty. `graph` and `pbr` exclude each other. `pbr` stays a valid, unchanged form; looks with
+  neither keep scalar shading.
+- `appearances.graphs` and `appearances.textures` are omitted when empty, so a design without
+  graphs saves the same JSON as before.
+- A look's `color` stays required. With a graph it is the colour a plain view, STEP/3MF colour
+  export and older readers show; it is the graph's base colour (§5.3) when a look takes a
+  graph.
+- A graph that can be see-through (`geometry_opacity` < 1 or `transmission_weight` > 0) needs
+  the look's `opacity` to be 1, as `pbr` looks do today.
+- **Textures:** a texture is keyed by the SHA-256 of its exact encoded bytes (PNG or JPEG). In a
+  container it is a `blobs/<sha256>.png|jpeg` part, as canvases are, so the container format does
+  not change; in a plain JSON design `data` holds base64. Textures nothing references are dropped
+  on save. Graphs are design data and stay until deleted, even when no look uses them.
+- Reading checks everything: each texture's hash, header and size, each graph's bounds,
+  validation and texture references, the design's decoded-texture budget, and every look's
+  graph, values and opacity rule. Unknown fields are refused rather than dropped.
+- The change is one pending format file, `appearance-graphs.rs`. It has no step: older designs
+  are not rewritten. The last release warns about the newer format number, shows each look's
+  `color`, and keeps the tables it cannot read when it saves.
 
 ## 5. What the GPU back ends read
 
@@ -335,11 +376,10 @@ and the oracle both are checked against: product code never evaluates a graph on
 
 Each step lands on its own and changes no default:
 
-1. Graphs and texture assets in the design format (one pending format file).
-2. Commands to create, edit, validate and assign graphs, with schemas.
-3. A shared WGSL shading library for the viewport and the path tracer, frames unchanged.
-4. Graph looks drawn in the viewport, in steps (constant graphs; patterns and projections;
+1. Commands to create, edit, validate and assign graphs, with schemas.
+2. A shared WGSL shading library for the viewport and the path tracer, frames unchanged.
+3. Graph looks drawn in the viewport, in steps (constant graphs; patterns and projections;
    images; coat, anisotropy and transmission).
-5. Graph looks in the GPU path tracer.
-6. A graph section in the Appearance editor.
-7. Graphs as entries in appearance libraries.
+4. Graph looks in the GPU path tracer.
+5. A graph section in the Appearance editor.
+6. Graphs as entries in appearance libraries.
