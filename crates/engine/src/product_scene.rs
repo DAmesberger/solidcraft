@@ -40,12 +40,12 @@ pub fn extract_where(s: &Session, keep: impl Fn(&ModelBody) -> bool) -> Result<P
                     face: u32::try_from(face).map_err(|_| EngineError::Other("render face index exceeds the mesh contract".into()))?,
                     color: look.color,
                     opacity: look.opacity.clamp(0.0, 1.0),
-                    surface: look.opaque_surface().map_err(|e| EngineError::Other(e.to_string()))?,
+                    surface: look_surface(s, &look)?,
                     transmission: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let surface = s.doc.model_body_look(body).map(|l| l.opaque_surface()).transpose().map_err(|e| EngineError::Other(e.to_string()))?.flatten();
+        let surface = s.doc.model_body_look(body).map(|l| look_surface(s, &l)).transpose()?.flatten();
         scene.meshes.try_reserve(1).map_err(|_| EngineError::Other("could not reserve captured render bodies".into()))?;
         scene.meshes.push(ProductMesh {
             name: body.name.clone(),
@@ -58,6 +58,22 @@ pub fn extract_where(s: &Session, keep: impl Fn(&ModelBody) -> bool) -> Result<P
         });
     }
     Ok(scene)
+}
+
+/// A look's opaque response: its `pbr`, or for a look naming an appearance graph, the graph's base
+/// response with the look's values (docs/appearance-graph.md §2): what every renderer without the
+/// graph's own code draws, and what the path back end's bound bodies keep as their surface.
+fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_viewport::surface::OpaqueSurface>> {
+    let Some(id) = &look.graph else { return look.opaque_surface().map_err(|e| EngineError::Other(e.to_string())) };
+    let fail = |e: solidcraft_viewport::appearance_graph::GraphError| EngineError::Other(format!("appearance graph `{}`: {e}", id.as_str()));
+    let graph = s
+        .doc
+        .appearances
+        .tables
+        .graphs
+        .get(id)
+        .ok_or_else(|| EngineError::Other(format!("a look names missing appearance graph `{}`", id.as_str())))?;
+    solidcraft_viewport::appearance_graph::look_base_sample(graph, &look.values).map(|s| Some(s.opaque)).map_err(fail)
 }
 
 /// For each of `scene`'s meshes, the shared mesh it is drawn from and the placement that moves

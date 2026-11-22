@@ -164,6 +164,13 @@ pub struct MaterialCreateParams {
     #[serde(default, deserialize_with = "color_or_clear")]
     #[schemars(schema_with = "color_schema")]
     pub color: Option<Option<ColorParam>>,
+    /// An appearance graph's id (`appearance.graph.list`), for a look that names one: no library
+    /// `appearance` and no `pbr`.
+    #[serde(default)]
+    pub graph: Option<String>,
+    /// Values for the graph's interface inputs, as `appearance.assign` takes them.
+    #[serde(default)]
+    pub values: Option<Value>,
     /// The look's opacity: needs `appearance` or `color`. Default: 1, or the appearance's own.
     #[serde(default, deserialize_with = "some_opacity")]
     #[schemars(with = "Opacity")]
@@ -197,6 +204,13 @@ pub struct MaterialEditParams {
     #[serde(default, deserialize_with = "color_or_clear")]
     #[schemars(schema_with = "color_schema")]
     pub color: Option<Option<ColorParam>>,
+    /// An appearance graph's id (`appearance.graph.list`), for a new look that names one: no library
+    /// `appearance` and no `pbr`.
+    #[serde(default)]
+    pub graph: Option<String>,
+    /// Values for the graph's interface inputs, as `appearance.assign` takes them.
+    #[serde(default)]
+    pub values: Option<Value>,
     /// The new look's opacity: needs `appearance` or `color`.
     #[serde(default, deserialize_with = "some_opacity")]
     #[schemars(with = "Opacity")]

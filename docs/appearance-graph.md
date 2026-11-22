@@ -2,7 +2,8 @@
 
 Status: a series in steps. The graph model (its types, the node catalogue, validation, the cost
 model, the base response and the lowered form that later code generators read) and the design
-format (§4.2) are in. Nothing draws or edits a graph yet. Section 6 lists the later steps.
+format (§4.2) and the commands (§6) are in. Nothing draws a graph yet. Section 7 lists the later
+steps.
 
 ## 1. Why and what
 
@@ -372,14 +373,49 @@ Both GPU back ends, the viewport and the GPU path tracer, will evaluate the same
 test-only reference (`appearance_graph::reference`, `cfg(test)`) is an f64 interpreter of the IR
 and the oracle both are checked against: product code never evaluates a graph on the CPU.
 
-## 6. Later steps
+## 6. Commands
+
+Every command has input and output schemas, never opens a dialog, and is the same for the UI,
+the CLI and MCP. A command that changes the design is one undo step and atomic: it builds the
+whole change, checks it, and leaves the design as it was when anything is refused.
+
+| Command | Input | Output |
+|---|---|---|
+| `appearance.graph.nodes` (read-only) | – | The node catalogue: kinds, ports, types, ranges, defaults, params, costs and its version |
+| `appearance.graph.validate` (read-only) | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node, port, code, message}], note?}` |
+| `appearance.graph.create` | `{name, id?, graph? \| from?: "standard" \| a saved look}` | `{id, cost}` |
+| `appearance.graph.convert` | `{look, id?, name?, scope?}`: the look's one-node graph (§3.7), and every override that is exactly that look names it | `{id, cost, count}` |
+| `appearance.graph.set` | `{id, graph}` (a whole replacement) | `{id, cost}` |
+| `appearance.graph.edit` | `{id, ops: [add_node \| remove_node \| connect \| disconnect \| set_input \| set_param \| set_interface]}`, all applied or none | `{id, cost}` |
+| `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with its cost and uses / `[{id, name, uses, source?}]` |
+| `appearance.graph.duplicate` | `{id, new_id?, name?}` | `{id, cost}` |
+| `appearance.graph.delete` | `{id, replace_with?}`; refused while looks use the graph, unless `replace_with` is given | `{replaced}` |
+| `appearance.texture.add` | `{path \| data_base64, name?}` (PNG or JPEG) | `{texture, width, height}` |
+| `appearance.texture.list` (read-only) | – | `[{texture, name, width, height, bytes, uses}]` |
+
+`appearance.assign`, `appearance.paint`, `appearance.replace` and `material.create`/`edit`
+also take `graph` and `values`: a look that names a graph and sets its interface inputs. Its
+`color` becomes the graph's base colour with those values (§5.3), and every command that changes
+a graph recolours the looks that use it in the same step. A heavier-than-typical graph is
+accepted with a `note` (§3.6). Render scenes show a graph look by its base response until the GPU
+back ends draw it.
+
+Example (MCP or `solidcraft-cli run`):
+
+```json
+{"command": "appearance.graph.create", "params": {"id": "candy-red", "name": "Candy red", "graph": { … }}}
+{"command": "appearance.graph.edit", "params": {"id": "candy-red", "ops": [
+  {"op": "set_input", "node": "surface", "port": "coat_roughness", "value": 0.08}]}}
+{"command": "appearance.assign", "params": {"bodies": ["Housing"], "graph": "candy-red"}}
+```
+
+## 7. Later steps
 
 Each step lands on its own and changes no default:
 
-1. Commands to create, edit, validate and assign graphs, with schemas.
-2. A shared WGSL shading library for the viewport and the path tracer, frames unchanged.
-3. Graph looks drawn in the viewport, in steps (constant graphs; patterns and projections;
+1. A shared WGSL shading library for the viewport and the path tracer, frames unchanged.
+2. Graph looks drawn in the viewport, in steps (constant graphs; patterns and projections;
    images; coat, anisotropy and transmission).
-4. Graph looks in the GPU path tracer.
-5. A graph section in the Appearance editor.
-6. Graphs as entries in appearance libraries.
+3. Graph looks in the GPU path tracer.
+4. A graph section in the Appearance editor.
+5. Graphs as entries in appearance libraries.
