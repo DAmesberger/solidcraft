@@ -415,7 +415,7 @@
   {
    "command": "sketch.create",
    "params": {
-    "name": "Epoxy box profile",
+    "name": "Gloss black box profile",
     "plane": {
      "origin": [
       -48,
@@ -458,8 +458,8 @@
    "params": {
     "distance": 26,
     "operation": "new",
-    "body_name": "Epoxy box",
-    "name": "Epoxy box"
+    "body_name": "Gloss black box",
+    "name": "Gloss black box"
    }
   },
   {
@@ -717,10 +717,10 @@
   {
    "command": "appearance.graph.create",
    "params": {
-    "id": "black-epoxy",
-    "name": "Black epoxy, clear coated",
+    "id": "gloss-black",
+    "name": "Gloss black plastic, clear coated",
     "graph": {
-     "name": "Black epoxy, clear coated",
+     "name": "Gloss black plastic, clear coated",
      "nodes": [
       {
        "id": "p",
@@ -1072,10 +1072,10 @@
    "command": "appearance.assign",
    "params": {
     "bodies": [
-     "Epoxy box"
+     "Gloss black box"
     ],
-    "graph": "black-epoxy",
-    "name": "Black epoxy, clear coated"
+    "graph": "gloss-black",
+    "name": "Gloss black plastic, clear coated"
    }
   },
   {

@@ -68,12 +68,12 @@ The bar is not met yet. In the modelling view's Realistic frames:
   - the brushed lid's top reads 246–251;
   - the Sample Plate's top reads 245 in the isometric view, where the bar for the Sample Plate is
     40–220 (its side, 106, passes);
-  - the black epoxy box's faces sit at 7–18.
+  - the gloss black box's faces sit at 7–18.
 - Gradients fail on planar metal faces under 12/255: the lid's faces, the plate's narrow sides and
   boss ring, and the cylinder's top from the low back view.
 
 In the Render preview's Realistic frames, graph looks draw only as their base response: there is
-no weave, label or transmission. From the low back view the epoxy box is 44 % crushed, the
+no weave, label or transmission. From the low back view the gloss black box is 44 % crushed, the
 carbon plate 7 % crushed and the brushed lid 1.2 % clipped.
 
 `showcase-metrics.jsonl` holds every number: per part, and per face of at least 400 pixels.

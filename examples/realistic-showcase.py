@@ -193,8 +193,8 @@ def graphs(label_sha):
         ],
         "output": "surface",
     }
-    epoxy = {
-        "name": "Black epoxy, clear coated",
+    gloss_black = {
+        "name": "Gloss black plastic, clear coated",
         "nodes": [
             {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
             {"id": "edm", "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 2},
@@ -255,19 +255,19 @@ def graphs(label_sha):
         ],
         "output": "surface",
     }
-    return {"brushed-aluminium": brushed, "black-epoxy": epoxy, "carbon-twill": carbon, "clear-silicone": silicone,
+    return {"brushed-aluminium": brushed, "gloss-black": gloss_black, "carbon-twill": carbon, "clear-silicone": silicone,
             "red-abs": abs_plastic}
 
 
 # Placement (centres on the floor, mm). Back row: Sample Plate, brushed lid, carbon plate.
-# Front row: polished steel cylinder and sphere, coated epoxy box, the red ABS pair (uncoated
+# Front row: polished steel cylinder and sphere, coated gloss black box, the red ABS pair (uncoated
 # left, clear coated right, side by side), silicone dome.
 SAMPLE = (-150, 30)  # the Sample Plate's corner; it is 80 x 50 mm
 LID = (-10, 55)
 PLATE = (115, 50)
 CYLINDER = (-152, -45)
 SPHERE = (-108, -45)
-EPOXY = (-48, -45)
+GLOSS_BLACK = (-48, -45)
 PUCKS = ((4, -45), (42, -45))  # uncoated, coated
 DOME = (104, -45)
 PUCK_NAMES = ("ABS puck", "ABS puck, coated")
@@ -319,7 +319,7 @@ def scene(label_sha):
     s.rounded_block("Carbon plate", PLATE, (110, 70, 4), 6, 0)
     s.cmd("solid.cylinder", body_name="Steel cylinder", base=[CYLINDER[0], CYLINDER[1], 0], radius=15, height=40, axis="Z", operation="new")
     s.cmd("solid.sphere", body_name="Steel sphere", center=[SPHERE[0], SPHERE[1], 18], radius=18, operation="new")
-    s.rounded_block("Epoxy box", EPOXY, (54, 40, 26), 7, 4)
+    s.rounded_block("Gloss black box", GLOSS_BLACK, (54, 40, 26), 7, 4)
     for name, (px, py) in zip(PUCK_NAMES, PUCKS):
         s.cmd("solid.cylinder", body_name=name, base=[px, py, 0], radius=16, height=14, axis="Z", operation="new")
         s.cmd("solid.fillet", edges=[[px + 16, py, 14]], radius=9)
@@ -334,7 +334,7 @@ def scene(label_sha):
     s.cmd("appearance.assign", bodies=["Brushed lid"], graph="brushed-aluminium", name="Brushed aluminium")
     s.cmd("appearance.assign", bodies=["Steel cylinder", "Steel sphere"], color="#c4c7cb",
           pbr={"metallic": 1, "roughness": 0.08, "dielectric_ior": 1.5}, name="Polished steel")
-    s.cmd("appearance.assign", bodies=["Epoxy box"], graph="black-epoxy", name="Black epoxy, clear coated")
+    s.cmd("appearance.assign", bodies=["Gloss black box"], graph="gloss-black", name="Gloss black plastic, clear coated")
     s.cmd("appearance.assign", bodies=["Carbon plate"], graph="carbon-twill", values={"label": {"texture": label_sha}},
           name="Carbon twill, labelled")
     s.cmd("appearance.assign", bodies=[PUCK_NAMES[0]], graph="red-abs", values={"coat": 0}, name="Red ABS")

@@ -9,7 +9,7 @@ SolidCraft draws a design in one of two ways:
 
 The design is the same in both views; only the lighting of the faces changes. A
 **material graph** describes how a surface looks in the Realistic view: brushed metal, a
-glossy coat, a woven laminate, a printed mark.
+glossy coat, a woven glass fibre, a printed mark.
 
 ## The Realistic view
 
@@ -87,15 +87,15 @@ library. The library has:
 
 | Material | Appearance inputs | What it shows |
 |---|---|---|
-| Woven laminate | colour, strength | A fine plain glass-cloth weave in the colour and relief; fainter on cut edges |
-| Gloss coat over woven laminate | colour, coat colour, strength | The weave seen through a tinted gloss coat with a slight orange peel |
+| Woven glass fibre | colour, strength | A fine plain glass-cloth weave in the colour and relief; fainter on cut edges |
+| Gloss coat over woven glass fibre | colour, coat colour, strength | The weave seen through a tinted gloss coat with a slight orange peel |
 | Gloss paint, orange peel | colour | Pigment under a clear gloss coat whose reflections ripple gently |
 | Printed ink | colour, strength | Matte ink with a fine grain in its colour and relief |
-| Brushed nickel silver | – | Brushed metal with stretched, directional highlights |
-| Laser-etched nickel silver | mark (an image) | Satin metal with a dark, pitted mark where the image is opaque, on a 12 × 8 mm lid |
-| Tinted gloss coat over copper | coat colour | Copper seen through a tinted gloss coat |
-| Black epoxy, clear coated | – | A finely textured black moulding under a clear lacquer |
-| Printed sleeve with stripe | sleeve colour, print (an image) | A plastic sleeve with a stripe and printed text, wrapped around the Z axis |
+| Brushed stainless steel | – | Brushed metal with stretched, directional highlights |
+| Laser-etched stainless steel | mark (an image) | Satin metal with a dark, pitted mark where the image is opaque, on a 12 × 8 mm lid |
+| Candy coat over polished aluminium | coat colour | Polished aluminium seen through a tinted gloss coat |
+| Gloss black plastic, clear coated | – | A finely textured black moulding under a clear lacquer |
+| Printed label with stripe | label colour, print (an image) | A plastic label with a stripe and printed text, wrapped around the Z axis |
 
 The values are visual estimates, not measured optical data. Details, and how these graphs
 are built: [built-in material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-material-graphs.md).

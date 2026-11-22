@@ -26,15 +26,15 @@ library afterwards.
 
 | Graph id | Name | Interface | Cost (units of 2000) |
 |---|---|---|---|
-| `glass-fibre-weave` | Woven laminate | `color` (color3), `strength` (float, 1) | 585 |
-| `coated-glass-fibre-weave` | Gloss coat over woven laminate | `color`, `coat_color` (color3), `strength` (0.5) | 572 |
+| `glass-fibre-weave` | Woven glass fibre | `color` (color3), `strength` (float, 1) | 585 |
+| `coated-glass-fibre-weave` | Gloss coat over woven glass fibre | `color`, `coat_color` (color3), `strength` (0.5) | 572 |
 | `orange-peel-gloss` | Gloss paint, orange peel | `color` | 378 |
 | `printed-ink` | Printed ink | `color`, `strength` (1) | 384 |
-| `brushed-stainless` | Brushed nickel silver | – | 39 |
-| `laser-etched-stainless` | Laser-etched nickel silver | `mark` (texture) | 208 (1 sample) |
-| `candy-coat` | Tinted gloss coat over copper | `coat_color` | 136 |
-| `gloss-black-clear-coat` | Black epoxy, clear coated | – | 242 |
-| `printed-label` | Printed sleeve with stripe | `sleeve` (color3), `print` (texture) | 31 (1 sample) |
+| `brushed-stainless` | Brushed stainless steel | – | 39 |
+| `laser-etched-stainless` | Laser-etched stainless steel | `mark` (texture) | 208 (1 sample) |
+| `candy-coat` | Candy coat over polished aluminium | `coat_color` | 136 |
+| `gloss-black-clear-coat` | Gloss black plastic, clear coated | – | 242 |
+| `printed-label` | Printed label with stripe | `label` (color3), `print` (texture) | 31 (1 sample) |
 
 A texture input has no default: until a look binds an image (`values: {"mark": {"texture":
 sha256}}`, or a runtime override, §7.3), the image node reads its default colour with alpha 0,
@@ -45,7 +45,7 @@ so the mark or print does not show.
 The renderer branch had four fixed surface patterns (`SurfacePattern`). They are now these
 graphs, built from catalogue nodes only, so nothing in the renderer knows them.
 
-- **Woven laminate** (was `Weave`). A plain `pattern.weave`, pitch 0.577 × 0.819 mm (a coarse
+- **Woven glass fibre** (was `Weave`). A plain `pattern.weave`, pitch 0.577 × 0.819 mm (a coarse
   plain-weave glass cloth of 44 × 31 yarns per inch), seven fibres per yarn at contrast 0.3,
   on a `texcoord.triplanar` in object space with `scale_mm` (1, 1, 0.173), so the weave's
   period up through an edge is a 0.173 mm ply. The weave's value is remapped to an albedo
@@ -59,7 +59,7 @@ graphs, built from catalogue nodes only, so nothing in the renderer knows them.
   `normal.from_height` at 6 µm, so the relief is 6 µm and 1 µm. It feeds
   `geometry_coat_normal` of a clear coat (weight 1, roughness 0.08, IOR 1.5) over the
   pigment, whose `specular_ior` is 1: the coat is the only interface.
-- **Gloss coat over woven laminate** (was `PeelOverWeave`). The weave of the first graph
+- **Gloss coat over woven glass fibre** (was `PeelOverWeave`). The weave of the first graph
   drives only the albedo (no base relief), under a tinted coat (`coat_color`, roughness 0.12,
   IOR 1.52) that carries the orange peel. `strength` is the weave's show-through, 0.5 by
   default.
@@ -75,19 +75,19 @@ Every pattern fades to its mean as its period approaches the pixel footprint, as
 The other five are the worked examples of §3.8, under generic names and with an interface
 where one is natural:
 
-- **Brushed nickel silver**: `pattern.brushed` along object X (40 lines per mm, 4 mm
+- **Brushed stainless steel**: `pattern.brushed` along object X (40 lines per mm, 4 mm
   streaks) drives roughness 0.41–0.49 and a ±3 % tint; anisotropy 0.6 along the brushing
   tangent.
-- **Laser-etched nickel silver**: a `surface.mix` of plain metal and a dark, rough, pitted
+- **Laser-etched stainless steel**: a `surface.mix` of plain metal and a dark, rough, pitted
   metal (cellular noise at 0.03 mm, 3 µm relief), masked by the alpha of the `mark` image on
   a 12 × 8 mm planar frame centred on the object origin.
-- **Tinted gloss coat over copper**: copper (metal, roughness 0.35) under a tinted gloss coat
+- **Candy coat over polished aluminium**: polished aluminium (metal, roughness 0.35) under a tinted gloss coat
   with orange peel; `coat_color` sets the tint (green by default).
-- **Black epoxy, clear coated**: 3D cellular noise at 0.04 mm (an EDM texture) varies the
+- **Gloss black plastic, clear coated**: 3D cellular noise at 0.04 mm (an EDM texture) varies the
   roughness 0.40–0.52 under a clear coat (roughness 0.08).
-- **Printed sleeve with stripe**: a cylindrical projection about object Z (radius 4 mm,
+- **Printed label with stripe**: a cylindrical projection about object Z (radius 4 mm,
   unwrapped by angle) lays a stripe between 2.6 and 2.62 rad and the `print` image's alpha
-  as a light ink over the `sleeve` colour.
+  as a light ink over the `label` colour.
 
 ## Starter and Selene bindings
 
@@ -136,7 +136,7 @@ examples/material-graphs.json --out material-graphs.sc`): a row of primitive par
 eight of the built-in graphs by `library.apply` from `builtin:materials`, two of them with
 their own interface colour through `appearance.assign`, and a brushed Selene housing
 (`SELENE-AP-007`) through `render.library.appearance.apply`, which shows the binding table's
-anisotropy. The sleeve stands on the origin, the axis of its cylindrical projection. Open the
+anisotropy. The label stands on the origin, the axis of its cylindrical projection. Open the
 result and press Shift+P to see it in the Realistic view.
 
 The script names each entry by its id and revision, which follow from the graph's content: a

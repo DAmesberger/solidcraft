@@ -340,7 +340,7 @@ fn earlier_selected_cylinder_emboss_keeps_source_frame_after_transfer_and_edit()
     let mut s = Session::default();
     let source = run(&mut s, "component.create", json!({"name":"Source","grounded":false}));
     let occurrence = source["occurrence"].as_u64().unwrap();
-    run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Sleeve"}));
+    run(&mut s, "solid.cylinder", json!({"radius":10,"height":20,"body_name":"Label"}));
     run(&mut s, "occurrence.move", json!({"occurrence":occurrence,"translate":[30,0,0],"capture":true}));
     run(&mut s, "sketch.create", json!({"name":"Badge","plane":{"origin":[30,10,0],"x_dir":[-1,0,0],"y_dir":[0,0,1]}}));
     run(&mut s, "sketch.rectangle.two_point", json!({"p0":[-2,5],"p1":[2,10]}));
@@ -352,7 +352,7 @@ fn earlier_selected_cylinder_emboss_keeps_source_frame_after_transfer_and_edit()
     let to = destination["component"].as_u64().unwrap();
     let destination_occurrence = destination["occurrence"].as_u64().unwrap();
     run(&mut s, "occurrence.move", json!({"occurrence":destination_occurrence,"translate":[0,40,0],"axis":[1,0,0],"angle":90,"capture":true}));
-    run(&mut s, "component.move_bodies", json!({"component":to,"bodies":["Sleeve"]}));
+    run(&mut s, "component.move_bodies", json!({"component":to,"bodies":["Label"]}));
     assert!(s.doc.features.iter().all(|feature| s.model.result(feature.id).is_some_and(|result| result.error.is_none())));
     let mut reopened = Session { doc: solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap().into(), ..Session::default() };
     reopened.refresh();

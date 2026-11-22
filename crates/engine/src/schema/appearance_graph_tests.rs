@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::schema::ParamCheck;
 
-const COPPER: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json");
+const STEEL: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json");
 const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
 const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/brushed-stainless.json");
 
@@ -71,48 +71,48 @@ fn validation_reports_without_touching_the_design() {
 #[test]
 fn graphs_live_in_the_design_and_each_change_is_one_undo_step() {
     let mut s = strict();
-    let created = s.execute("appearance.graph.create", &json!({"name": "Brushed Nickel/Silver"})).unwrap();
-    assert_eq!(created["id"], "brushed-stainless");
+    let created = s.execute("appearance.graph.create", &json!({"name": "Brushed Stainless/Steel"})).unwrap();
+    assert_eq!(created["id"], "brushed-stainless-steel");
     assert!(created["cost"].is_u64());
     // `from: "standard"` is the default graph; an id is taken once.
-    let standard = s.execute("appearance.graph.create", &json!({"name": "Brushed Nickel/Silver", "from": "standard"})).unwrap();
-    assert_eq!(standard["id"], "brushed-stainless-2");
-    assert!(s.execute("appearance.graph.create", &json!({"id": "brushed-stainless", "name": "Again"})).is_err());
-    s.execute("appearance.graph.create", &json!({"id": "copper", "name": "Copper", "graph": fixture(COPPER)})).unwrap();
+    let standard = s.execute("appearance.graph.create", &json!({"name": "Brushed Stainless/Steel", "from": "standard"})).unwrap();
+    assert_eq!(standard["id"], "brushed-stainless-steel-2");
+    assert!(s.execute("appearance.graph.create", &json!({"id": "brushed-stainless-steel", "name": "Again"})).is_err());
+    s.execute("appearance.graph.create", &json!({"id": "steel", "name": "Steel", "graph": fixture(STEEL)})).unwrap();
     assert_eq!(s.doc.appearances.tables.graphs.len(), 3);
     assert_eq!(s.undo.len(), 3);
 
     let list = s.execute("appearance.graph.list", &json!({})).unwrap();
     let ids: Vec<&str> = list["graphs"].as_array().unwrap().iter().map(|g| g["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["brushed-stainless", "brushed-stainless-2", "copper"]);
-    let got = s.execute("appearance.graph.get", &json!({"id": "copper"})).unwrap();
-    assert_eq!(got["graph"]["name"], "Copper", "create names the graph");
+    assert_eq!(ids, ["brushed-stainless-steel", "brushed-stainless-steel-2", "steel"]);
+    let got = s.execute("appearance.graph.get", &json!({"id": "steel"})).unwrap();
+    assert_eq!(got["graph"]["name"], "Steel", "create names the graph");
     assert_eq!(got["uses"], 0);
 
-    s.execute("appearance.graph.set", &json!({"id": "brushed-stainless", "graph": fixture(BRUSHED)})).unwrap();
+    s.execute("appearance.graph.set", &json!({"id": "brushed-stainless-steel", "graph": fixture(BRUSHED)})).unwrap();
     assert_eq!(s.doc.appearances.tables.graphs.values().next().unwrap().nodes.len(), fixture(BRUSHED)["nodes"].as_array().unwrap().len());
     let edited = s
         .execute(
             "appearance.graph.edit",
-            &json!({"id": "copper", "ops": [
+            &json!({"id": "steel", "ops": [
                 {"op": "set_input", "node": "surface", "port": "coat_weight", "value": 1},
                 {"op": "set_input", "node": "surface", "port": "coat_roughness", "value": 0.1}]}),
         )
         .unwrap();
-    assert_eq!(edited["id"], "copper");
-    let copy = s.execute("appearance.graph.duplicate", &json!({"id": "copper"})).unwrap();
-    assert_eq!(copy["id"], "copper-copy");
-    assert_eq!(s.doc.appearances.tables.graphs[&gid("copper-copy")].name, "Copper copy");
-    s.execute("appearance.graph.delete", &json!({"id": "copper-copy"})).unwrap();
+    assert_eq!(edited["id"], "steel");
+    let copy = s.execute("appearance.graph.duplicate", &json!({"id": "steel"})).unwrap();
+    assert_eq!(copy["id"], "steel-copy");
+    assert_eq!(s.doc.appearances.tables.graphs[&gid("steel-copy")].name, "Steel copy");
+    s.execute("appearance.graph.delete", &json!({"id": "steel-copy"})).unwrap();
     assert_eq!(s.undo.len(), 7);
 
     // Undo walks back one command at a time.
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(s.doc.appearances.tables.graphs.contains_key(&gid("copper-copy")));
+    assert!(s.doc.appearances.tables.graphs.contains_key(&gid("steel-copy")));
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(!s.doc.appearances.tables.graphs.contains_key(&gid("copper-copy")));
+    assert!(!s.doc.appearances.tables.graphs.contains_key(&gid("steel-copy")));
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!(!s.doc.appearances.tables.graphs[&gid("copper")].nodes[0].inputs.contains_key("coat_weight"), "both edits undo together");
+    assert!(!s.doc.appearances.tables.graphs[&gid("steel")].nodes[0].inputs.contains_key("coat_weight"), "both edits undo together");
     for _ in 0..4 {
         s.execute("edit.undo", &json!({})).unwrap();
     }
@@ -131,46 +131,46 @@ fn gid(id: &str) -> solidcraft_doc::appearance_graph::GraphId {
 #[test]
 fn refused_changes_leave_everything_unchanged() {
     let mut s = with_body();
-    s.execute("appearance.graph.create", &json!({"id": "copper", "name": "Copper", "graph": fixture(COPPER)})).unwrap();
-    s.execute("appearance.assign", &json!({"bodies": ["Can"], "graph": "copper"})).unwrap();
+    s.execute("appearance.graph.create", &json!({"id": "steel", "name": "Steel", "graph": fixture(STEEL)})).unwrap();
+    s.execute("appearance.assign", &json!({"bodies": ["Can"], "graph": "steel"})).unwrap();
     let before = state(&s);
     let refused: Vec<(&str, Value)> = vec![
         // The last edit is out of range: none of them applies.
         (
             "appearance.graph.edit",
-            json!({"id": "copper", "ops": [
+            json!({"id": "steel", "ops": [
                 {"op": "set_input", "node": "surface", "port": "coat_weight", "value": 1},
                 {"op": "set_input", "node": "surface", "port": "specular_roughness", "value": 7}]}),
         ),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": [{"op": "set_input", "node": "nope", "port": "base_color", "value": 1}]})),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": [{"op": "add_node", "node": "n", "kind": "shader.custom"}]})),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": [{"op": "remove_node", "node": "surface"}]})),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": [{"op": "disconnect", "node": "surface", "port": "base_color"}]})),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": [{"op": "connect", "from": "ghost", "node": "surface", "port": "base_color"}]})),
-        ("appearance.graph.edit", json!({"id": "copper", "ops": []})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": [{"op": "set_input", "node": "nope", "port": "base_color", "value": 1}]})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": [{"op": "add_node", "node": "n", "kind": "shader.custom"}]})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": [{"op": "remove_node", "node": "surface"}]})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": [{"op": "disconnect", "node": "surface", "port": "base_color"}]})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": [{"op": "connect", "from": "ghost", "node": "surface", "port": "base_color"}]})),
+        ("appearance.graph.edit", json!({"id": "steel", "ops": []})),
         ("appearance.graph.edit", json!({"id": "missing", "ops": [{"op": "remove_node", "node": "n"}]})),
-        ("appearance.graph.set", json!({"id": "copper", "graph": {"name": "x", "nodes": [], "output": "s"}})),
-        ("appearance.graph.set", json!({"id": "missing", "graph": fixture(COPPER)})),
+        ("appearance.graph.set", json!({"id": "steel", "graph": {"name": "x", "nodes": [], "output": "s"}})),
+        ("appearance.graph.set", json!({"id": "missing", "graph": fixture(STEEL)})),
         // A texture the design does not hold.
         (
             "appearance.graph.edit",
-            json!({"id": "copper", "ops": [{"op": "set_interface", "input": {"name": "mark", "type": "texture", "default": {"texture": "a".repeat(64)}}}]}),
+            json!({"id": "steel", "ops": [{"op": "set_interface", "input": {"name": "mark", "type": "texture", "default": {"texture": "a".repeat(64)}}}]}),
         ),
         ("appearance.graph.create", json!({"name": ""})),
         ("appearance.graph.create", json!({"name": "x", "id": "Bad Id"})),
-        ("appearance.graph.create", json!({"name": "x", "graph": fixture(COPPER), "from": "standard"})),
+        ("appearance.graph.create", json!({"name": "x", "graph": fixture(STEEL), "from": "standard"})),
         ("appearance.graph.create", json!({"name": "x", "from": "chrome"})),
         // Used by a look, and no replacement named.
-        ("appearance.graph.delete", json!({"id": "copper"})),
-        ("appearance.graph.delete", json!({"id": "copper", "replace_with": "copper"})),
-        ("appearance.graph.duplicate", json!({"id": "copper", "new_id": "copper"})),
+        ("appearance.graph.delete", json!({"id": "steel"})),
+        ("appearance.graph.delete", json!({"id": "steel", "replace_with": "steel"})),
+        ("appearance.graph.duplicate", json!({"id": "steel", "new_id": "steel"})),
         ("appearance.texture.add", json!({"data_base64": "!!!"})),
         ("appearance.texture.add", json!({"data_base64": solidcraft_doc::canvas::base64_encode(b"GIF89a not a png")})),
         ("appearance.texture.add", json!({"data_base64": png_base64(), "path": "/tmp/x.png"})),
         ("appearance.texture.add", json!({})),
         ("appearance.assign", json!({"bodies": ["Can"], "graph": "missing"})),
-        ("appearance.assign", json!({"bodies": ["Can"], "graph": "copper", "pbr": {"metallic": 1, "roughness": 0.3, "dielectric_ior": 1.5}})),
-        ("appearance.assign", json!({"bodies": ["Can"], "graph": "copper", "values": {"undeclared": 1}})),
+        ("appearance.assign", json!({"bodies": ["Can"], "graph": "steel", "pbr": {"metallic": 1, "roughness": 0.3, "dielectric_ior": 1.5}})),
+        ("appearance.assign", json!({"bodies": ["Can"], "graph": "steel", "values": {"undeclared": 1}})),
         ("appearance.assign", json!({"bodies": ["Can"], "values": {"a": 1}, "color": [1, 2, 3]})),
     ];
     for (id, params) in refused {
@@ -182,29 +182,29 @@ fn refused_changes_leave_everything_unchanged() {
 #[test]
 fn assigned_graph_looks_take_the_graphs_colour_and_follow_its_edits() {
     let mut s = with_body();
-    s.execute("appearance.graph.create", &json!({"id": "copper", "name": "Copper", "graph": fixture(COPPER)})).unwrap();
-    let assigned = s.execute("appearance.assign", &json!({"bodies": ["Can"], "graph": "copper", "color": [1, 1, 1]})).unwrap();
+    s.execute("appearance.graph.create", &json!({"id": "steel", "name": "Steel", "graph": fixture(STEEL)})).unwrap();
+    let assigned = s.execute("appearance.assign", &json!({"bodies": ["Can"], "graph": "steel", "color": [1, 1, 1]})).unwrap();
     let look = &s.doc.appearances.bodies["Can"];
-    // The fixture's base colour is `{"srgb8": [204, 122, 80]}`: exactly the look's colour.
-    assert_eq!((look.color, look.name.as_str(), look.opacity), ([204, 122, 80], "copper", 1.0));
-    assert_eq!(assigned["appearance"]["graph"], "copper");
-    assert_eq!(assigned["appearance"]["color"], "#cc7a50");
-    assert_eq!(s.execute("appearance.graph.get", &json!({"id": "copper"})).unwrap()["uses"], 1);
+    // The fixture's base colour is `{"srgb8": [158, 164, 172]}`: exactly the look's colour.
+    assert_eq!((look.color, look.name.as_str(), look.opacity), ([158, 164, 172], "steel", 1.0));
+    assert_eq!(assigned["appearance"]["graph"], "steel");
+    assert_eq!(assigned["appearance"]["color"], "#9ea4ac");
+    assert_eq!(s.execute("appearance.graph.get", &json!({"id": "steel"})).unwrap()["uses"], 1);
     // Editing the graph's colour recolours the look, in the same step.
     let steps = s.undo.len();
     s.execute(
         "appearance.graph.edit",
-        &json!({"id": "copper", "ops": [{"op": "set_input", "node": "surface", "port": "base_color", "value": {"srgb8": [10, 20, 30]}}]}),
+        &json!({"id": "steel", "ops": [{"op": "set_input", "node": "surface", "port": "base_color", "value": {"srgb8": [10, 20, 30]}}]}),
     )
     .unwrap();
     assert_eq!(s.doc.appearances.bodies["Can"].color, [10, 20, 30]);
     assert_eq!(s.undo.len(), steps + 1);
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.doc.appearances.bodies["Can"].color, [204, 122, 80]);
+    assert_eq!(s.doc.appearances.bodies["Can"].color, [158, 164, 172]);
     // A driven input shows its fallback in the standard view.
     s.execute(
         "appearance.graph.edit",
-        &json!({"id": "copper", "ops": [
+        &json!({"id": "steel", "ops": [
             {"op": "add_node", "node": "uv", "kind": "texcoord.triplanar"},
             {"op": "add_node", "node": "grain", "kind": "pattern.noise"},
             {"op": "add_node", "node": "tint", "kind": "convert.float_to_color3"},
@@ -212,22 +212,22 @@ fn assigned_graph_looks_take_the_graphs_colour_and_follow_its_edits() {
             {"op": "connect", "from": "grain.value", "node": "tint", "port": "in"},
             {"op": "connect", "from": "tint", "node": "surface", "port": "base_color", "fallback": {"srgb8": [90, 60, 30]}}]}),
     )
-    .unwrap_or_else(|e| panic!("{e}: {}", s.execute("appearance.graph.get", &json!({"id": "copper"})).unwrap()));
+    .unwrap_or_else(|e| panic!("{e}: {}", s.execute("appearance.graph.get", &json!({"id": "steel"})).unwrap()));
     assert_eq!(s.doc.appearances.bodies["Can"].color, [90, 60, 30]);
-    let base = &s.doc.appearances.tables.graphs[&gid("copper")].nodes[0].inputs["base_color"];
+    let base = &s.doc.appearances.tables.graphs[&gid("steel")].nodes[0].inputs["base_color"];
     assert_eq!(serde_json::to_value(base).unwrap(), json!({"from": "tint", "fallback": {"srgb8": [90, 60, 30]}}));
     // Removing the pattern returns the input to its default.
     let remove = |n: &str| json!({"op": "remove_node", "node": n});
-    s.execute("appearance.graph.edit", &json!({"id": "copper", "ops": [remove("tint"), remove("grain"), remove("uv")]})).unwrap();
-    assert!(!s.doc.appearances.tables.graphs[&gid("copper")].nodes[0].inputs.contains_key("base_color"));
+    s.execute("appearance.graph.edit", &json!({"id": "steel", "ops": [remove("tint"), remove("grain"), remove("uv")]})).unwrap();
+    assert!(!s.doc.appearances.tables.graphs[&gid("steel")].nodes[0].inputs.contains_key("base_color"));
     // Copy and paste keep the graph.
     s.execute("appearance.copy", &json!({"target": {"body": "Can"}})).unwrap();
     s.execute("appearance.assign", &json!({"bodies": ["Can"], "color": [5, 5, 5]})).unwrap();
     s.execute("appearance.paste", &json!({"bodies": ["Can"]})).unwrap();
-    assert_eq!(s.doc.appearances.bodies["Can"].graph, Some(gid("copper")));
+    assert_eq!(s.doc.appearances.bodies["Can"].graph, Some(gid("steel")));
     // Deleting with a replacement moves the look.
     s.execute("appearance.graph.create", &json!({"id": "plain", "name": "Plain"})).unwrap();
-    let deleted = s.execute("appearance.graph.delete", &json!({"id": "copper", "replace_with": "plain"})).unwrap();
+    let deleted = s.execute("appearance.graph.delete", &json!({"id": "steel", "replace_with": "plain"})).unwrap();
     assert_eq!(deleted["replaced"], 1);
     assert_eq!(s.doc.appearances.bodies["Can"].graph, Some(gid("plain")));
     // The saved design reads back.
@@ -315,18 +315,18 @@ fn textures_are_added_once_listed_and_read_from_files() {
 fn converting_a_look_keeps_its_picture_and_rewrites_its_overrides() {
     let mut s = with_body();
     s.execute("solid.box", &json!({"body_name": "Lid", "length": 4, "width": 4, "height": 1})).unwrap();
-    let pbr = json!({"metallic": 1.0, "roughness": 0.25, "dielectric_ior": 1.5});
-    s.execute("appearance.assign", &json!({"bodies": ["Can", "Lid"], "name": "Copper", "color": [204, 122, 80], "pbr": pbr})).unwrap();
-    let look = json!({"name": "Copper", "color": "#cc7a50", "opacity": 1.0, "pbr": pbr});
+    let pbr = json!({"metallic": 1.0, "roughness": 0.4, "dielectric_ior": 1.5});
+    s.execute("appearance.assign", &json!({"bodies": ["Can", "Lid"], "name": "Steel", "color": [158, 164, 172], "pbr": pbr})).unwrap();
+    let look = json!({"name": "Steel", "color": "#9ea4ac", "opacity": 1.0, "pbr": pbr});
     let steps = s.undo.len();
     let converted = s.execute("appearance.graph.convert", &json!({"look": look})).unwrap();
-    assert_eq!((converted["id"].clone(), converted["count"].clone()), (json!("copper"), json!(2)), "{converted}");
+    assert_eq!((converted["id"].clone(), converted["count"].clone()), (json!("steel"), json!(2)), "{converted}");
     assert_eq!(s.undo.len(), steps + 1, "one step");
     let can = &s.doc.appearances.bodies["Can"];
-    assert_eq!((can.color, can.name.as_str(), can.pbr, can.graph.clone()), ([204, 122, 80], "Copper", None, Some(gid("copper"))));
+    assert_eq!((can.color, can.name.as_str(), can.pbr, can.graph.clone()), ([158, 164, 172], "Steel", None, Some(gid("steel"))));
     // The one-node graph is the look's `pbr` exactly (§3.7), as the fixture spells it.
-    let copper: solidcraft_doc::appearance_graph::MaterialGraph = serde_json::from_str(COPPER).unwrap();
-    assert_eq!(s.doc.appearances.tables.graphs[&gid("copper")].nodes, copper.nodes);
+    let steel: solidcraft_doc::appearance_graph::MaterialGraph = serde_json::from_str(STEEL).unwrap();
+    assert_eq!(s.doc.appearances.tables.graphs[&gid("steel")].nodes, steel.nodes);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.doc.appearances.bodies["Can"].pbr.is_some() && s.doc.appearances.tables.graphs.is_empty());
     // A scalar look, scoped to one body; `create {from: look}` makes the graph alone.
@@ -462,7 +462,7 @@ fn schemas_describe_the_new_parameters() {
 #[test]
 fn hostile_parameters_are_refused_whole() {
     let mut s = with_body();
-    s.execute("appearance.graph.create", &json!({"id": "copper", "name": "Copper", "graph": fixture(COPPER)})).unwrap();
+    s.execute("appearance.graph.create", &json!({"id": "steel", "name": "Steel", "graph": fixture(STEEL)})).unwrap();
     let before = state(&s);
     let long = "x".repeat(100_000);
     let deep = (0..200).fold(json!(1), |v, _| json!([v]));
@@ -471,17 +471,17 @@ fn hostile_parameters_are_refused_whole() {
         json!([]),
         json!("text"),
         json!({"id": long}),
-        json!({"id": "copper", "ops": [{"op": "set_input", "node": "surface", "port": long, "value": deep}]}),
-        json!({"id": "copper", "ops": vec![json!({"op": "set_param", "node": "surface", "param": "p", "value": 1}); 513]}),
-        json!({"id": "copper", "ops": [{"op": "set_interface", "input": {"name": long, "type": "float"}}]}),
-        json!({"id": "copper", "ops": [{"op": "set_input", "node": "surface", "port": "base_color", "value": [f64::MAX, -1e308, 1]}]}),
-        json!({"id": "copper", "graph": {"name": "x", "nodes": vec![json!({"id": "n", "kind": "standard_surface"}); 4096], "output": "n"}}),
+        json!({"id": "steel", "ops": [{"op": "set_input", "node": "surface", "port": long, "value": deep}]}),
+        json!({"id": "steel", "ops": vec![json!({"op": "set_param", "node": "surface", "param": "p", "value": 1}); 513]}),
+        json!({"id": "steel", "ops": [{"op": "set_interface", "input": {"name": long, "type": "float"}}]}),
+        json!({"id": "steel", "ops": [{"op": "set_input", "node": "surface", "port": "base_color", "value": [f64::MAX, -1e308, 1]}]}),
+        json!({"id": "steel", "graph": {"name": "x", "nodes": vec![json!({"id": "n", "kind": "standard_surface"}); 4096], "output": "n"}}),
         json!({"name": long}),
         json!({"name": "x", "from": {"color": "#zzzzzz"}}),
         json!({"look": {"color": [1, 2, 3], "pbr": {"metallic": 9}}}),
         json!({"data_base64": "A".repeat(1000)}),
         json!({"path": "\u{0}"}),
-        json!({"id": "copper", "library": "/nonexistent/library.json"}),
+        json!({"id": "steel", "library": "/nonexistent/library.json"}),
     ];
     let ids = [
         "appearance.graph.create",
@@ -604,7 +604,7 @@ fn the_built_in_material_library_applies_every_graph() {
     let catalog = &inspected["catalog"];
     assert_eq!((catalog["format"].as_str(), catalog["id"].as_str()), (Some(V3_FORMAT), Some(BUILTIN_ID)));
     let entries = catalog["entries"].as_array().unwrap().clone();
-    assert_eq!(entries.len(), 9);
+    assert_eq!(entries.len(), 13);
     let mut wrong = Vec::new();
     for entry in &entries {
         let look = &entry["definition"]["value"];
@@ -612,7 +612,8 @@ fn the_built_in_material_library_applies_every_graph() {
         let graph = &catalog["graphs"][id];
         let report = s.execute("appearance.graph.validate", &json!({"graph": graph})).unwrap();
         assert_eq!(report["ok"], true, "{id}: {report}");
-        assert!(report["cost"].as_u64().unwrap() > 0, "{id} reports its cost: {report}");
+        // Constant graphs (clear glass, matte rubber) cost 0 units; patterned ones more.
+        assert!(report["cost"].is_u64(), "{id} reports its cost: {report}");
         let apply = json!({"path": BUILTIN_PATH, "entry": entry["id"], "revision": entry["revision"], "targets": {"bodies": ["Can"]}});
         s.execute("library.apply", &apply).unwrap();
         let held = &s.doc.appearances.bodies["Can"];
@@ -652,7 +653,7 @@ fn the_material_graphs_example_builds() {
         }
     }
     let looks = &s.doc.appearances.bodies;
-    assert_eq!(looks.len(), 9);
+    assert_eq!(looks.len(), 13);
     for (body, look) in looks {
         let graph = look.graph.as_ref().unwrap_or_else(|| panic!("{body} has no graph"));
         let source = s.doc.appearances.tables.graphs[graph].source.clone().unwrap();
@@ -743,7 +744,7 @@ fn a_heavy_graph_is_accepted_with_a_note_and_only_the_safety_bound_refuses() {
     assert!(heavy["note"].as_str().unwrap().contains("heavier than typical"), "{heavy}");
     let created = s.execute("appearance.graph.create", &json!({"name": "Heavy", "graph": graph(1)})).unwrap();
     assert!(created["note"].is_string(), "{created}");
-    let light = s.execute("appearance.graph.validate", &json!({"graph": fixture(COPPER)})).unwrap();
+    let light = s.execute("appearance.graph.validate", &json!({"graph": fixture(STEEL)})).unwrap();
     assert!(light.get("note").is_none(), "{light}");
     let refused = s.execute("appearance.graph.validate", &json!({"graph": graph(9)})).unwrap();
     assert_eq!(refused["ok"], false, "{refused}");

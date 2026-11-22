@@ -41,7 +41,7 @@ the graphs and looks that name it.
   (over 4,000 units, about 2× today's look), and the graph is still accepted. Only a graph
   over the 100,000-unit safety bound is refused (error code `cost`).
 - **Ids** are 1–64 characters of `a–z 0–9 _ . -`. Without `id`, one is made from the name
-  (`"Brushed Nickel/Silver"` → `brushed-stainless`, then `-2`, `-3` …). A given id that
+  (`"Brushed Stainless/Steel"` → `brushed-stainless-steel`, then `-2`, `-3` …). A given id that
   is taken is refused.
 - **`create`** starts from `graph`, or `from: "standard"` (one `standard_surface` with its
   defaults, also the default), or `from: {name, color, opacity?, pbr?}`: the one-node graph
@@ -168,13 +168,13 @@ A script for `solidcraft-cli run script.json --out can.sc`:
 ```json
 {"commands": [
   {"command": "solid.box", "params": {"body_name": "Can", "length": 20, "width": 20, "height": 30}},
-  {"command": "appearance.graph.create", "params": {"id": "nickel", "name": "Nickel silver"}},
-  {"command": "appearance.graph.edit", "params": {"id": "nickel", "ops": [
+  {"command": "appearance.graph.create", "params": {"id": "satin-steel", "name": "Satin steel"}},
+  {"command": "appearance.graph.edit", "params": {"id": "satin-steel", "ops": [
     {"op": "set_input", "node": "surface", "port": "base_color", "value": {"srgb8": [227, 224, 218]}},
     {"op": "set_input", "node": "surface", "port": "base_metalness", "value": 1},
     {"op": "set_input", "node": "surface", "port": "coat_weight", "value": 1},
     {"op": "set_input", "node": "surface", "port": "coat_roughness", "value": 0.1}]}},
-  {"command": "appearance.assign", "params": {"bodies": ["Can"], "graph": "nickel"}}
+  {"command": "appearance.assign", "params": {"bodies": ["Housing"], "graph": "satin-steel"}}
 ]}
 ```
 

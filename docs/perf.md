@@ -109,7 +109,7 @@ patterns as their own functions; a sloped pattern's samples taken in a loop.
 | 8 plain weaves | 17–21 ms | 1.5–2.2 ms |
 | library orange-peel gloss (two sloped noises, triplanar) | 14.2 ms (12.9× `fs_pbr`) | 2.0 ms (1.84×) |
 | library printed ink | 13.9 ms (12.6×) | 1.9 ms (1.79×) |
-| library coated woven laminate | 15.3 ms (13.9×) | 2.1 ms (1.95×) |
+| library coated woven glass fibre | 15.3 ms (13.9×) | 2.1 ms (1.95×) |
 
 The cliff is not gone for every shape: eight copies of a flat 3-D value or gradient noise, or
 of a flat 2D gradient noise, or a value noise on its own triplanar texcoord, still run
@@ -122,15 +122,15 @@ in units, against the units the model gives):
 
 | Graph | × `fs_pbr` | Measured units | Model units |
 |---|---|---|---|
-| library black epoxy, clear coat (2-octave 3-D cellular) | 2.07 | 3,864 | 242 |
-| library coated woven laminate | 1.95 | 3,402 | 572 |
+| library gloss black plastic, clear coat (2-octave 3-D cellular) | 2.07 | 3,864 | 242 |
+| library coated woven glass fibre | 1.95 | 3,402 | 572 |
 | library orange-peel gloss | 1.84 | 2,943 | 378 |
 | library printed ink | 1.79 | 2,744 | 384 |
-| library laser-etched nickel silver | 1.68 | 2,305 | 208 |
-| library tinted coat over copper | 1.48 | 1,531 | 136 |
-| library woven laminate | 1.46 | 1,450 | 585 |
-| library brushed nickel silver | 1.40 | 1,176 | 39 |
-| library printed sleeve | 1.26 | 618 | 31 |
+| library laser-etched stainless steel | 1.68 | 2,305 | 208 |
+| library candy coat over polished aluminium | 1.48 | 1,531 | 136 |
+| library woven glass fibre | 1.46 | 1,450 | 585 |
+| library brushed stainless steel | 1.40 | 1,176 | 39 |
+| library printed label | 1.26 | 618 | 31 |
 | showcase carbon twill | 1.46 | 1,425 | 216 |
 | showcase brushed aluminium | 1.39 | 1,144 | 39 |
 | showcase red ABS (constant, coat 0) | 1.29 | 736 | 0 |
