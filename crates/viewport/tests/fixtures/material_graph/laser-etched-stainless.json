@@ -32,7 +32,7 @@
    }
   },
   {
-   "id": "mask",
+   "id": "logo",
    "kind": "image",
    "params": {
     "space": "linear",
@@ -114,7 +114,7 @@
      "from": "plain"
     },
     "mix": {
-     "from": "mask.value"
+     "from": "logo.value"
     }
    }
   }
