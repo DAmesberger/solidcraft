@@ -7,7 +7,7 @@
 // `parameters` is (metallic, perceptual roughness, dielectric IOR); `coat` is (weight, perceptual
 // roughness, IOR), where weight 0 or IOR 1 is no coat.
 //
-// The viewport's additions for material graphs (docs/material-graph.md §5.5, track C2): a coat
+// The viewport's additions for appearance graphs (docs/appearance-graph.md §5.5, track C2): a coat
 // colour that tints the base on entry and exit, a coat normal of its own, an anisotropic GGX base
 // lobe (OpenPBR's roughness axes) for direct light, the bent reflection direction the studio
 // looks up for it, and the see-through fallback for transmission. The path tracer has no lobe
@@ -275,7 +275,7 @@ fn sc_aniso_reflect(n: vec3<f32>, t: vec3<f32>, v: vec3<f32>, roughness: f32, an
     return 2.0 * dot(bent, v) * bent - v;
 }
 
-// The viewport's see-through fallback for transmission (no refraction; docs/material-graph.md
+// The viewport's see-through fallback for transmission (no refraction; docs/appearance-graph.md
 // §5.6): a share `weight` of the light behind passes, tinted by `color` (the transmittance at the
 // input's depth). The result's `a` is the coverage for a premultiplied "over" blend, 1 − w·t̄
 // with t̄ the mean of `color`; its `rgb` is the colour of the diffuse body that is drawn in place

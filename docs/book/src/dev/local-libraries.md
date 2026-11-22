@@ -116,7 +116,7 @@ V1 wire input rejects even null v2-only fields. Older readers refuse v2.
 
 ## Portable catalog v3
 
-`solidcraft-library/3` adds material graphs ([material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/material-graph.md)
+`solidcraft-library/3` adds appearance graphs ([appearance graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/appearance-graph.md)
 §4.2): a `graphs` table by id and a `textures` table keyed by the SHA-256 of each
 image's bytes, both omitted when empty. An appearance value may name a graph with
 `graph` and set its interface with `values`; `graph` and `pbr` exclude each other.
@@ -136,7 +136,7 @@ explicit v2 or v1 envelope refuses graphs. Older readers refuse v3.
 The built-in material library is the v3 catalog `solidcraft-materials`, read from the path
 `builtin:materials` (the Appearance dialog's **Built-in materials** button). It is built from
 `assets/appearances/graphs/` when it is read, so its entry ids and revisions follow from the
-content like any exported library's ([built-in material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-material-graphs.md)).
+content like any exported library's ([built-in appearance graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-appearance-graphs.md)).
 
 ## Scalar catalog v1 compatibility
 

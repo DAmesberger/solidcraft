@@ -43,8 +43,8 @@ fn sc_cylindrical_tangent(p: vec3<f32>, origin: vec3<f32>, axis: vec3<f32>, refe
     return normalize(cross(axis, radial));
 }
 
-// Material-graph texcoords (docs/material-graph.md §3.2), on the functions above. The formulas
-// are the test-only reference's (`material_graph::reference`, track T), which checks both GPU
+// Material-graph texcoords (docs/appearance-graph.md §3.2), on the functions above. The formulas
+// are the test-only reference's (`appearance_graph::reference`, track T), which checks both GPU
 // targets against them.
 
 // A projected coordinate: `uv` (in repeats of the projection), the world-space gradients of u and

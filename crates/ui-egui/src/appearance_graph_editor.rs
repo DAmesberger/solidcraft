@@ -1,5 +1,5 @@
-//! The material editor: the Appearance dialog's **Material graph** section, a layered-stack
-//! view of a design's material graphs (docs/material-graph.md §7.1).
+//! The material editor: the Appearance dialog's **Appearance graph** section, a layered-stack
+//! view of a design's appearance graphs (docs/appearance-graph.md §7.1).
 //!
 //! The editor holds no design state of its own. It reads command replies
 //! (`appearance.graph.nodes`, `.list`, `.get`, `.validate`, `appearance.texture.list`) whenever
@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use solidcraft_viewport::material_graph::{Constant, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant, InterfaceInput, Node, ParamValue, PortType, limits};
 use solidcraft_viewport::surface::OpaqueSurface;
 
 pub(crate) use model::{Catalogue, Driver, Loaded, Stack};
@@ -94,7 +94,7 @@ pub(crate) enum Action {
     Delete,
     SelectLayer(usize),
     /// Make the graph this one: an edit when one can say it, else a whole replacement.
-    Replace(MaterialGraph),
+    Replace(AppearanceGraph),
     Pending(Pending),
     Texture(String, TextureUse),
     /// Open the file picker, then add the texture and use it.
@@ -273,7 +273,7 @@ impl Editor {
     /// Check `graph` before sending it: a graph validation refuses is not sent, and its
     /// findings are shown at their rows. A check that cannot run leaves the decision to the
     /// command itself.
-    fn check(&mut self, c: &mut dyn Commands, graph: &MaterialGraph) -> bool {
+    fn check(&mut self, c: &mut dyn Commands, graph: &AppearanceGraph) -> bool {
         match c.query("appearance.graph.validate", json!({"graph": graph})).and_then(|r| Validation::from_reply(&r)) {
             Ok(v) if !v.ok => {
                 self.note = Some((tr("appearance.graph.not_made").into(), true));
@@ -287,7 +287,7 @@ impl Editor {
 
     /// Make the loaded graph `graph`: checked, then one `edit` (connections keep their
     /// fallbacks) unless only a whole replacement can say it (the output moved).
-    fn propose(&mut self, c: &mut dyn Commands, graph: MaterialGraph) {
+    fn propose(&mut self, c: &mut dyn Commands, graph: AppearanceGraph) {
         let Some(loaded) = self.graph().cloned() else { return };
         if !self.check(c, &graph) {
             return;
@@ -411,7 +411,7 @@ impl Editor {
     /// Use texture `sha` as `use_` says.
     pub(crate) fn use_texture(&mut self, c: &mut dyn Commands, sha: &str, use_: TextureUse) {
         let Some(loaded) = self.graph().cloned() else { return };
-        let texture = Constant::Texture(solidcraft_viewport::material_graph::graph::TextureRef { texture: sha.into() });
+        let texture = Constant::Texture(solidcraft_viewport::appearance_graph::graph::TextureRef { texture: sha.into() });
         match use_ {
             TextureUse::File { node, port } => {
                 let proposed = model::with_input(&loaded.graph, &node, &port, &texture);
@@ -496,14 +496,14 @@ pub(crate) enum Next {
     Dialog(Outcome),
 }
 
-/// The Material graph section of the Appearance dialog. `look` is the look being edited.
+/// The Appearance graph section of the Appearance dialog. `look` is the look being edited.
 pub(crate) fn section(app: &mut SolveApp, ui: &mut egui::Ui, ed: &mut Editor, look: &LookContext) -> Option<Outcome> {
     let gpu = app.viewport.gpu.is_some();
     let mut actions = Vec::new();
     ed.sync(app);
     // Open by default when the design has a graph to show.
     let open = ed.graph().is_some();
-    ui_kit::section(ui, "ap_material_graph", tr("appearance.graph.section"), open, |ui| actions = body(ui, ed, gpu, look));
+    ui_kit::section(ui, "ap_appearance_graph", tr("appearance.graph.section"), open, |ui| actions = body(ui, ed, gpu, look));
     let mut outcome = None;
     for action in actions {
         match ed.apply(app, action, look) {
@@ -725,7 +725,7 @@ fn json_editor(ui: &mut egui::Ui, ed: &Editor, loaded: &Loaded, out: &mut Vec<Ac
 struct View<'a> {
     ed: &'a Editor,
     catalogue: &'a Catalogue,
-    graph: &'a MaterialGraph,
+    graph: &'a AppearanceGraph,
 }
 
 /// A port's label: the catalogue name, translated where the catalogs have it.
@@ -1000,7 +1000,7 @@ impl View<'_> {
             self.findings(ui, &n.id, None);
             self.params(ui, n, kind, out);
             for spec in &kind.inputs {
-                let wired = matches!(n.inputs.get(&spec.name), Some(solidcraft_viewport::material_graph::InputValue::Connection(_)));
+                let wired = matches!(n.inputs.get(&spec.name), Some(solidcraft_viewport::appearance_graph::InputValue::Connection(_)));
                 if wired || matches!(spec.ty, PortType::Texcoord | PortType::Surface | PortType::Normal) {
                     continue;
                 }

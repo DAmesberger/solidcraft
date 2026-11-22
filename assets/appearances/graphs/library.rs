@@ -1,4 +1,4 @@
-//! The built-in material library (docs/render-material-graphs.md): material graphs, each offered
+//! The built-in material library (docs/render-appearance-graphs.md): appearance graphs, each offered
 //! as one look. Rows: the graph's id, its look's standard-view colour (sRGB8, the graph's base
 //! response, checked by a test) and the graph's JSON. Values are original visual estimates, not
 //! measured optical data.

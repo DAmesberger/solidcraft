@@ -6,15 +6,15 @@ use super::dual::{D, dot3, length3, unit};
 use super::noise;
 use super::patterns;
 use super::*;
-use crate::material_graph::{Constant, base_sample};
+use crate::appearance_graph::{Constant, base_sample};
 
 const FIXTURES: &[(&str, &str)] = &[
-    ("gloss-black-clear-coat", include_str!("../../../tests/fixtures/material_graph/gloss-black-clear-coat.json")),
-    ("brushed-stainless", include_str!("../../../tests/fixtures/material_graph/brushed-stainless.json")),
-    ("printed-label", include_str!("../../../tests/fixtures/material_graph/printed-label.json")),
-    ("laser-etched-stainless", include_str!("../../../tests/fixtures/material_graph/laser-etched-stainless.json")),
-    ("pbr-steel", include_str!("../../../tests/fixtures/material_graph/pbr-steel.json")),
-    ("candy-coat-over-aluminium", include_str!("../../../tests/fixtures/material_graph/candy-coat-over-aluminium.json")),
+    ("gloss-black-clear-coat", include_str!("../../../tests/fixtures/appearance_graph/gloss-black-clear-coat.json")),
+    ("brushed-stainless", include_str!("../../../tests/fixtures/appearance_graph/brushed-stainless.json")),
+    ("printed-label", include_str!("../../../tests/fixtures/appearance_graph/printed-label.json")),
+    ("laser-etched-stainless", include_str!("../../../tests/fixtures/appearance_graph/laser-etched-stainless.json")),
+    ("pbr-steel", include_str!("../../../tests/fixtures/appearance_graph/pbr-steel.json")),
+    ("candy-coat-over-aluminium", include_str!("../../../tests/fixtures/appearance_graph/candy-coat-over-aluminium.json")),
 ];
 
 fn fixture(name: &str) -> &'static str {
@@ -81,7 +81,7 @@ fn every_fixture_evaluates_to_a_sane_surface() {
 fn the_pbr_fixture_is_its_base_response() {
     let text = fixture("pbr-steel");
     let (ir, words) = prepare_json(text, &none()).unwrap();
-    let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+    let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
     let base = base_sample(&validate(&graph).unwrap()).unwrap();
     for p in sample_points() {
         let s = eval(&ir, &words, &p).surface;

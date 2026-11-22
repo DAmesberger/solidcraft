@@ -1,5 +1,5 @@
-//! Contracts and result types for the commands in `cmd/appearance_graph.rs`: material graphs
-//! and their texture assets (docs/material-graph.md §7.2).
+//! Contracts and result types for the commands in `cmd/appearance_graph.rs`: appearance graphs
+//! and their texture assets (docs/appearance-graph.md §7.2).
 
 use std::borrow::Cow;
 
@@ -7,7 +7,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A material graph in its saved form (docs/material-graph.md §4.1): `name`, `nodes`, `output`,
+/// An appearance graph in its saved form (docs/appearance-graph.md §4.1): `name`, `nodes`, `output`,
 /// and optionally `interface` and `source`. `appearance.graph.nodes` lists the node kinds.
 #[derive(Debug, Deserialize)]
 #[serde(transparent)]
@@ -15,12 +15,12 @@ pub struct GraphValue(pub Value);
 
 impl JsonSchema for GraphValue {
     fn schema_name() -> Cow<'static, str> {
-        "MaterialGraph".into()
+        "AppearanceGraph".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "object",
-            "description": "A material graph: name, nodes [{id, kind, params?, inputs?}], output (the surface node's id), interface?, source?. Node kinds, ports and ranges: appearance.graph.nodes.",
+            "description": "An appearance graph: name, nodes [{id, kind, params?, inputs?}], output (the surface node's id), interface?, source?. Node kinds, ports and ranges: appearance.graph.nodes.",
             "required": ["name", "nodes", "output"],
             "properties": {
                 "name": {"type": "string"},
@@ -117,7 +117,7 @@ pub struct GraphFrom(pub Value);
 
 impl JsonSchema for GraphFrom {
     fn schema_name() -> Cow<'static, str> {
-        "MaterialGraphFrom".into()
+        "AppearanceGraphFrom".into()
     }
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
@@ -132,7 +132,7 @@ impl JsonSchema for GraphFrom {
     }
 }
 
-/// Convert a scalar or `pbr` look to a material graph ("Convert to material graph"): a new graph
+/// Convert a scalar or `pbr` look to an appearance graph ("Convert to appearance graph"): a new graph
 /// that draws the look as it is, and every override that is exactly that look (within `scope`)
 /// then names the graph. One undo step.
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -311,7 +311,7 @@ pub struct GraphDeleteResult {
 pub struct GraphUpdateFromLibraryParams {
     pub id: String,
     /// The library file the graph's `source.library` names (`builtin:materials` for the built-in
-    /// material graphs).
+    /// appearance graphs).
     pub library: String,
     #[serde(default)]
     pub preview: bool,

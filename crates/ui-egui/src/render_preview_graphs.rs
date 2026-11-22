@@ -1,4 +1,4 @@
-//! Graph and `pbr` looks in the Render workspace preview's Realistic look (docs/material-graph.md
+//! Graph and `pbr` looks in the Render workspace preview's Realistic look (docs/appearance-graph.md
 //! §6): the same material stream as the modelling view's (`viewport_graphs`, `GpuScene::graphs`),
 //! lit by the studio and the preview's own product lights.
 //!
@@ -16,7 +16,7 @@ use solidcraft_engine::render::ProductScene;
 use crate::SolveApp;
 use crate::gpu::GpuScene;
 
-/// The stream's share of a preview scene: its material-graph surfaces, and per body the faces
+/// The stream's share of a preview scene: its appearance-graph surfaces, and per body the faces
 /// only the stream draws.
 #[derive(Default)]
 pub(crate) struct PreviewGraphs {

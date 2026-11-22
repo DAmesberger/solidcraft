@@ -1,4 +1,4 @@
-//! Material graphs and their texture assets (docs/material-graph.md §7.2). Every command that
+//! Appearance graphs and their texture assets (docs/appearance-graph.md §7.2). Every command that
 //! changes the design is one undo step and atomic: it builds the whole change, checks the result
 //! (track A's validation through track B's design checks) and returns an error otherwise, which
 //! leaves the design as it was (`Session::execute` restores it).
@@ -21,8 +21,8 @@ use serde_json::{Value, json};
 use solidcraft_doc::Document;
 use solidcraft_doc::appearance::Look;
 use solidcraft_doc::appearance_graph::{self as ag, GraphId, TextureAsset, limits};
-use solidcraft_render::material_graph::{
-    self as mg, Connection, Constant, GraphError, GraphSource, InputValue, InterfaceInput, Ir, MaterialGraph, Node, ParamValue, PortType,
+use solidcraft_render::appearance_graph::{
+    self as mg, AppearanceGraph, Connection, Constant, GraphError, GraphSource, InputValue, InterfaceInput, Ir, Node, ParamValue, PortType,
 };
 
 const NODES: TypedContract<GraphNodesParams> = TypedContract::new();
@@ -43,21 +43,21 @@ const TEXTURE_LIST: TypedContract<TextureListParams> = TypedContract::new();
 const MAX_OPS: usize = 512;
 
 pub static COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new("appearance.graph.nodes", "Material Graph Nodes", crate::checked!("appearance.graph.nodes", nodes))
+    CommandSpec::new("appearance.graph.nodes", "Appearance Graph Nodes", crate::checked!("appearance.graph.nodes", nodes))
         .icon("list")
         .noundo()
         .doc_only()
         .contract(&NODES)
         .output(output_schema_for::<GraphNodesResult>)
         .params("no parameters → {version, nodes}: every node kind with typed inputs, ranges, defaults, params, outputs and cost; read-only"),
-    CommandSpec::new("appearance.graph.validate", "Validate Material Graph", crate::checked!("appearance.graph.validate", validate))
+    CommandSpec::new("appearance.graph.validate", "Validate Appearance Graph", crate::checked!("appearance.graph.validate", validate))
         .icon("inspect")
         .noundo()
         .doc_only()
         .contract(&VALIDATE)
         .output(output_schema_for::<GraphValidateResult>)
         .params("graph → {ok, cost, samples, textures, shape, errors: [{node?, port?, code, message}], note?}; read-only, the design is not consulted. note: the graph is heavier than typical (advisory, never a refusal)"),
-    CommandSpec::new("appearance.graph.create", "New Material Graph", crate::checked!("appearance.graph.create", create))
+    CommandSpec::new("appearance.graph.create", "New Appearance Graph", crate::checked!("appearance.graph.create", create))
         .icon("appearance")
         .contract(&CREATE)
         .output(output_schema_for::<GraphChanged>)
@@ -65,7 +65,7 @@ pub static COMMANDS: &[CommandSpec] = &[
             "name, id?, graph? | from?: \"standard\" or a saved look {name, color, opacity?, pbr?} → {id, cost}. Default: one standard_surface. \
              The graph must validate and name only the design's textures (appearance.texture.add). One undo step",
         ),
-    CommandSpec::new("appearance.graph.convert", "Convert to Material Graph", crate::checked!("appearance.graph.convert", convert))
+    CommandSpec::new("appearance.graph.convert", "Convert to Appearance Graph", crate::checked!("appearance.graph.convert", convert))
         .icon("appearance")
         .contract(&CONVERT)
         .output(output_schema_for::<GraphConverted>)
@@ -73,12 +73,12 @@ pub static COMMANDS: &[CommandSpec] = &[
             "look: saved look {name, color, opacity, pbr?} (appearance.list), id?, name?, scope?: {bodies?, components?} (appearance.replace) → \
              {id, cost, count}: a new graph that draws the look as it is, and every override that is exactly that look now names it. One undo step",
         ),
-    CommandSpec::new("appearance.graph.set", "Replace Material Graph", crate::checked!("appearance.graph.set", set))
+    CommandSpec::new("appearance.graph.set", "Replace Appearance Graph", crate::checked!("appearance.graph.set", set))
         .icon("appearance")
         .contract(&SET)
         .output(output_schema_for::<GraphChanged>)
         .params("id, graph → {id, cost}; replaces the graph as a whole; looks using it get its new standard-view colour. One undo step"),
-    CommandSpec::new("appearance.graph.edit", "Edit Material Graph", crate::checked!("appearance.graph.edit", edit))
+    CommandSpec::new("appearance.graph.edit", "Edit Appearance Graph", crate::checked!("appearance.graph.edit", edit))
         .icon("appearance")
         .contract(&EDIT)
         .output(output_schema_for::<GraphChanged>)
@@ -86,24 +86,24 @@ pub static COMMANDS: &[CommandSpec] = &[
             "id, ops: [{op: add_node {node, kind} | remove_node {node} | connect {from, node, port, fallback?} | disconnect {node, port} | \
              set_input {node, port, value} | set_param {node, param, value} | set_interface {input}}] (≤ 512) → {id, cost}; all apply or none, one undo step",
         ),
-    CommandSpec::new("appearance.graph.get", "Material Graph", crate::checked!("appearance.graph.get", get))
+    CommandSpec::new("appearance.graph.get", "Appearance Graph", crate::checked!("appearance.graph.get", get))
         .icon("inspect")
         .noundo()
         .contract(&GET)
         .output(output_schema_for::<GraphGetResult>)
         .params("id → {id, graph, cost, uses}; read-only"),
-    CommandSpec::new("appearance.graph.list", "List Material Graphs", crate::checked!("appearance.graph.list", list))
+    CommandSpec::new("appearance.graph.list", "List Appearance Graphs", crate::checked!("appearance.graph.list", list))
         .icon("list")
         .noundo()
         .contract(&LIST)
         .output(output_schema_for::<GraphListResult>)
         .params("no parameters → {graphs: [{id, name, uses, source?}]}; read-only"),
-    CommandSpec::new("appearance.graph.duplicate", "Duplicate Material Graph", crate::checked!("appearance.graph.duplicate", duplicate))
+    CommandSpec::new("appearance.graph.duplicate", "Duplicate Appearance Graph", crate::checked!("appearance.graph.duplicate", duplicate))
         .icon("copy")
         .contract(&DUPLICATE)
         .output(output_schema_for::<GraphChanged>)
         .params("id, new_id?, name? (default: \"<name> copy\") → {id, cost}. One undo step"),
-    CommandSpec::new("appearance.graph.delete", "Delete Material Graph", crate::checked!("appearance.graph.delete", delete))
+    CommandSpec::new("appearance.graph.delete", "Delete Appearance Graph", crate::checked!("appearance.graph.delete", delete))
         .icon("appearance")
         .contract(&DELETE)
         .output(output_schema_for::<GraphDeleteResult>)
@@ -113,7 +113,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         ),
     CommandSpec::new(
         "appearance.graph.update_from_library",
-        "Update Material Graph From Library",
+        "Update Appearance Graph From Library",
         crate::checked!("appearance.graph.update_from_library", update_from_library),
     )
     .icon("library")
@@ -159,7 +159,7 @@ fn plain_name(cmd: &str, name: &str) -> Result<()> {
 }
 
 /// The graph in a command's `graph` parameter.
-fn parse_graph(cmd: &str, value: &Value) -> Result<MaterialGraph> {
+fn parse_graph(cmd: &str, value: &Value) -> Result<AppearanceGraph> {
     serde_json::from_value(value.clone()).map_err(|e| bad(cmd, format!("`graph`: {e}")))
 }
 
@@ -180,17 +180,16 @@ fn invalid(cmd: &str, what: &str, e: &GraphError) -> crate::EngineError {
             })
             .collect::<Vec<_>>()
             .join("; "),
-        GraphError::NotBuilt(part) => format!("{part} is not built yet"),
     };
-    bad(cmd, format!("{what} is not a valid material graph (appearance.graph.validate lists the problems): {detail}"))
+    bad(cmd, format!("{what} is not a valid appearance graph (appearance.graph.validate lists the problems): {detail}"))
 }
 
 /// Validate and lower: the IR a valid graph compiles to.
-fn lowered(graph: &MaterialGraph) -> std::result::Result<Ir, GraphError> {
+fn lowered(graph: &AppearanceGraph) -> std::result::Result<Ir, GraphError> {
     mg::validate(graph).and_then(|v| mg::lower(&v))
 }
 
-fn cost_of(graph: &MaterialGraph) -> u32 {
+fn cost_of(graph: &AppearanceGraph) -> u32 {
     lowered(graph).map_or(0, |ir| ir.cost)
 }
 
@@ -228,8 +227,8 @@ fn fresh_id(cmd: &str, doc: &Document, name: &str) -> Result<GraphId> {
 }
 
 /// One `standard_surface` with its defaults.
-fn standard_graph(name: &str) -> MaterialGraph {
-    MaterialGraph {
+fn standard_graph(name: &str) -> AppearanceGraph {
+    AppearanceGraph {
         name: name.to_string(),
         interface: Vec::new(),
         nodes: vec![Node { id: "surface".into(), kind: "standard_surface".into(), params: BTreeMap::new(), inputs: BTreeMap::new() }],
@@ -239,10 +238,10 @@ fn standard_graph(name: &str) -> MaterialGraph {
     }
 }
 
-/// The one-node graph that draws a scalar or `pbr` look as it is (docs/material-graph.md §3.7):
+/// The one-node graph that draws a scalar or `pbr` look as it is (docs/appearance-graph.md §3.7):
 /// its exact sRGB8 colour, and with `pbr` its metalness, roughness and IOR. A scalar look keeps
 /// the surface's other defaults.
-pub(crate) fn look_graph(name: &str, look: &Look) -> MaterialGraph {
+pub(crate) fn look_graph(name: &str, look: &Look) -> AppearanceGraph {
     let mut graph = standard_graph(name);
     if let Some(surface) = graph.nodes.first_mut() {
         let inputs = &mut surface.inputs;
@@ -271,10 +270,10 @@ fn uses(doc: &Document) -> BTreeMap<GraphId, u32> {
 
 /// Check a look's `values` against its graph: each a held interface input of a matching type
 /// (a texture key for a texture input, a number or vector otherwise) within its input's range.
-fn check_values(cmd: &str, look: &Look, graph: &MaterialGraph, ir: &Ir) -> Result<()> {
+fn check_values(cmd: &str, look: &Look, graph: &AppearanceGraph, ir: &Ir) -> Result<()> {
     for (name, value) in &look.values {
         let Some(input) = graph.interface.iter().find(|i| &i.name == name) else {
-            return Err(bad(cmd, format!("look `{}` sets `{name}`, which its material graph does not expose", look.name)));
+            return Err(bad(cmd, format!("look `{}` sets `{name}`, which its appearance graph does not expose", look.name)));
         };
         let texture = matches!(value, Constant::Texture(_));
         if texture != (input.ty == PortType::Texture) {
@@ -287,8 +286,8 @@ fn check_values(cmd: &str, look: &Look, graph: &MaterialGraph, ir: &Ir) -> Resul
 }
 
 /// The colour the standard view shows for a graph with these values: the base response's base
-/// colour, sRGB8 (docs/material-graph.md §4.1).
-fn display_color(cmd: &str, graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<[u8; 3]> {
+/// colour, sRGB8 (docs/appearance-graph.md §4.1).
+fn display_color(cmd: &str, graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> Result<[u8; 3]> {
     let base = mg::look_base_sample(graph, values).map_err(|e| invalid(cmd, "the look's graph", &e))?.opaque.base_color();
     Ok([base.x, base.y, base.z].map(solidcraft_color::srgb::encode8))
 }
@@ -300,8 +299,8 @@ pub(crate) fn settle_look(cmd: &str, doc: &Document, look: &mut Look) -> Result<
     let Some(id) = &look.graph else { return Ok(()) };
     let tables = &doc.appearances.tables;
     tables.check_look(look).map_err(|e| bad(cmd, e.to_string()))?;
-    let graph = tables.graphs.get(id).ok_or_else(|| bad(cmd, format!("no material graph `{}` (appearance.graph.list)", id.as_str())))?;
-    let ir = lowered(graph).map_err(|e| invalid(cmd, &format!("material graph `{}`", id.as_str()), &e))?;
+    let graph = tables.graphs.get(id).ok_or_else(|| bad(cmd, format!("no appearance graph `{}` (appearance.graph.list)", id.as_str())))?;
+    let ir = lowered(graph).map_err(|e| invalid(cmd, &format!("appearance graph `{}`", id.as_str()), &e))?;
     check_values(cmd, look, graph, &ir)?;
     look.color = display_color(cmd, graph, &look.values)?;
     Ok(())
@@ -380,7 +379,7 @@ fn changed_reply(cmd: &str, s: &Session, id: &GraphId) -> Result<Value> {
 }
 
 /// Put `graph` in the table as `id` (new or replacing), then check and commit.
-fn store(cmd: &str, s: &mut Session, id: &GraphId, graph: MaterialGraph) -> Result<()> {
+fn store(cmd: &str, s: &mut Session, id: &GraphId, graph: AppearanceGraph) -> Result<()> {
     if s.doc.appearances.tables.graphs.get(id) == Some(&graph) {
         return Ok(());
     }
@@ -416,7 +415,6 @@ fn validate(_s: &mut Session, p: &Value) -> Result<Value> {
                 },
             );
         }
-        Err(GraphError::NotBuilt(what)) => return Err(bad(cmd, format!("{what} is not built yet; nothing was checked"))),
         Err(GraphError::Invalid(issues)) => issues,
     };
     let errors = issues.into_iter().map(|i| GraphIssueReply { node: i.node, port: i.port, code: i.code.to_string(), message: i.message }).collect();
@@ -430,7 +428,7 @@ fn validate(_s: &mut Session, p: &Value) -> Result<Value> {
 /// `appearance.assign` reads one. It must not already name a graph.
 fn saved_look(cmd: &str, value: &Value) -> Result<Look> {
     if value.get("graph").is_some_and(|g| !g.is_null()) {
-        return Err(bad(cmd, "the look already names a material graph"));
+        return Err(bad(cmd, "the look already names an appearance graph"));
     }
     let object = value.as_object().ok_or_else(|| bad(cmd, "a look is {name, color, opacity?, pbr?}"))?;
     if let Some(key) = object.keys().find(|k| !matches!(k.as_str(), "name" | "color" | "opacity" | "pbr" | "values" | "graph")) {
@@ -466,13 +464,13 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
 fn new_id(cmd: &str, s: &Session, given: Option<&str>, name: &str) -> Result<GraphId> {
     let graphs = &s.doc.appearances.tables.graphs;
     if graphs.len() >= limits::GRAPHS_PER_DESIGN {
-        return Err(bad(cmd, format!("a design holds at most {} material graphs", limits::GRAPHS_PER_DESIGN)));
+        return Err(bad(cmd, format!("a design holds at most {} appearance graphs", limits::GRAPHS_PER_DESIGN)));
     }
     match given {
         Some(id) => {
             let id = graph_id(cmd, id)?;
             if graphs.contains_key(&id) {
-                return Err(bad(cmd, format!("material graph `{}` already exists; choose another id", id.as_str())));
+                return Err(bad(cmd, format!("appearance graph `{}` already exists; choose another id", id.as_str())));
             }
             Ok(id)
         }
@@ -514,7 +512,7 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-fn existing(cmd: &str, s: &Session, id: &str) -> Result<(GraphId, MaterialGraph)> {
+fn existing(cmd: &str, s: &Session, id: &str) -> Result<(GraphId, AppearanceGraph)> {
     let id = graph_id(cmd, id)?;
     let graph = s
         .doc
@@ -523,7 +521,7 @@ fn existing(cmd: &str, s: &Session, id: &str) -> Result<(GraphId, MaterialGraph)
         .graphs
         .get(&id)
         .cloned()
-        .ok_or_else(|| bad(cmd, format!("no material graph `{}` (appearance.graph.list)", id.as_str())))?;
+        .ok_or_else(|| bad(cmd, format!("no appearance graph `{}` (appearance.graph.list)", id.as_str())))?;
     Ok((id, graph))
 }
 
@@ -550,7 +548,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     changed_reply(cmd, s, &id)
 }
 
-fn node_mut<'a>(graph: &'a mut MaterialGraph, id: &str) -> std::result::Result<&'a mut Node, String> {
+fn node_mut<'a>(graph: &'a mut AppearanceGraph, id: &str) -> std::result::Result<&'a mut Node, String> {
     graph.nodes.iter_mut().find(|n| n.id == id).ok_or_else(|| format!("no node `{}`", shown(id)))
 }
 
@@ -561,7 +559,7 @@ fn shown(text: &str) -> String {
 
 /// Apply one edit to a working copy. The ops' structure is checked here; whether the result is a
 /// valid graph is validation's business, once all ops have applied.
-fn apply_op(graph: &mut MaterialGraph, op: &GraphEditOp) -> std::result::Result<(), String> {
+fn apply_op(graph: &mut AppearanceGraph, op: &GraphEditOp) -> std::result::Result<(), String> {
     match op {
         GraphEditOp::AddNode { node, kind } => {
             if graph.nodes.iter().any(|n| &n.id == node) {
@@ -700,7 +698,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             Some((other, graph))
         }
         None if used > 0 => {
-            return Err(bad(cmd, format!("{used} looks use material graph `{}`; give `replace_with` or reassign them first", id.as_str())));
+            return Err(bad(cmd, format!("{used} looks use appearance graph `{}`; give `replace_with` or reassign them first", id.as_str())));
         }
         None => None,
     };
@@ -728,7 +726,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A graph's content revision: the first 64 bits of the SHA-256 of its JSON without its
 /// provenance and editor layout. Equal content, equal revision.
-pub(crate) fn content_revision(graph: &MaterialGraph) -> u64 {
+pub(crate) fn content_revision(graph: &AppearanceGraph) -> u64 {
     let mut bare = graph.clone();
     bare.source = None;
     bare.layout.clear();
@@ -741,13 +739,14 @@ pub(crate) fn content_revision(graph: &MaterialGraph) -> u64 {
 /// recording its source, and check the result. Refused when `id` holds a different graph: an
 /// existing graph is never silently replaced (§4.2).
 pub(crate) fn import_graph(cmd: &str, doc: &mut Document, catalog: &solidcraft_io::catalog::Catalog, entry: &GraphId, id: &GraphId) -> Result<()> {
-    let mut graph = catalog.graphs.get(entry).cloned().ok_or_else(|| bad(cmd, format!("the library has no material graph `{}`", entry.as_str())))?;
+    let mut graph =
+        catalog.graphs.get(entry).cloned().ok_or_else(|| bad(cmd, format!("the library has no appearance graph `{}`", entry.as_str())))?;
     graph.source = Some(GraphSource { library: catalog.id.clone(), entry: entry.as_str().to_string(), revision: content_revision(&graph) });
     if let Some(held) = doc.appearances.tables.graphs.get(id) {
         if content_revision(held) == content_revision(&graph) {
             return Ok(());
         }
-        return Err(bad(cmd, format!("the design already has a different material graph `{}`; choose another id for the copy", id.as_str())));
+        return Err(bad(cmd, format!("the design already has a different appearance graph `{}`; choose another id for the copy", id.as_str())));
     }
     copy_textures(cmd, doc, catalog, ag::graph_textures(&graph).map(str::to_string).collect())?;
     doc.appearances.tables.graphs.insert(id.clone(), graph);
@@ -757,15 +756,15 @@ pub(crate) fn import_graph(cmd: &str, doc: &mut Document, catalog: &solidcraft_i
 /// Add a built graph and the textures it reads as `id`, recording `source`: one checked change.
 /// The same graph already held under `id` is reused (its source and layout aside); a different
 /// one is refused, never replaced.
-pub(crate) fn add_graph(cmd: &str, s: &mut Session, id: &GraphId, mut graph: MaterialGraph, textures: Vec<(String, TextureAsset)>) -> Result<()> {
+pub(crate) fn add_graph(cmd: &str, s: &mut Session, id: &GraphId, mut graph: AppearanceGraph, textures: Vec<(String, TextureAsset)>) -> Result<()> {
     if let Some(held) = s.doc.appearances.tables.graphs.get(id) {
         if content_revision(held) == content_revision(&graph) {
             return Ok(());
         }
-        return Err(bad(cmd, format!("the design already has a different material graph `{}`; give `graph_id` to choose another id", id.as_str())));
+        return Err(bad(cmd, format!("the design already has a different appearance graph `{}`; give `graph_id` to choose another id", id.as_str())));
     }
     if s.doc.appearances.tables.graphs.len() >= limits::GRAPHS_PER_DESIGN {
-        return Err(bad(cmd, format!("a design holds at most {} material graphs", limits::GRAPHS_PER_DESIGN)));
+        return Err(bad(cmd, format!("a design holds at most {} appearance graphs", limits::GRAPHS_PER_DESIGN)));
     }
     let revision = content_revision(&graph);
     if let Some(source) = &mut graph.source {
@@ -795,7 +794,7 @@ pub(crate) fn copy_textures(cmd: &str, doc: &mut Document, catalog: &solidcraft_
 }
 
 /// What differs between two graphs, input by input (provenance and layout ignored).
-fn differences(old: &MaterialGraph, new: &MaterialGraph) -> Vec<String> {
+fn differences(old: &AppearanceGraph, new: &AppearanceGraph) -> Vec<String> {
     let mut out = Vec::new();
     if old.name != new.name {
         out.push("name".to_string());
@@ -804,9 +803,9 @@ fn differences(old: &MaterialGraph, new: &MaterialGraph) -> Vec<String> {
         out.push("output".to_string());
     }
     let ifaces =
-        |g: &MaterialGraph| g.interface.iter().map(|i| (i.name.clone(), serde_json::to_string(i).unwrap_or_default())).collect::<BTreeMap<_, _>>();
+        |g: &AppearanceGraph| g.interface.iter().map(|i| (i.name.clone(), serde_json::to_string(i).unwrap_or_default())).collect::<BTreeMap<_, _>>();
     diff_maps(&mut out, "interface ", &ifaces(old), &ifaces(new));
-    let nodes = |g: &MaterialGraph| g.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect::<BTreeMap<_, _>>();
+    let nodes = |g: &AppearanceGraph| g.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect::<BTreeMap<_, _>>();
     let (a, b) = (nodes(old), nodes(new));
     for id in a.keys().filter(|k| !b.contains_key(*k)) {
         out.push(format!("node {id} removed"));
@@ -845,7 +844,7 @@ fn update_from_library(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "appearance.graph.update_from_library";
     let params: GraphUpdateFromLibraryParams = parse(cmd, p)?;
     let (id, graph) = existing(cmd, s, &params.id)?;
-    let source = graph.source.clone().ok_or_else(|| bad(cmd, format!("material graph `{}` was not copied from a library", id.as_str())))?;
+    let source = graph.source.clone().ok_or_else(|| bad(cmd, format!("appearance graph `{}` was not copied from a library", id.as_str())))?;
     if params.library.is_empty() || params.library.len() > 4096 || params.library.chars().any(char::is_control) {
         return Err(bad(cmd, "invalid library path"));
     }
@@ -857,7 +856,7 @@ fn update_from_library(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, format!("this library is `{}`, but the graph came from `{}`", shown(&catalog.id), shown(&source.library))));
     }
     let entry = graph_id(cmd, &source.entry)?;
-    let new = catalog.graphs.get(&entry).ok_or_else(|| bad(cmd, format!("the library no longer has material graph `{}`", entry.as_str())))?;
+    let new = catalog.graphs.get(&entry).ok_or_else(|| bad(cmd, format!("the library no longer has appearance graph `{}`", entry.as_str())))?;
     let changes = differences(&graph, new);
     let looks = uses(&s.doc).get(&id).copied().unwrap_or(0);
     if params.preview || changes.is_empty() && content_revision(new) == source.revision {

@@ -12,7 +12,7 @@ use solidcraft_io::catalog::{Catalog, FORMAT, Provenance, V1_FORMAT, V3_FORMAT};
 #[serde(deny_unknown_fields)]
 pub struct LibraryInspectParams {
     /// The library file (`solidcraft-library/1`–`/3` JSON, at most 4 MiB, or a `/3` container
-    /// with textures), or `builtin:materials` for the built-in material graphs.
+    /// with textures), or `builtin:materials` for the built-in appearance graphs.
     pub path: String,
 }
 
@@ -39,9 +39,9 @@ pub struct LibraryExportParams {
     #[serde(default)]
     pub overwrite: bool,
     /// The file format. Default: the oldest that keeps everything, `solidcraft-library/2`, or
-    /// `solidcraft-library/3` when a look names a material graph (docs/material-graph.md §4.2).
+    /// `solidcraft-library/3` when a look names an appearance graph (docs/appearance-graph.md §4.2).
     /// An explicit `solidcraft-library/1` refuses PBR or physical cards, and `/1` or `/2` refuse
-    /// material graphs, before writing anything.
+    /// appearance graphs, before writing anything.
     #[schemars(schema_with = "format_schema")]
     pub format: Option<String>,
 }
@@ -59,7 +59,7 @@ fn default_name() -> String {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryApplyParams {
-    /// The library file, or `builtin:materials` for the built-in material graphs.
+    /// The library file, or `builtin:materials` for the built-in appearance graphs.
     pub path: String,
     /// The entry's qualified id, as `library.inspect` lists it (at most 129 bytes).
     pub entry: String,
@@ -74,7 +74,7 @@ pub struct LibraryApplyParams {
     /// the entry's name. A material of that name already in the design is reused if it is the
     /// same, and refused if it differs. An appearance entry refuses it.
     pub name: Option<String>,
-    /// For a look that names a material graph: the id its copy gets in this design. Default: the
+    /// For a look that names an appearance graph: the id its copy gets in this design. Default: the
     /// library's id. The same graph already held under that id is reused; a different one is
     /// refused, never replaced.
     #[serde(default)]
@@ -186,7 +186,7 @@ fn look() -> Value {
             "color": {"description": "Red, green and blue, 0 to 255.", "type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3},
             "opacity": {"type": "number", "minimum": 0, "maximum": 1},
             "pbr": {"description": "metallic (0 to 1), roughness (0.045 to 1) and dielectric_ior (1 to 3).", "type": "object"},
-            "graph": {"description": "A material graph of the library's `graphs`, by id (v3).", "type": "string"},
+            "graph": {"description": "An appearance graph of the library's `graphs`, by id (v3).", "type": "string"},
             "values": {"description": "The graph's interface values, by input name (v3).", "type": "object"}
         },
         "required": ["name", "color", "opacity"]
@@ -218,7 +218,7 @@ fn catalog_schema(_: &mut SchemaGenerator) -> Schema {
         "properties": {
             "format": {"type": "string", "enum": [FORMAT, V1_FORMAT, V3_FORMAT]},
             "id": {"description": "The library's id.", "type": "string"},
-            "graphs": {"description": "Material graphs the looks name, by id (v3).", "type": "object"},
+            "graphs": {"description": "Appearance graphs the looks name, by id (v3).", "type": "object"},
             "textures": {"description": "Texture assets the graphs and looks name, by SHA-256 (v3).", "type": "object"},
             "name": {"description": "The library's name.", "type": "string"},
             "entries": {

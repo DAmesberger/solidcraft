@@ -487,7 +487,7 @@ fn style_menu(app: &SolveApp) -> Menu {
             MenuEntry::Row(row)
         })
         .collect();
-    // The look is a mode of its own beside the style (docs/material-graph.md §6.1).
+    // The look is a mode of its own beside the style (docs/appearance-graph.md §6.1).
     entries.push(MenuEntry::Separator);
     let mut look = MenuRow::new("realistic", app.tr("navbar.realistic"), "render_scene", "nav:style:realistic");
     look.selected = realistic(app);

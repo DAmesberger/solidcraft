@@ -1,5 +1,5 @@
-//! The material graph's raster back end (docs/material-graph.md §5.1–5.4): the viewport's half of
-//! "one IR, two GPU back ends". It turns a graph's IR (`solidcraft_viewport::material_graph`) into a
+//! The appearance graph's raster back end (docs/appearance-graph.md §5.1–5.4): the viewport's half of
+//! "one IR, two GPU back ends". It turns a graph's IR (`solidcraft_viewport::appearance_graph`) into a
 //! WGSL module per **shape**, caches their pipelines, and draws every material of one shape on one
 //! uniform page with one draw.
 //!
@@ -27,7 +27,7 @@ pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, generate
 pub use scene::{GraphDraw, GraphMaterial, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record, see_through};
 pub use textures::{PreparedTexture, ResidentPolicy, TextureCaps, TextureDecoder, TextureKey, TextureStats, texture_keys};
 
-use solidcraft_viewport::material_graph::ir::Ir;
+use solidcraft_viewport::appearance_graph::ir::Ir;
 
 /// A graph-drawn vertex: position, normal (three floats each) and the material record's vec4
 /// offset in its page (`u32`).

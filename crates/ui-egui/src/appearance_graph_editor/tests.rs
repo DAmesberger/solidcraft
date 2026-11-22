@@ -4,18 +4,18 @@
 
 use serde_json::{Value, json};
 use solidcraft_engine::Session;
-use solidcraft_viewport::material_graph::{Constant, InputValue, MaterialGraph};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant, InputValue};
 
 use super::model::{self, Driver};
 use super::{Action, Commands, Editor, Link, LookContext, Next, Outcome, Pending, TextureUse};
 
 const FIXTURES: &[(&str, &str, usize)] = &[
-    ("gloss-black-clear-coat", include_str!("../../../viewport/tests/fixtures/material_graph/gloss-black-clear-coat.json"), 1),
-    ("brushed-stainless", include_str!("../../../viewport/tests/fixtures/material_graph/brushed-stainless.json"), 1),
-    ("printed-label", include_str!("../../../viewport/tests/fixtures/material_graph/printed-label.json"), 2),
-    ("laser-etched-stainless", include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json"), 2),
-    ("pbr-steel", include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json"), 1),
-    ("candy-coat-over-aluminium", include_str!("../../../viewport/tests/fixtures/material_graph/candy-coat-over-aluminium.json"), 1),
+    ("gloss-black-clear-coat", include_str!("../../../viewport/tests/fixtures/appearance_graph/gloss-black-clear-coat.json"), 1),
+    ("brushed-stainless", include_str!("../../../viewport/tests/fixtures/appearance_graph/brushed-stainless.json"), 1),
+    ("printed-label", include_str!("../../../viewport/tests/fixtures/appearance_graph/printed-label.json"), 2),
+    ("laser-etched-stainless", include_str!("../../../viewport/tests/fixtures/appearance_graph/laser-etched-stainless.json"), 2),
+    ("pbr-steel", include_str!("../../../viewport/tests/fixtures/appearance_graph/pbr-steel.json"), 1),
+    ("candy-coat-over-aluminium", include_str!("../../../viewport/tests/fixtures/appearance_graph/candy-coat-over-aluminium.json"), 1),
 ];
 
 /// A real 2×1 RGBA PNG (original test data).
@@ -24,7 +24,7 @@ const PNG_2X1: &[u8] = &[
     84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 
-fn fixture(name: &str) -> MaterialGraph {
+fn fixture(name: &str) -> AppearanceGraph {
     let text = FIXTURES.iter().find(|(n, _, _)| *n == name).map(|(_, t, _)| *t).unwrap();
     serde_json::from_str(text).unwrap()
 }
@@ -39,7 +39,7 @@ fn catalogue() -> model::Catalogue {
 struct Fake {
     engine: Session,
     /// The engine's graph `g`, read back after every change.
-    graph: MaterialGraph,
+    graph: AppearanceGraph,
     changes: Vec<(String, Value)>,
     refuse: bool,
     /// The revision to report instead of the engine's (to hand the editor to an app).
@@ -47,7 +47,7 @@ struct Fake {
 }
 
 impl Fake {
-    fn new(graph: MaterialGraph) -> Fake {
+    fn new(graph: AppearanceGraph) -> Fake {
         let mut engine = Session::default();
         engine.param_check = solidcraft_engine::schema::ParamCheck::Strict;
         engine.execute("appearance.graph.create", &json!({"id": "g", "name": graph.name, "graph": graph})).unwrap();
@@ -55,7 +55,7 @@ impl Fake {
         Fake { engine, graph, changes: Vec::new(), refuse: false, revision: None }
     }
 
-    fn read(engine: &mut Session) -> MaterialGraph {
+    fn read(engine: &mut Session) -> AppearanceGraph {
         let reply = engine.execute("appearance.graph.get", &json!({"id": "g"})).unwrap();
         serde_json::from_value(reply["graph"].clone()).unwrap()
     }
@@ -98,7 +98,7 @@ fn editor(fake: &mut Fake) -> Editor {
 }
 
 /// The graph the engine holds after the last change, which was `command`.
-fn sent_graph(fake: &Fake, command: &str) -> MaterialGraph {
+fn sent_graph(fake: &Fake, command: &str) -> AppearanceGraph {
     let (id, _) = fake.changes.last().unwrap();
     assert_eq!(id, command);
     fake.graph.clone()
@@ -111,7 +111,7 @@ fn no_look() -> LookContext {
 #[test]
 fn the_catalogue_reply_reads_every_kind_and_port() {
     let c = catalogue();
-    assert_eq!(c.nodes.len(), solidcraft_viewport::material_graph::CATALOGUE.len());
+    assert_eq!(c.nodes.len(), solidcraft_viewport::appearance_graph::CATALOGUE.len());
     let roughness = c.port("standard_surface", "specular_roughness").unwrap();
     assert_eq!(roughness.default, model::PortDefault::Float(0.3));
     assert!(roughness.range.is_some_and(|(lo, hi)| lo > 0.0 && hi == 1.0));
@@ -128,7 +128,7 @@ fn the_catalogue_reply_reads_every_kind_and_port() {
 #[test]
 fn every_worked_example_is_stack_shaped() {
     for (name, text, layers) in FIXTURES {
-        let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+        let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
         let stack = model::stack(&graph).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(stack.layers.len(), *layers, "{name}");
         assert!(stack.layers[0].mix.is_none());
@@ -158,8 +158,8 @@ fn graphs_the_stack_cannot_show_are_named_not_drawn() {
     assert!(model::stack(&g).is_err());
 }
 
-fn model_connection(from: &str) -> solidcraft_viewport::material_graph::Connection {
-    solidcraft_viewport::material_graph::Connection { from: from.into(), fallback: None }
+fn model_connection(from: &str) -> solidcraft_viewport::appearance_graph::Connection {
+    solidcraft_viewport::appearance_graph::Connection { from: from.into(), fallback: None }
 }
 
 #[test]
@@ -220,8 +220,8 @@ fn a_refused_edit_leaves_the_replies_and_shows_why() {
     assert_eq!(ed.loaded, before);
 }
 
-fn model_param(text: &str) -> solidcraft_viewport::material_graph::ParamValue {
-    solidcraft_viewport::material_graph::ParamValue::Text(text.into())
+fn model_param(text: &str) -> solidcraft_viewport::appearance_graph::ParamValue {
+    solidcraft_viewport::appearance_graph::ParamValue::Text(text.into())
 }
 
 #[test]
@@ -251,13 +251,13 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     let s2 = model::stack(&swapped).unwrap();
     assert_eq!(s2.layers[1].surface, stack.layers[2].surface);
     assert_eq!(s2.layers[2].surface, stack.layers[1].surface);
-    let mask = |g: &MaterialGraph, l: &model::Layer| model::node(g, l.mix.as_deref().unwrap()).unwrap().inputs.get("mix").cloned();
+    let mask = |g: &AppearanceGraph, l: &model::Layer| model::node(g, l.mix.as_deref().unwrap()).unwrap().inputs.get("mix").cloned();
     assert_eq!(mask(&swapped, &s2.layers[2]), mask(&ed.graph().unwrap().graph, &stack.layers[1]));
     assert!(model::swap_layers(&swapped, &s2, 0).is_err(), "the base has no mask and stays at the bottom");
     // A reorder keeps the output: one edit of connections.
     let mut fake2 = Fake::new(ed.graph().unwrap().graph.clone());
     let mut ed2 = editor(&mut fake2);
-    let renamed = MaterialGraph { name: fake2.graph.name.clone(), ..swapped.clone() };
+    let renamed = AppearanceGraph { name: fake2.graph.name.clone(), ..swapped.clone() };
     ed2.apply(&mut fake2, Action::Replace(renamed), &no_look());
     assert!(ed2.note.is_none(), "{:?}", ed2.note);
     let g2 = sent_graph(&fake2, "appearance.graph.edit");
@@ -373,7 +373,7 @@ fn graphs_are_chosen_created_duplicated_and_replaced_as_json() {
     ed.apply(&mut fake, Action::Json(text), &no_look());
     let (id, params) = fake.changes.last().unwrap();
     assert_eq!(id, "appearance.graph.set");
-    assert_eq!(serde_json::from_value::<MaterialGraph>(params["graph"].clone()).unwrap(), fixture("brushed-stainless"));
+    assert_eq!(serde_json::from_value::<AppearanceGraph>(params["graph"].clone()).unwrap(), fixture("brushed-stainless"));
 }
 
 #[test]
@@ -395,7 +395,7 @@ fn values_read_srgb_constants_defaults_and_clamp_to_range() {
         let id = model::fresh_id(&g, "Base Colour.Range!");
         assert!(id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'), "{id}");
         assert!(model::node(&g, &id).is_none());
-        g.nodes.push(solidcraft_viewport::material_graph::Node {
+        g.nodes.push(solidcraft_viewport::appearance_graph::Node {
             id,
             kind: "constant".into(),
             params: Default::default(),
@@ -447,7 +447,7 @@ fn the_section_draws_every_example_without_sending_anything() {
 }
 
 /// Replies for a graph the engine would not hold; it changes nothing.
-struct Canned(MaterialGraph);
+struct Canned(AppearanceGraph);
 
 impl Commands for Canned {
     fn query(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -606,7 +606,7 @@ fn a_refused_change_is_not_sent_and_names_its_row_and_the_cost_follows_replies()
     // A required input left without a texture: the image node's `file`.
     let c = catalogue();
     let mut bad = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
-    bad.nodes.push(solidcraft_viewport::material_graph::Node {
+    bad.nodes.push(solidcraft_viewport::appearance_graph::Node {
         id: "img".into(),
         kind: "image".into(),
         params: Default::default(),
@@ -678,7 +678,7 @@ fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
     h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
     h.app.start("appearance.assign");
     h.frames(3);
-    h.step(&json!({"click": {"handle": "dialog:section:Material graph"}})).unwrap();
+    h.step(&json!({"click": {"handle": "dialog:section:Appearance graph"}})).unwrap();
     h.frames(2);
     let undo = h.app.session.undo.len();
     h.step(&json!({"click": {"handle": "appearance:graph_convert"}})).unwrap();
@@ -695,7 +695,7 @@ fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
     h.step(&json!({"click": {"handle": "appearance:graph_add_layer"}})).unwrap();
     h.frames(2);
     let graph = h.app.session.execute("appearance.graph.get", &json!({"id": id})).unwrap();
-    let graph: MaterialGraph = serde_json::from_value(graph["graph"].clone()).unwrap();
+    let graph: AppearanceGraph = serde_json::from_value(graph["graph"].clone()).unwrap();
     assert_eq!(model::stack(&graph).unwrap().layers.len(), 2);
     // Apply the graph look to the picked body again, through its button.
     h.step(&json!({"click": {"handle": "appearance:graph_use"}})).unwrap();
@@ -710,7 +710,7 @@ fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
     assert_eq!(editor(&h).link.map(|l| l.graph), Some(id));
 }
 
-/// The swatch draws a graph as itself through the material-graph pipelines (C1).
+/// The swatch draws a graph as itself through the appearance-graph pipelines (C1).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn the_swatch_draws_a_graph_with_its_coat() {

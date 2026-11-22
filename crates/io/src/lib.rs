@@ -1736,7 +1736,7 @@ pub fn write_design(doc: &Document) -> Result<Vec<u8>> {
             binary.join(" and ")
         )));
     }
-    // Textures nothing references are dropped on save (docs/material-graph.md §4.1), and the
+    // Textures nothing references are dropped on save (docs/appearance-graph.md §4.1), and the
     // design is written in the oldest format that holds it (§4.4).
     Ok(doc.without_unreferenced_textures().in_written_format().to_json().into_bytes())
 }

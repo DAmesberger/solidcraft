@@ -1,4 +1,4 @@
-//! Making material pipelines off the frame (docs/material-graph.md §5.2): a cold pipeline compile
+//! Making material pipelines off the frame (docs/appearance-graph.md §5.2): a cold pipeline compile
 //! of a new shape takes a third of a second on some drivers, so where the device makes pipelines
 //! from any thread (Vulkan, Metal, Direct3D 12 with FXC: `concurrent::threads_allowed`) one
 //! worker thread generates, validates and builds them, and the frame picks up what is finished.
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
-use solidcraft_viewport::material_graph::ir::{Ir, ShapeKey};
+use solidcraft_viewport::appearance_graph::ir::{Ir, ShapeKey};
 
 use super::cache::{Variant, placed_record_layout, vertex_entry, vertex_layout};
 
@@ -62,7 +62,7 @@ impl PipelineSpec {
         let source = match super::shape_source(ir).and_then(|s| super::validate(&s).map(|_| s)) {
             Ok(s) => s,
             Err(e) => {
-                log::warn!("material graph shape {:02x?}: drawn as its base response: {e}", ir.shape.0.get(..4).unwrap_or(&[]));
+                log::warn!("appearance graph shape {:02x?}: drawn as its base response: {e}", ir.shape.0.get(..4).unwrap_or(&[]));
                 return None;
             }
         };

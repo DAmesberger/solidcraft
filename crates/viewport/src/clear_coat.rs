@@ -64,7 +64,7 @@ impl ClearCoat {
     }
 }
 
-/// Test oracle for the viewport's coat colour (`sc_coat_layer` in the GPU crate's shading library, docs/material-graph.md
+/// Test oracle for the viewport's coat colour (`sc_coat_layer` in the GPU crate's shading library, docs/appearance-graph.md
 /// §5.5): [`tinted_brdf`] with the default specular.
 #[cfg(any(test, feature = "test-reference"))]
 pub fn tinted_coat_brdf(surface: OpaqueSurface, coat_color: Vec3, normal: Vec3, view: Vec3, light: Vec3) -> Result<Vec3, SurfaceError> {
@@ -72,7 +72,7 @@ pub fn tinted_coat_brdf(surface: OpaqueSurface, coat_color: Vec3, normal: Vec3, 
 }
 
 /// Test oracle for the viewport's specular tint and coat colour (`sc_layered_brdf` in
-/// the GPU crate's shading library, docs/material-graph.md §3.1 and §5.5): the coated BRDF of `surface` with
+/// the GPU crate's shading library, docs/appearance-graph.md §3.1 and §5.5): the coated BRDF of `surface` with
 /// OpenPBR's `specular_weight` and `specular_color` on the base and its coat tinted by linear
 /// `coat_color`.
 ///

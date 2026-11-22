@@ -7,15 +7,15 @@ use super::graph::{Constant, InputValue, ParamValue};
 use super::*;
 use crate::surface::OpaqueSurface;
 
-/// The worked examples of docs/material-graph.md §3.8 and a `pbr`-equivalent graph. The
+/// The worked examples of docs/appearance-graph.md §3.8 and a `pbr`-equivalent graph. The
 /// validation tests and the back ends' tests read the same files.
 const FIXTURES: &[(&str, &str)] = &[
-    ("gloss-black-clear-coat", include_str!("../../tests/fixtures/material_graph/gloss-black-clear-coat.json")),
-    ("brushed-stainless", include_str!("../../tests/fixtures/material_graph/brushed-stainless.json")),
-    ("printed-label", include_str!("../../tests/fixtures/material_graph/printed-label.json")),
-    ("laser-etched-stainless", include_str!("../../tests/fixtures/material_graph/laser-etched-stainless.json")),
-    ("pbr-steel", include_str!("../../tests/fixtures/material_graph/pbr-steel.json")),
-    ("candy-coat-over-aluminium", include_str!("../../tests/fixtures/material_graph/candy-coat-over-aluminium.json")),
+    ("gloss-black-clear-coat", include_str!("../../tests/fixtures/appearance_graph/gloss-black-clear-coat.json")),
+    ("brushed-stainless", include_str!("../../tests/fixtures/appearance_graph/brushed-stainless.json")),
+    ("printed-label", include_str!("../../tests/fixtures/appearance_graph/printed-label.json")),
+    ("laser-etched-stainless", include_str!("../../tests/fixtures/appearance_graph/laser-etched-stainless.json")),
+    ("pbr-steel", include_str!("../../tests/fixtures/appearance_graph/pbr-steel.json")),
+    ("candy-coat-over-aluminium", include_str!("../../tests/fixtures/appearance_graph/candy-coat-over-aluminium.json")),
 ];
 
 #[test]
@@ -53,7 +53,7 @@ fn catalogue_is_consistent() {
 #[test]
 fn worked_examples_parse_and_name_catalogue_ports() {
     for (name, text) in FIXTURES {
-        let graph: MaterialGraph = serde_json::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let graph: AppearanceGraph = serde_json::from_str(text).unwrap_or_else(|e| panic!("{name}: {e}"));
         let ids: BTreeSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids.len(), graph.nodes.len(), "{name}: duplicate ids");
         assert!(ids.contains(graph.output.as_str()), "{name}: output");
@@ -82,7 +82,7 @@ fn worked_examples_parse_and_name_catalogue_ports() {
                 }
             }
         }
-        let again: MaterialGraph = serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
+        let again: AppearanceGraph = serde_json::from_value(serde_json::to_value(&graph).unwrap()).unwrap();
         assert_eq!(again, graph, "{name}: round trip");
     }
 }
@@ -90,20 +90,20 @@ fn worked_examples_parse_and_name_catalogue_ports() {
 #[test]
 fn an_editor_layout_is_optional_and_round_trips() {
     let text = r#"{"name":"x","nodes":[{"id":"s","kind":"standard_surface"}],"output":"s","layout":{"s":[120.0,-40.5]}}"#;
-    let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+    let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
     assert_eq!(graph.layout.get("s"), Some(&[120.0, -40.5]));
     let saved = serde_json::to_value(&graph).unwrap();
     assert_eq!(saved["layout"]["s"][0], 120.0);
-    let plain: MaterialGraph = serde_json::from_str(FIXTURES[4].1).unwrap();
+    let plain: AppearanceGraph = serde_json::from_str(FIXTURES[4].1).unwrap();
     assert!(serde_json::to_value(&plain).unwrap().get("layout").is_none(), "no layout, no key");
 }
 
 #[test]
 fn saved_form_refuses_unknown_fields() {
     let text = r#"{"name":"x","nodes":[{"id":"s","kind":"standard_surface","shader":"fn f(){}"}],"output":"s"}"#;
-    assert!(serde_json::from_str::<MaterialGraph>(text).is_err());
+    assert!(serde_json::from_str::<AppearanceGraph>(text).is_err());
     let text = r#"{"name":"x","nodes":[],"output":"s","wgsl":"…"}"#;
-    assert!(serde_json::from_str::<MaterialGraph>(text).is_err());
+    assert!(serde_json::from_str::<AppearanceGraph>(text).is_err());
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn constants_take_every_documented_form() {
 #[test]
 fn the_fixtures_validate() {
     for (name, text) in FIXTURES {
-        let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+        let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
         assert!(validate(&graph).is_ok(), "{name}");
     }
 }

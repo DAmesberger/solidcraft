@@ -1,4 +1,4 @@
-//! Golden frames of a saved design and their acceptance metrics (docs/material-graph.md §5.9):
+//! Golden frames of a saved design and their acceptance metrics (docs/appearance-graph.md §5.9):
 //! every saved view of `$GOLDEN_DESIGN` (e.g. the realistic showcase built with
 //! `solidcraft-cli run examples/realistic-showcase.json --save …`) drawn offscreen through the
 //! viewport callback as the window draws it, in the modelling view and the Render preview, in

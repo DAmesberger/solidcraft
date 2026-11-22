@@ -862,7 +862,7 @@ pub(crate) fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
 /// A studio on the GPU.
 pub(crate) struct EnvGpu {
     pub(crate) bind: wgpu::BindGroup,
-    /// Its cube and uniform, which the material-graph pipelines' group 3 binds again.
+    /// Its cube and uniform, which the appearance-graph pipelines' group 3 binds again.
     view: wgpu::TextureView,
     _texture: wgpu::Texture,
     uniform: wgpu::Buffer,
@@ -954,7 +954,7 @@ pub(crate) fn upload(
     bind(device, layout, sampler, texture, uniform)
 }
 
-/// Group 3 of the material-graph pipelines, "studio + material" (docs/material-graph.md §5.3):
+/// Group 3 of the appearance-graph pipelines, "studio + material" (docs/appearance-graph.md §5.3):
 /// WebGL2 allows four bind groups and the viewport uses all four, so the material page and its
 /// textures join the studio. Bindings 0–2 are [`layout`]'s; 3 is the uniform page
 /// (`material::PAGE_BYTES`, WebGL2's block limit); 4–7 the material's textures (at most
@@ -1067,7 +1067,7 @@ impl Studios {
         self.generation
     }
 
-    /// A material-graph group 3 ([`material_layout`]): the frame's studio (as [`Studios::bind`]
+    /// An appearance-graph group 3 ([`material_layout`]): the frame's studio (as [`Studios::bind`]
     /// picks it), a uniform `page`, the material `textures` and their `samplers`.
     pub(crate) fn material_bind(
         &self,

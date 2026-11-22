@@ -1,7 +1,7 @@
-# Material graph commands (CLI and MCP)
+# Appearance graph commands (CLI and MCP)
 
-Material graphs are design-owned surface definitions that looks refer to by id
-([design note](material-graph.md), §4 and §7). This page is the automation reference: the
+Appearance graphs are design-owned surface definitions that looks refer to by id
+([design note](appearance-graph.md), §4 and §7). This page is the automation reference: the
 commands, what they take and return, and how to run them from `solidcraft-cli run` or the
 MCP server. Every command has input and output schemas (`solidcraft-cli commands`, or the
 MCP `describe_command` tool), and none opens a dialog.
@@ -66,7 +66,7 @@ the graphs and looks that name it.
   removed, a value out of the new range, see-through optics on a translucent look) is refused.
 - **`delete`** is refused while looks use the graph, unless `replace_with` names the graph they
   use instead. Their values the new graph does not expose are dropped.
-- **`convert`** ("Convert to material graph") takes a saved look as `appearance.list` shows it,
+- **`convert`** ("Convert to appearance graph") takes a saved look as `appearance.list` shows it,
   makes the one-node graph that draws it, and points every override that is exactly that look
   (within `scope: {bodies?, components?}`, as `appearance.replace` takes it) at the graph.
   The picture does not change. Physical materials' default looks are not rewritten.
@@ -112,7 +112,7 @@ The same graph already under that id is reused; a different one is refused unles
 `graph_id` names a new id for the copy.
 
 The path `builtin:materials` names the built-in material library
-([built-in material graphs](render-material-graphs.md)) wherever `library.inspect`,
+([built-in appearance graphs](render-appearance-graphs.md)) wherever `library.inspect`,
 `library.apply` or `appearance.graph.update_from_library` reads a library:
 
 ```json
@@ -130,7 +130,7 @@ and assigns it:
 - `graph_id` chooses the id (default: the entry's id in lower case);
 - an entry with a direction (brushed, milled, turned, wood grain, printed lines) gets a
   specular anisotropy and a tangent rotation from the binding table
-  ([built-in material graphs](render-material-graphs.md#starter-and-selene-bindings)); the
+  ([built-in appearance graphs](render-appearance-graphs.md#starter-and-selene-bindings)); the
   reply's `anisotropy` is `{value, rotation_rad, basis, note?}`, and `basis` is
   `authored_estimate` (or `isotropic` for an entry the table does not list);
 - the reply's `omitted` always lists `height_displacement`, because graphs never move geometry.

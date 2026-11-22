@@ -1,4 +1,4 @@
-# Realistic view and material graphs (design note)
+# Realistic view and appearance graphs (design note)
 
 Status: proposal for the `DAmesberger/solidcraft` fork, to be offered upstream as **one
 package** once it is proven. The package has four parts:
@@ -29,8 +29,8 @@ agent-hours.
 Three founder requirements bind the whole note:
 
 - the standard view stays the default;
-- files without material graphs open and save exactly as today;
-- material graphs are optional, needed only for realistic rendering.
+- files without appearance graphs open and save exactly as today;
+- appearance graphs are optional, needed only for realistic rendering.
 
 ## 1. Why and what
 
@@ -45,7 +45,7 @@ field would need its own format change, command flags and UI.
 
 This note replaces that path with **one** generic, data-only material description:
 
-- A material is a small **node graph**: pattern, projection and maths nodes feed one
+- An appearance graph is a small **node graph**: pattern, projection and maths nodes feed one
   **standard surface** node. The model follows open specifications: the node vocabulary
   follows MaterialX's standard library, and the surface node's inputs follow OpenPBR
   Surface (itself derived from Autodesk Standard Surface).
@@ -265,7 +265,7 @@ graph under the safety bound draws in full.
 - **Opaque PBR look (`pbr`):** it stays in the file exactly as today and is never
   rewritten (§4.4). The renderer reads it, in memory, as one `standard_surface` with
   `base_color` = the look's `srgb8` colour, `base_metalness`, `specular_roughness` and
-  `specular_ior`. Only an explicit "Convert to material graph" edit creates a graph.
+  `specular_ior`. Only an explicit "Convert to appearance graph" edit creates a graph.
 - **Clear coat:** `coat_weight`, `coat_roughness` and `coat_ior`, which are exactly
   `ClearCoat`'s weight, roughness and IOR. A pigmented body under lacquer keeps today's
   rule: base `specular_ior` = 1 (no second interface).
@@ -542,7 +542,7 @@ that `FORMAT` and its `format_pending` to all pending names. Saving serialises t
 are. The number therefore depends on the **build, not the content**: once any pending change
 exists, every design this build saves gets N+1, whether or not it uses the change, and the
 last release refuses all of them. After the release fold, every save writes the new number
-again. This is fine for most changes, but it would make "a material graph exists somewhere
+again. This is fine for most changes, but it would make "an appearance graph exists somewhere
 in the code" break every user's files for the last release.
 
 **Proposal: write the oldest format a design needs (opt-in per change).**
@@ -614,7 +614,7 @@ appears, and the one existing field stays for compatibility.
 because older designs need no rewrite:
 
 ```rust
-//! Looks can name a material graph (`appearances.graphs`, by id) with interface values, and
+//! Looks can name an appearance graph (`appearances.graphs`, by id) with interface values, and
 //! graphs can use texture assets (`appearances.textures`, container blobs or base64). An
 //! older design gets none: its looks (scalar or `pbr`) are unchanged. A design without
 //! graphs is still written in the older format (`USED`); the last release refuses a design
@@ -882,7 +882,7 @@ They will be measured with the existing `gpu` perf harness and recorded in
 | `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. In the Realistic view the light behind keeps only what the interface does not reflect (1 − F at the view angle), so a glossy dome's reflection does not add to an undimmed background and clip. |
 | A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O10). |
 
-### 5.7 One material system, two GPU targets
+### 5.7 One appearance system, two GPU targets
 
 The interactive viewport is the **primary** target. Upstream's GPU path tracer
 (`crates/gpu/src/path/`, native only) is a **second target of the same material system**.
@@ -953,7 +953,7 @@ cost) is shared. The back ends:
 |---|---|---|
 | Runs on | native and WebGL2 | native only (storage buffers) |
 | Emits | `material_eval(MatCtx) -> Surface`, one pipeline per shape (§5.2) | `graph_surface(t: Triangle, p: vec3<f32>, n: vec3<f32>) -> Triangle` for every shape in the job's scene, with a `switch` on the shape index, inside the one path pipeline |
-| Values | uniform pages (16 KiB), vec4 offset in the vertex | a storage-buffer material table; the triangle names its record in `interior.z`, today "reserved" |
+| Values | uniform pages (16 KiB), vec4 offset in the vertex | a storage-buffer table of looks; the triangle names its record in `interior.z`, today "reserved" |
 | Textures | 2D textures with GPU-built mips, samplers in group 3 | the existing `texture_words` storage buffer and bilinear `texture_sample` |
 | Derivatives / filtering | `fwidth` footprint, mips | no derivatives in compute: patterns are evaluated unfiltered at the hit, as `aging.wgsl` is (path samples integrate over the pixel) |
 | Recompile | on a new shape | once per captured job, when its shape set differs (jobs are immutable snapshots) |
@@ -1233,7 +1233,7 @@ Their natural word, "Shaded", is already a visual style, so reusing it would be 
 
 ### 6.2 Realistic keeps modelling clear
 
-The realistic view changes how **faces** are lit: the studio IBL, material graphs, coat, ambient
+The realistic view changes how **faces** are lit: the studio IBL, appearance graphs, coat, ambient
 occlusion, PBR Neutral tone mapping and dither of the product look. Everything used to model
 is drawn as in the standard view, composited **after** tone mapping in display space with
 the theme's colour tokens, so neither exposure nor the tone curve alters it. That covers:
@@ -1325,7 +1325,7 @@ command leaves the design unchanged.
 | `appearance.graph.nodes` (read-only) | – | The node catalogue: kinds, ports, types, ranges, defaults, params, cost units, catalogue version |
 | `appearance.graph.validate` (read-only) | `{graph}` | `{ok, cost, samples, textures, shape, errors: [{node, port, code, message}]}` |
 | `appearance.graph.create` | `{id?, name, graph? \| from?: "standard" \| saved look}` | `{id, cost}` |
-| `appearance.graph.convert` | `{look, id?, name?, scope?}` ("Convert to material graph": the look's one-node graph, and every override that is exactly that look names it) | `{id, cost, count}` |
+| `appearance.graph.convert` | `{look, id?, name?, scope?}` ("Convert to appearance graph": the look's one-node graph, and every override that is exactly that look names it) | `{id, cost, count}` |
 | `appearance.graph.set` | `{id, graph}` (full replace) | `{id, cost}` |
 | `appearance.graph.edit` | `{id, ops: [{op: "add_node" \| "remove_node" \| "connect" (with `fallback?`) \| "disconnect" \| "set_input" \| "set_param" \| "set_interface", …}]}` | `{id, cost}` (all ops apply or none) |
 | `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with stats / `[{id, name, uses, source}]` |
@@ -1337,7 +1337,7 @@ command leaves the design unchanged.
 | `appearance.graph.update_from_library` | `{id, library, preview: bool}` | an impact preview (changed inputs, affected looks), or the applied update |
 | `library.export` / `library.apply` (extended) | catalog v3; `library.apply` copies a look's graph and textures, `graph_id?` names the copy | unchanged shapes |
 
-The automation reference, with every parameter, is [material graph commands](material-graph-commands.md).
+The automation reference, with every parameter, is [appearance graph commands](appearance-graph-commands.md).
 
 Example (MCP or CLI, `solidcraft-cli run`):
 

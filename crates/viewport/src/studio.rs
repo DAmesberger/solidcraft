@@ -347,7 +347,7 @@ impl Cyclorama {
     }
 }
 
-/// How the Realistic view's frames of a studio are judged (docs/material-graph.md §5.9): a
+/// How the Realistic view's frames of a studio are judged (docs/appearance-graph.md §5.9): a
 /// dielectric whose base colour's linear luminance is under `dark_albedo` is judged against its
 /// own albedo (a highlight `highlight`/255 above its median, faces `distinct`/255 apart), and
 /// planar metal faces narrower than `narrow_face` B are not judged for a gradient.

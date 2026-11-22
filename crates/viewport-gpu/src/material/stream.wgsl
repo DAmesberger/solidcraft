@@ -1,4 +1,4 @@
-// The material-graph vertex streams (`material::VERTEX_SIZE`: position, normal and the vec4
+// The appearance-graph vertex streams (`material::VERTEX_SIZE`: position, normal and the vec4
 // offset of the material's record in its uniform page; `material::OBJECT_VERTEX_SIZE`: plus the
 // object-space position, for shapes that read object space; `vs_mat_placed`: an instanced mesh's
 // shared vertices at each placement, the record per placement). Part of every generated shape

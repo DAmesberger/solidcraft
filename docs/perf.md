@@ -67,7 +67,7 @@ While bodies are being meshed, the estimate now runs on a thread of its own and 
 on a later frame; a design changed meanwhile gets no offer. The same frame now takes 136–168 ms,
 none of it in the offer.
 
-## Material graphs: shape compiles off the frame, and the driver's inlining cliff (2026-11-19)
+## Appearance graphs: shape compiles off the frame, and the driver's inlining cliff (2026-11-19)
 
 Round 2 of the material package (fork branch `mg-r2-B`), measured on an Apple M5 Max (Metal)
 under heavy load (1-minute load average 100–430), so every number is one day's record. GPU
@@ -146,10 +146,10 @@ Priced so, the library and showcase graphs cost 0–3,542 units, close to the me
 of 100,000 units refuses a graph (note §3.6). The clear silicone (a see-through graph,
 drawn blended in every layer) is not comparable here.
 
-## Material graphs and the Realistic view against their targets (2026-11-04)
+## Appearance graphs and the Realistic view against their targets (2026-11-04)
 
-The targets of [the material graph note](material-graph.md) §5.4, measured on the package tip
-(`material-graph` at 45427568d) with the ignored tests in
+The targets of [the appearance graph note](appearance-graph.md) §5.4, measured on the package tip
+(`appearance-graph` at 45427568d) with the ignored tests in
 `crates/gpu/src/material/perf_tests.rs` and `crates/ui-egui/src/viewport_perf_tests.rs`:
 
 ```sh

@@ -34,7 +34,7 @@ wgpu = { workspace = true, features = ["gles"] }
 [dev-dependencies]
 # The HLSL the D3D12 backend compiles (tests check it suits FXC), and the GLSL ES of WebGL2.
 naga = { workspace = true, features = ["wgsl-in", "hlsl-out", "glsl-out"] }
-# The material graph's f64 reference interpreter: the oracle the shading tests compare their
+# The appearance graph's f64 reference interpreter: the oracle the shading tests compare their
 # readbacks with. Test-only; `cargo xtask layers` refuses it anywhere but a dev-dependency.
 solidcraft-viewport = { workspace = true, features = ["test-reference"] }
 image = { workspace = true }

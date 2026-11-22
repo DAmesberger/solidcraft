@@ -92,7 +92,7 @@ fn lying(mut png: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
 
 #[test]
 fn the_limits_are_the_files_safety_limits() {
-    use crate::material_graph::limits;
+    use crate::appearance_graph::limits;
     assert_eq!(MAX_TEXTURE_EDGE, limits::TEXTURE_SIDE);
     assert_eq!(MAX_TEXTURE_BYTES, limits::TEXTURE_BYTES);
     assert_eq!(MAX_DESIGN_DECODED_BYTES, limits::DECODED_TEXTURE_BYTES as u64);

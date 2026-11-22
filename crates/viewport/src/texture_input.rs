@@ -2,7 +2,7 @@
 //! This utility does not advertise texture/PBR support or define a persistent pack schema.
 //!
 //! The limits are safety bounds against hostile input, never quality caps
-//! (docs/material-graph.md §4.3): a renderer chooses the resident size of what is admitted here
+//! (docs/appearance-graph.md §4.3): a renderer chooses the resident size of what is admitted here
 //! ([`DecodedTexture::fit_within`] is its decode-time downsampling).
 //!
 //! - Size: 1–[`MAX_TEXTURE_EDGE`] px a side; encoded: at most [`MAX_TEXTURE_BYTES`].
@@ -481,7 +481,7 @@ impl DecodedTexture {
 
 /// The role an `image` binding reads `bytes` as: sRGB colour, else 16-bit (or 8-bit) grey height
 /// when the PNG header says 16-bit grey, else generic 8-bit data. The role follows from the node's
-/// use (docs/material-graph.md §4.5).
+/// use (docs/appearance-graph.md §4.5).
 pub fn role_of(bytes: &[u8], srgb: bool) -> MapRole {
     // PNG: the IHDR's bit depth is byte 24 and its colour type byte 25 (0: grey).
     let grey16 = bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.get(24) == Some(&16) && bytes.get(25) == Some(&0);

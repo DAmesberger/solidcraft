@@ -1,5 +1,5 @@
 //! The oldest format that holds a design (`Part::used`, `Family::written_for`,
-//! docs/material-graph.md §4.4): a format whose changes all say which files use them, and none of
+//! docs/appearance-graph.md §4.4): a format whose changes all say which files use them, and none of
 //! which a design uses, is skipped when it is written; a change that says nothing still forces
 //! its number; and reading a file written that way still runs exactly the steps it is missing.
 
@@ -173,7 +173,7 @@ fn this_build_writes_appearance_graphs_only_for_designs_with_graphs() {
     let mut graphs = plain.clone();
     graphs.appearances.tables.graphs.insert(
         crate::appearance_graph::GraphId::new("copper").unwrap(),
-        serde_json::from_str(include_str!("../../viewport/tests/fixtures/material_graph/pbr-steel.json")).unwrap(),
+        serde_json::from_str(include_str!("../../viewport/tests/fixtures/appearance_graph/pbr-steel.json")).unwrap(),
     );
     let mut written = serde_json::to_value(&graphs).unwrap();
     write_oldest_format(&mut written);

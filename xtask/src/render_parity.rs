@@ -1,12 +1,12 @@
 //! `cargo xtask render-parity`: the viewport's parity frames (`crates/viewport-gpu/src/view/
 //! parity_frames*.rs`) drawn by this tree and by an earlier revision, on this machine's GPU, and
 //! compared. Standard frames must be byte-identical to the base; Realistic frames must be within
-//! a tolerance of the realistic base (docs/material-graph.md §5.9, §6.3).
+//! a tolerance of the realistic base (docs/appearance-graph.md §5.9, §6.3).
 //!
 //! An earlier revision gets this tree's harness: the tool checks it out in a temporary worktree,
 //! copies the harness files in, includes them in `view.rs`'s `glass_tests` and dumps the frames
 //! there. The Standard file only uses API upstream's renderer already had; the Realistic file
-//! needs the product look and material graphs, so a realistic base must have both.
+//! needs the product look and appearance graphs, so a realistic base must have both.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

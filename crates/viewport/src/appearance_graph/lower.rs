@@ -1,4 +1,4 @@
-//! Lowering a resolved graph to the IR both GPU back ends read (docs/material-graph.md §5.1):
+//! Lowering a resolved graph to the IR both GPU back ends read (docs/appearance-graph.md §5.1):
 //! straight-line SSA in a canonical order, uniform slots, texture bindings, slope and triplanar
 //! marks, the expanded cost (§3.6) and the shape key (§5.2). Data preparation only; nothing here
 //! evaluates a graph.
@@ -67,7 +67,7 @@ struct Lowerer<'a> {
 
 impl Lowerer<'_> {
     fn internal(&mut self, message: &str) {
-        self.issues.push(None, None, "internal", format!("material graph lowering: {message}"));
+        self.issues.push(None, None, "internal", format!("appearance graph lowering: {message}"));
     }
 
     fn alloc(&mut self, width: u8) -> u32 {
@@ -456,7 +456,7 @@ fn hash_surface(h: &mut Sha256, surface: &[(&'static str, Operand)]) {
 /// texture hashes, names, ids, provenance and the editor layout never enter it.
 pub(super) fn shape_key(ir: &Ir) -> ShapeKey {
     let mut h = Sha256::new();
-    h.update(b"material graph shape\0");
+    h.update(b"appearance graph shape\0");
     h.update(CATALOGUE_VERSION.to_le_bytes());
     h.update(u32::try_from(ir.instrs.len()).unwrap_or(u32::MAX).to_le_bytes());
     for instr in &ir.instrs {

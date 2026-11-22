@@ -1,5 +1,5 @@
-//! The test-only reference: an f64 interpreter of the material-graph [`Ir`]
-//! (docs/material-graph.md §5.7). It is an **oracle**, never a renderer: product code
+//! The test-only reference: an f64 interpreter of the appearance-graph [`Ir`]
+//! (docs/appearance-graph.md §5.7). It is an **oracle**, never a renderer: product code
 //! never evaluates a graph on the CPU. The module exists only under `cfg(test)` or the
 //! `test-reference` feature, which only dev-dependencies enable; `cargo xtask layers` refuses a
 //! normal or build dependency that enables it.
@@ -13,7 +13,7 @@
 //!
 //! ```ignore
 //! // Cargo.toml: [dev-dependencies] solidcraft-viewport = { workspace = true, features = ["test-reference"] }
-//! use solidcraft_viewport::material_graph::reference::{self, Point, ReferenceSurface};
+//! use solidcraft_viewport::appearance_graph::reference::{self, Point, ReferenceSurface};
 //! let (ir, words) = reference::prepare_json(fixture_text, &Default::default())?;
 //! for point in reference::sample_points() {
 //!     let want = reference::evaluate(&ir, &words, &[], &point)?.surface;
@@ -92,7 +92,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use super::catalogue::{InputDefault, PortType, node_spec};
-use super::graph::{Constant, MaterialGraph};
+use super::graph::{AppearanceGraph, Constant};
 use super::ir::{GeometryInput, Instr, Ir, Operand, ValueId, lower, uniform_words, validate};
 pub use dual::D as Dual;
 use dual::{D, ZERO3, cross, dot3, length3, mix3, tangential, unit};
@@ -114,7 +114,7 @@ fn err<T>(message: impl Into<String>) -> Result<T, ReferenceError> {
     Err(ReferenceError(message.into()))
 }
 
-/// One shading point: what the geometry supplies to a material. Lengths in mm.
+/// One shading point: what the geometry supplies to a graph. Lengths in mm.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
     pub object_position: [f64; 3],
@@ -476,7 +476,7 @@ impl Evaluation {
 
 /// Validate and lower a graph and fill its uniform words from `values` (a look's interface
 /// values), exactly as the product does.
-pub fn prepare(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<(Ir, Vec<u32>), ReferenceError> {
+pub fn prepare(graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> Result<(Ir, Vec<u32>), ReferenceError> {
     let checked = validate(graph).map_err(|e| ReferenceError(e.to_string()))?;
     let ir = lower(&checked).map_err(|e| ReferenceError(e.to_string()))?;
     let words = uniform_words(&ir, values).map_err(|e| ReferenceError(e.to_string()))?;
@@ -485,7 +485,7 @@ pub fn prepare(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Re
 
 /// [`prepare`] from a graph's JSON.
 pub fn prepare_json(text: &str, values: &BTreeMap<String, Constant>) -> Result<(Ir, Vec<u32>), ReferenceError> {
-    let graph: MaterialGraph = serde_json::from_str(text).map_err(|e| ReferenceError(e.to_string()))?;
+    let graph: AppearanceGraph = serde_json::from_str(text).map_err(|e| ReferenceError(e.to_string()))?;
     prepare(&graph, values)
 }
 
@@ -510,7 +510,7 @@ struct Machine<'a> {
     outputs: Vec<Vec<Value>>,
 }
 
-/// Evaluate `ir` at `point` with one material's `words` ([`uniform_words`]) and textures by
+/// Evaluate `ir` at `point` with one look's `words` ([`uniform_words`]) and textures by
 /// their index in [`Ir::textures`] (`None` or missing: unbound, the image's `default`).
 pub fn evaluate(ir: &Ir, words: &[u32], textures: &[Option<&ReferenceTexture>], point: &Point) -> Result<Evaluation, ReferenceError> {
     let inv = inverse(point.object_to_world)?;

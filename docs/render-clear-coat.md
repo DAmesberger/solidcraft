@@ -92,9 +92,9 @@ These motivate independent interfaces and substrate attenuation; this implementa
 is original and deliberately simpler than a multilayer random walk. No reference
 implementation source was copied.
 
-## Coat colour (viewport, material graphs)
+## Coat colour (viewport, appearance graphs)
 
-A material graph's `coat_color` (docs/material-graph.md §5.5) tints what passes the
+An appearance graph's `coat_color` (docs/appearance-graph.md §5.5) tints what passes the
 coat: a thin absorbing layer multiplies the substrate by the colour once on entry
 and once on exit. At coverage `weight`, each pass keeps `1 - weight * (1 - coat_color)`
 on top of the Fresnel attenuation above; the coat's own reflection is untinted, and an
@@ -110,7 +110,7 @@ crate's `test-reference` feature, enabled by the GPU crate's tests); no CPU rend
 coat colour. The GPU path tracer has no lobe for it and draws the coat untinted,
 reporting the approximation (decision O10).
 
-## Specular tint (viewport, material graphs)
+## Specular tint (viewport, appearance graphs)
 
 `standard_surface`'s `specular_weight` and `specular_color` tint the base's own
 interface under the coat. The dielectric's normal-incidence reflectance is scaled by

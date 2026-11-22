@@ -187,7 +187,7 @@ remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
 ## Opt-in product look
 
 The GPU viewport has a second, opt-in shading path, the product look. It is the
-renderer underneath the **Realistic** view mode ([material graphs](material-graph.md) §6):
+renderer underneath the **Realistic** view mode ([appearance graphs](appearance-graph.md) §6):
 `view.look` (Shift+P, or **Realistic** in the navigation bar's visual-style menu) sets it
 for the modelling viewport or, with `view: "render_preview"`, for the Render preview. Each
 view's look is a preference remembered like the visual style, Standard by default and never
@@ -232,7 +232,7 @@ fragment entry builds a `PbrFragment` (pixel, world position, interpolated norma
 direction and the pixel's footprint, `fwidth` of the world position, taken before any
 branch), asks a material for the `Surface` there (`material_eval`), and returns
 `pbr_shade(surface, fragment)`. `Surface` is the WGSL mirror of
-`material_graph::SurfaceSample`: the `OpaqueSurface` core, its clear coat and the inputs the
+`appearance_graph::SurfaceSample`: the `OpaqueSurface` core, its clear coat and the inputs the
 core lacks, with base and coat normals and a tangent. `pbr_shade` holds all of the lighting
 above and below, for both looks, and reads the core, the coat and the normal; the other inputs
 wait for the shading that reads them. For PBR vertices `material_eval` is the built-in
@@ -256,7 +256,7 @@ With the look, the PBR shader:
   binds `STU-004` (two broad side panels) and `Contrast` binds `STU-005` (two tall strips
   and a low front fill). A studio may add its own lights after the exported ones:
   `Contrast` adds a broad overhead scrim, so flat metal seen from above or from a
-  three-quarter view reads light (flat gold reads gold) while the walls stay dark (docs/material-graph.md, studio-added lights). The rig's rectangular lights sit in multiples of the subject's
+  three-quarter view reads light (flat gold reads gold) while the walls stay dark (docs/appearance-graph.md, studio-added lights). The rig's rectangular lights sit in multiples of the subject's
   extent B about it, inside a room (4 B across for Product and Soft, 8 B for Contrast) with its floor at the ground
   (`ProductLook::room`; without a room the studio is at infinity). Around them runs a
   cyclorama: a floor with a pool of light under the subject sweeping up into the walls, a
@@ -328,7 +328,7 @@ adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
 The look also draws things the default preview leaves out:
 
 - **Clear coat.** A surface's `ClearCoat` (weight, roughness, IOR) reaches the shader
-  through a material graph's surface, not through PBR vertices, which carry none; until
+  through an appearance graph's surface, not through PBR vertices, which carry none; until
   graphs are drawn, the vertex path draws the uncoated surface. For direct light
   `sc_coated_brdf` (the shared shading library, `crates/gpu/src/shading/bsdf.wgsl`, which the
   viewport and the path tracer both compile) is the coat of [`clear_coat.rs`](render-clear-coat.md) and the path tracer: a single-scattering
@@ -356,7 +356,7 @@ The look also draws things the default preview leaves out:
   unaffected.
 
 Procedural patterns (a glass weave, orange peel, ink grain) are no longer fixed fields of
-the renderer: they become pattern nodes of [material graphs](material-graph.md) (§3.3).
+the renderer: they become pattern nodes of [appearance graphs](appearance-graph.md) (§3.3).
 
 Still out of reach with the look: cast shadows, image textures,
 true subsurface or absorption in a coat, crisp rectangular highlights (the cube's

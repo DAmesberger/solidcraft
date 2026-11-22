@@ -22,7 +22,7 @@ fn mat_base_response(r: u32, n: vec3<f32>) -> sc_Surface {
         g.xyz, f.w, g.w);
 }
 
-// A material-graph fragment. Every derivative is taken here, first, in uniform control flow;
+// An appearance-graph fragment. Every derivative is taken here, first, in uniform control flow;
 // `material_eval` is straight-line.
 @fragment
 fn fs_mat(i: MatOut) -> @location(0) vec4<f32> {

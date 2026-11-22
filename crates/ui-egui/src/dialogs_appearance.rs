@@ -10,7 +10,7 @@ use egui::Color32;
 use serde_json::{Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::pbr_appearance::PbrParameters;
-use solidcraft_viewport::material_graph::Constant as GraphConstant;
+use solidcraft_viewport::appearance_graph::Constant as GraphConstant;
 
 use crate::SolveApp;
 use crate::dialogs::{Kind, combo};
@@ -27,7 +27,7 @@ pub struct Look {
     pub color: [u8; 3],
     pub opacity: f64,
     pub pbr: Option<PbrParameters>,
-    /// The material graph the look names, with its own values of the graph's inputs.
+    /// The appearance graph the look names, with its own values of the graph's inputs.
     pub graph: Option<String>,
     pub values: BTreeMap<String, GraphConstant>,
 }
@@ -218,7 +218,7 @@ pub struct Ap {
     pub applied: Option<Value>,
     /// What the last drop or Apply did.
     pub note: Option<String>,
-    /// The Material graph section (docs/material-graph.md §7.1).
+    /// The Appearance graph section (docs/appearance-graph.md §7.1).
     pub material: Box<crate::appearance_graph_editor::Editor>,
 }
 
@@ -658,7 +658,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &mut [Sel
     false
 }
 
-/// What the Material graph section needs to know about the look being edited.
+/// What the Appearance graph section needs to know about the look being edited.
 fn look_context(k: &Ap, picked: &[Sel]) -> crate::appearance_graph_editor::LookContext {
     let mut look = json!({"name": k.look.clone().unwrap_or_else(|| hex(k.color)), "color": hex(k.color), "opacity": k.opacity});
     if let Some(pbr) = k.pbr {

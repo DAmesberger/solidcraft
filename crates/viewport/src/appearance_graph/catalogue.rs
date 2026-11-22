@@ -158,7 +158,7 @@ const FLOAT_OUT: &[OutputSpec] = &[out("out", PortType::Float)];
 const PATTERN_OUT: &[OutputSpec] = &[out("value", PortType::Float), out("slope", PortType::Vector2)];
 const LENGTH: f64 = 1e6;
 
-/// The v1 node catalogue (docs/material-graph.md §3).
+/// The v1 node catalogue (docs/appearance-graph.md §3).
 pub const CATALOGUE: &[NodeSpec] = &[
     // Surfaces.
     node(

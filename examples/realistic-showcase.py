@@ -1,4 +1,4 @@
-"""Authoring tool for the Realistic showcase (material graph note, section 5.9).
+"""Authoring tool for the Realistic showcase (appearance graph note, section 5.9).
 
 Python is not an application dependency. Run it from the repository root:
 

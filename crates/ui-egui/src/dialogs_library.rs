@@ -165,7 +165,7 @@ fn import_rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Ap, inputs: &[SelI
         if ui_kit::button(ui, solidcraft_ui_text::tr_label("Open library..."), ui_kit::Button::Normal).clicked() {
             open_library(app, k.local.token.clone());
         }
-        // The built-in material graphs, read like any library file.
+        // The built-in appearance graphs, read like any library file.
         let builtin = ui_kit::button(ui, solidcraft_ui_text::tr_label("Built-in materials"), ui_kit::Button::Normal);
         crate::scenario::publish_handle("library:builtin", builtin.rect.center());
         if builtin.clicked() {

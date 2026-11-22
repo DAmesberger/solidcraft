@@ -990,8 +990,8 @@ fn style_required(schema: &mut Schema) {
 #[path = "view_navigation_tests.rs"]
 mod tests;
 
-/// Which drawing a view uses (docs/material-graph.md §6): Standard, today's shading and the
-/// default, or Realistic, the studio-lit drawing of material graphs. A view setting, never
+/// Which drawing a view uses (docs/appearance-graph.md §6): Standard, today's shading and the
+/// default, or Realistic, the studio-lit drawing of appearance graphs. A view setting, never
 /// saved in the design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

@@ -12,11 +12,11 @@
 
 mod analysis;
 pub mod anisotropic_surface;
+pub mod appearance_graph;
 mod camera;
 pub mod clear_coat;
 pub mod grid;
 pub mod hatch;
-pub mod material_graph;
 mod pick;
 mod raster;
 mod scene;

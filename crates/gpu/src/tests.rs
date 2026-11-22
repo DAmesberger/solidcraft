@@ -633,10 +633,7 @@ fn viewport_gpu_fixtures_are_the_apps_assets() {
     let pairs: [(&[u8], &[u8]); 7] = [
         (include_bytes!("../../viewport-gpu/tests/fixtures/rigs.json"), include_bytes!("../../../assets/render/starter/lighting/exports/rigs.json")),
         (include_bytes!("../../viewport-gpu/tests/fixtures/studios.json"), include_bytes!("../../../assets/render/catalog/studios.json")),
-        (
-            include_bytes!("../../viewport-gpu/tests/fixtures/candy-coat.json"),
-            include_bytes!("../../../assets/appearances/graphs/candy-coat.json"),
-        ),
+        (include_bytes!("../../viewport-gpu/tests/fixtures/candy-coat.json"), include_bytes!("../../../assets/appearances/graphs/candy-coat.json")),
         (
             include_bytes!("../../viewport-gpu/tests/fixtures/glass-fibre-weave.json"),
             include_bytes!("../../../assets/appearances/graphs/glass-fibre-weave.json"),

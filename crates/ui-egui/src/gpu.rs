@@ -866,7 +866,7 @@ fn offscreen(
 
 /// The model view as the window draws it in the Realistic look: `scene` through the viewport
 /// callback with `look` (its studio baked and installed), occlusion on, drawn frame after frame
-/// until no material-graph shape or texture is still pending (at most 120 frames). Sized
+/// until no appearance-graph shape or texture is still pending (at most 120 frames). Sized
 /// `size` × `size`, sRGB. For the graph-look screenshots (test evidence only).
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn render_realistic_offscreen(

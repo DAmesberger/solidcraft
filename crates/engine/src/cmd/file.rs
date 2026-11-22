@@ -5066,10 +5066,10 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Hostile material graphs and textures (docs/material-graph.md §4) refuse the file, and the
+    /// Hostile appearance graphs and textures (docs/appearance-graph.md §4) refuse the file, and the
     /// design that is open stays as it was.
     #[test]
-    fn a_design_with_hostile_material_graphs_is_refused_and_the_open_design_stays() {
+    fn a_design_with_hostile_appearance_graphs_is_refused_and_the_open_design_stays() {
         let dir = name_dir("graphs");
         let mut s = Session::default();
         let before = s.doc.to_json();

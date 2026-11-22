@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use solidcraft_viewport::material_graph::{Ir, MaterialGraph, SurfaceSample, base_response, base_sample, lower, uniform_words, validate};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, Ir, SurfaceSample, base_response, base_sample, lower, uniform_words, validate};
 
 use super::GraphScene;
 use crate::view::glass_tests::{inner_pixels, render_frame, studio, test_frame};
 use crate::view::{Frame, GpuScene, GpuTarget, ProductLook, Renderer, StudioPreset};
 
-/// The worked examples of docs/material-graph.md §3.8 and the `pbr`-equivalent graph.
-pub(crate) const FIXTURES: &[(&str, &str)] = solidcraft_viewport::material_graph::fixtures::WORKED_EXAMPLES;
+/// The worked examples of docs/appearance-graph.md §3.8 and the `pbr`-equivalent graph.
+pub(crate) const FIXTURES: &[(&str, &str)] = solidcraft_viewport::appearance_graph::fixtures::WORKED_EXAMPLES;
 
 /// A graph, lowered, with its base sample.
 struct Lowered {
@@ -17,7 +17,7 @@ struct Lowered {
     base: SurfaceSample,
 }
 
-fn lowered(graph: &MaterialGraph) -> Result<Lowered, String> {
+fn lowered(graph: &AppearanceGraph) -> Result<Lowered, String> {
     let valid = validate(graph).map_err(|e| e.to_string())?;
     let ir = Arc::new(lower(&valid).map_err(|e| e.to_string())?);
     let base = base_sample(&valid).map_err(|e| e.to_string())?;
@@ -25,11 +25,11 @@ fn lowered(graph: &MaterialGraph) -> Result<Lowered, String> {
 }
 
 fn fixture(text: &str) -> Lowered {
-    let graph: MaterialGraph = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}"));
+    let graph: AppearanceGraph = serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}"));
     lowered(&graph).unwrap_or_else(|e| panic!("{e}"))
 }
 
-fn graph_of(value: Value) -> MaterialGraph {
+fn graph_of(value: Value) -> AppearanceGraph {
     serde_json::from_value(value).unwrap_or_else(|e| panic!("{e}"))
 }
 
@@ -551,7 +551,7 @@ fn save(name: &str, bytes: &[u8]) {
 fn pbr_steel_draws_as_its_pbr_look() {
     let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
     let copper = fixture(FIXTURES[4].1);
-    let Ok(valid) = validate(&serde_json::from_str::<MaterialGraph>(FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"))) else { panic!("valid") };
+    let Ok(valid) = validate(&serde_json::from_str::<AppearanceGraph>(FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"))) else { panic!("valid") };
     let surface = base_response(&valid).unwrap_or_else(|e| panic!("{e}"));
     let mut r = renderer(&device, &queue);
     let pbr = render_frame(&mut r, &device, &queue, &realistic(pbr_square(surface), 1, 1.0), true);
@@ -827,7 +827,7 @@ fn another_target_shares_the_generated_code() {
 // Against the test-only reference (track T): the generated code evaluated on the GPU at fixed
 // points equals the f64 interpreter of the same IR.
 
-use solidcraft_viewport::material_graph::reference::{self, Point, ReferenceSurface};
+use solidcraft_viewport::appearance_graph::reference::{self, Point, ReferenceSurface};
 
 /// Floats per point in the readback test's input: world and object position, world and object
 /// normal, footprint, facing, the object-to-world rows, their inverse's rows and the tangent.
@@ -1057,7 +1057,7 @@ fn reference_points() -> Vec<Point> {
 
 /// The worst difference between the GPU's and the reference's surface of a graph at the points.
 fn worst_against_reference(device: &wgpu::Device, queue: &wgpu::Queue, text: &str) -> Result<(String, f64), String> {
-    let graph: MaterialGraph = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let graph: AppearanceGraph = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let l = lowered(&graph)?;
     let (ir, words) = reference::prepare_json(text, &BTreeMap::new()).map_err(|e| e.0)?;
     if ir.shape != l.ir.shape {

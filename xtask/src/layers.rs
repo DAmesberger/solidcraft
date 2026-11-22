@@ -131,8 +131,8 @@ pub const UI_CRATES: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit",
 
 /// Features that exist only for tests: `(crate, feature)`. Only a dev-dependency may enable one;
 /// no normal or build dependency, no feature of any crate and not the crate's own `default`.
-/// The material graph's f64 reference interpreter is a test oracle and never ships
-/// (docs/material-graph.md, decision O12).
+/// The appearance graph's f64 reference interpreter is a test oracle and never ships
+/// (docs/appearance-graph.md, decision O12).
 pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[("viewport", "test-reference")];
 
 /// First layer allowed to use UI crates.

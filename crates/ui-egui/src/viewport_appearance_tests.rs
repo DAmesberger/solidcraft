@@ -839,7 +839,7 @@ fn a_see_through_graph_look_is_drawn_blended() {
 fn screenshot_graph_looks_in_the_realistic_view() {
     let Ok(dir) = std::env::var("C1_APP_SHOTS") else { return };
     let fixture = |name: &str| -> serde_json::Value {
-        let path = format!("{}/../viewport/tests/fixtures/material_graph/{name}.json", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../viewport/tests/fixtures/appearance_graph/{name}.json", env!("CARGO_MANIFEST_DIR"));
         serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default()).unwrap_or_default()
     };
     let mut app = SolveApp::new(Session::default(), Services::default());

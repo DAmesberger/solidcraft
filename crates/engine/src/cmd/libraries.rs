@@ -16,15 +16,15 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library.inspect", "Inspect Local Library", crate::checked!("library.inspect", inspect)).icon("inspect").noundo().doc_only()
         .contract(&INSPECT_CONTRACT)
         .output(output_schema_for::<LibraryInspected>)
-        .params("path: v1/v2 library JSON or v3 (JSON, or a .sclib container with textures), or builtin:materials for the built-in material graphs; returns validated catalog and exact entry revisions, without changing the design"),
+        .params("path: v1/v2 library JSON or v3 (JSON, or a .sclib container with textures), or builtin:materials for the built-in appearance graphs; returns validated catalog and exact entry revisions, without changing the design"),
     CommandSpec::new("library.export", "Export Design Library", crate::checked!("library.export", export)).icon("export").noundo().doc_only()
         .contract(&EXPORT_CONTRACT)
         .output(output_schema_for::<LibraryExported>)
-        .params("path: .json, or .sclib when the library has textures (a container); id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names a material graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
+        .params("path: .json, or .sclib when the library has textures (a container); id? (default user.local), name?, provenance?, overwrite? false, format? (default: solidcraft-library/2, or /3 when a look names an appearance graph) | solidcraft-library/1 (refuses PBR/cards) | /2 (refuses graphs) | /3. Copies assigned looks and design-local physical definitions; never changes the design"),
     CommandSpec::new("library.apply", "Apply Local Library Entry", crate::checked!("library.apply", apply)).icon("import").enabled(super::not_in_sketch)
         .contract(&APPLY_CONTRACT)
         .output(output_schema_for::<LibraryApplied>)
-        .params("path (or builtin:materials), entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import; graph_id?: id for the copy of a look's material graph (default the library's; a different graph under that id refuses). A look's graph and textures are copied with it. Copies values in one undo step; material conflicts are explicit"),
+        .params("path (or builtin:materials), entry: qualified ID, revision: exact content SHA-256; targets?: {bodies?, faces?: [{body,point}], components?}; name?: physical material name on import; graph_id?: id for the copy of a look's appearance graph (default the library's; a different graph under that id refuses). A look's graph and textures are copied with it. Copies values in one undo step; material conflicts are explicit"),
 ];
 
 impl LibraryTargets {
@@ -143,7 +143,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Some(id)
         }
-        None if request.graph_id.is_some() => return Err(bad(cmd, "`graph_id` is only for a look that names a material graph")),
+        None if request.graph_id.is_some() => return Err(bad(cmd, "`graph_id` is only for a look that names an appearance graph")),
         None => None,
     };
     let result = match &entry.definition {

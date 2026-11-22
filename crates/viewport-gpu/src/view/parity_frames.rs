@@ -1,5 +1,5 @@
 // Standard-look parity frames: a fixed set of small viewport frames that must stay byte for byte
-// what the renderer drew before the material-graph package (docs/material-graph.md §6.3).
+// what the renderer drew before the appearance-graph package (docs/appearance-graph.md §6.3).
 //
 // The set only uses API that upstream's renderer already had (no product look, no graphs), so
 // `cargo xtask render-parity` can copy this file into an older revision, dump the same frames

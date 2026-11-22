@@ -56,7 +56,7 @@ pub struct AppearanceAssignParams {
     /// recipe keeps its own; `null` clears it.
     #[serde(default)]
     pub pbr: Option<PbrParam>,
-    /// A material graph's id (`appearance.graph.list`). A graph look takes no library `appearance`
+    /// An appearance graph's id (`appearance.graph.list`). A graph look takes no library `appearance`
     /// and no `pbr`; its `color` is the graph's base colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<String>,
@@ -231,7 +231,7 @@ pub struct LookReply {
     /// Its opaque PBR response, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<PbrReply>,
-    /// The material graph's id, when the look names one.
+    /// The appearance graph's id, when the look names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<String>,
     /// The look's values for the graph's interface inputs, when it sets any.

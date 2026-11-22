@@ -2,7 +2,7 @@
 //! textures), the layered-stack view of a graph, and the edits it sends back. Nothing here
 //! draws or runs a command, so every rule is testable with schema-shaped replies.
 //!
-//! A graph is *stack-shaped* (docs/material-graph.md §7.1) when its output is one
+//! A graph is *stack-shaped* (docs/appearance-graph.md §7.1) when its output is one
 //! `standard_surface`, or a chain of `surface.mix` nodes whose `fg` is a `standard_surface`
 //! and whose `bg` continues the chain down to a base `standard_surface`. Each surface input is
 //! a constant, an interface value or a wire from upstream nodes (projection → pattern →
@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use solidcraft_viewport::material_graph::{Connection, Constant, InputValue, InterfaceInput, MaterialGraph, Node, ParamValue, PortType, limits};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, Connection, Constant, InputValue, InterfaceInput, Node, ParamValue, PortType, limits};
 
 /// Node kinds a catalogue reply may list (the v1 catalogue has 49).
 const MAX_KINDS: usize = 512;
@@ -39,7 +39,7 @@ pub struct KindSpec {
     pub kind: String,
     pub inputs: Vec<PortSpec>,
     pub params: Vec<ParamSpec>,
-    /// Cost units before expansion (docs/material-graph.md §3.6).
+    /// Cost units before expansion (docs/appearance-graph.md §3.6).
     pub cost: u32,
 }
 
@@ -100,7 +100,7 @@ impl Catalogue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Loaded {
     pub id: String,
-    pub graph: MaterialGraph,
+    pub graph: AppearanceGraph,
     pub cost: u32,
     pub uses: u32,
 }
@@ -108,7 +108,7 @@ pub struct Loaded {
 impl Loaded {
     pub fn from_reply(reply: &Value) -> Result<Loaded, String> {
         let id = reply.get("id").and_then(Value::as_str).ok_or("the reply has no graph id")?.to_string();
-        let graph: MaterialGraph = serde_json::from_value(reply.get("graph").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
+        let graph: AppearanceGraph = serde_json::from_value(reply.get("graph").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
         if graph.interface.len() > limits::INTERFACE_INPUTS {
             return Err(format!("the graph has {} interface inputs; at most {} are read", graph.interface.len(), limits::INTERFACE_INPUTS));
         }
@@ -208,16 +208,16 @@ pub struct Stack {
 /// Why a graph is not stack-shaped, as a message id.
 pub type NotStack = &'static str;
 
-pub fn node<'a>(graph: &'a MaterialGraph, id: &str) -> Option<&'a Node> {
+pub fn node<'a>(graph: &'a AppearanceGraph, id: &str) -> Option<&'a Node> {
     graph.nodes.iter().find(|n| n.id == id)
 }
 
-fn node_mut<'a>(graph: &'a mut MaterialGraph, id: &str) -> Option<&'a mut Node> {
+fn node_mut<'a>(graph: &'a mut AppearanceGraph, id: &str) -> Option<&'a mut Node> {
     graph.nodes.iter_mut().find(|n| n.id == id)
 }
 
 /// The node a surface port is wired from, if it names a whole surface node.
-fn surface_source<'a>(graph: &'a MaterialGraph, n: &Node, port: &str) -> Option<&'a Node> {
+fn surface_source<'a>(graph: &'a AppearanceGraph, n: &Node, port: &str) -> Option<&'a Node> {
     let InputValue::Connection(c) = n.inputs.get(port)? else { return None };
     let (from, output) = c.source();
     let source = node(graph, from)?;
@@ -225,7 +225,7 @@ fn surface_source<'a>(graph: &'a MaterialGraph, n: &Node, port: &str) -> Option<
 }
 
 /// The layers of `graph`, or why it is not stack-shaped.
-pub fn stack(graph: &MaterialGraph) -> Result<Stack, NotStack> {
+pub fn stack(graph: &AppearanceGraph) -> Result<Stack, NotStack> {
     let mut layers = Vec::new();
     let mut seen = BTreeSet::new();
     let mut current = node(graph, &graph.output).ok_or("appearance.graph.not_stack_output")?;
@@ -288,7 +288,7 @@ pub fn drive<'a>(n: &'a Node, port: &str) -> Drive<'a> {
 }
 
 /// The nodes upstream of `from`, nearest first, each once; surfaces are never part of a chain.
-pub fn upstream<'a>(graph: &'a MaterialGraph, from: &str) -> Vec<&'a Node> {
+pub fn upstream<'a>(graph: &'a AppearanceGraph, from: &str) -> Vec<&'a Node> {
     let mut out: Vec<&Node> = Vec::new();
     let mut queue = VecDeque::from([from.to_string()]);
     while let Some(id) = queue.pop_front() {
@@ -310,12 +310,12 @@ pub fn upstream<'a>(graph: &'a MaterialGraph, from: &str) -> Vec<&'a Node> {
 }
 
 /// How many inputs across the graph read `id`'s outputs.
-pub fn readers(graph: &MaterialGraph, id: &str) -> usize {
+pub fn readers(graph: &AppearanceGraph, id: &str) -> usize {
     graph.nodes.iter().flat_map(|n| n.inputs.values()).filter(|i| matches!(i, InputValue::Connection(c) if c.source().0 == id)).count()
 }
 
 /// Every node the output reads, directly or through others.
-pub fn reachable(graph: &MaterialGraph) -> BTreeSet<String> {
+pub fn reachable(graph: &AppearanceGraph) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut queue = VecDeque::from([graph.output.clone()]);
     while let Some(id) = queue.pop_front() {
@@ -459,7 +459,7 @@ impl Driver {
 
 /// A node id not yet in `graph`, made from `base` (`[a-z0-9_-]`, no dots: a dot separates an
 /// output name in a connection).
-pub fn fresh_id(graph: &MaterialGraph, base: &str) -> String {
+pub fn fresh_id(graph: &AppearanceGraph, base: &str) -> String {
     let mut stem: String = base
         .chars()
         .map(|c| c.to_ascii_lowercase())
@@ -475,39 +475,39 @@ pub fn fresh_id(graph: &MaterialGraph, base: &str) -> String {
     (2..=limits::NODES * 4).map(|i| format!("{stem}_{i}")).find(|id| node(graph, id).is_none()).unwrap_or(stem)
 }
 
-fn add(graph: &mut MaterialGraph, base: &str, kind: &str) -> String {
+fn add(graph: &mut AppearanceGraph, base: &str, kind: &str) -> String {
     let id = fresh_id(graph, base);
     graph.nodes.push(Node { id: id.clone(), kind: kind.into(), params: Default::default(), inputs: Default::default() });
     id
 }
 
-fn wire(graph: &mut MaterialGraph, node: &str, port: &str, from: &str, fallback: Option<Constant>) {
+fn wire(graph: &mut AppearanceGraph, node: &str, port: &str, from: &str, fallback: Option<Constant>) {
     if let Some(n) = node_mut(graph, node) {
         n.inputs.insert(port.into(), InputValue::Connection(Connection { from: from.into(), fallback }));
     }
 }
 
-fn set_constant(graph: &mut MaterialGraph, node: &str, port: &str, value: Constant) {
+fn set_constant(graph: &mut AppearanceGraph, node: &str, port: &str, value: Constant) {
     if let Some(n) = node_mut(graph, node) {
         n.inputs.insert(port.into(), InputValue::Constant(value));
     }
 }
 
 /// Remove the nodes `before` reached that `graph` no longer reaches, and their layout entries.
-fn prune(graph: &mut MaterialGraph, before: &BTreeSet<String>) {
+fn prune(graph: &mut AppearanceGraph, before: &BTreeSet<String>) {
     let now = reachable(graph);
     let dropped: BTreeSet<String> = before.iter().filter(|id| !now.contains(*id)).cloned().collect();
     graph.nodes.retain(|n| !dropped.contains(&n.id));
     graph.layout.retain(|id, _| !dropped.contains(id));
 }
 
-fn bounded(graph: &MaterialGraph) -> Result<(), &'static str> {
+fn bounded(graph: &AppearanceGraph) -> Result<(), &'static str> {
     if graph.nodes.len() > limits::NODES { Err("appearance.graph.too_many_nodes") } else { Ok(()) }
 }
 
 /// Lay a new surface over the stack, masked by a constant half mix. The new surface starts as
 /// a copy of the top surface's constants.
-pub fn add_layer(graph: &MaterialGraph, stack: &Stack) -> Result<MaterialGraph, &'static str> {
+pub fn add_layer(graph: &AppearanceGraph, stack: &Stack) -> Result<AppearanceGraph, &'static str> {
     let mut g = graph.clone();
     let top = stack.layers.last().and_then(|l| node(graph, &l.surface)).ok_or("appearance.graph.not_stack_output")?;
     let inputs = top.inputs.iter().filter(|(_, v)| matches!(v, InputValue::Constant(_))).map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -524,7 +524,7 @@ pub fn add_layer(graph: &MaterialGraph, stack: &Stack) -> Result<MaterialGraph, 
 }
 
 /// Remove layer `index` (not the base) with its mask and whatever only it used.
-pub fn remove_layer(graph: &MaterialGraph, stack: &Stack, index: usize) -> Result<MaterialGraph, &'static str> {
+pub fn remove_layer(graph: &AppearanceGraph, stack: &Stack, index: usize) -> Result<AppearanceGraph, &'static str> {
     let layer = stack.layers.get(index).ok_or("appearance.graph.no_layer")?;
     let mix_id = layer.mix.as_deref().ok_or("appearance.graph.base_layer")?;
     let mix = node(graph, mix_id).ok_or("appearance.graph.no_layer")?;
@@ -545,7 +545,7 @@ pub fn remove_layer(graph: &MaterialGraph, stack: &Stack, index: usize) -> Resul
 }
 
 /// Swap masked layers `index` and `index + 1` (each with its own mask).
-pub fn swap_layers(graph: &MaterialGraph, stack: &Stack, index: usize) -> Result<MaterialGraph, &'static str> {
+pub fn swap_layers(graph: &AppearanceGraph, stack: &Stack, index: usize) -> Result<AppearanceGraph, &'static str> {
     let (Some(lower), Some(upper)) = (stack.layers.get(index), stack.layers.get(index + 1)) else { return Err("appearance.graph.no_layer") };
     let (Some(lower_mix), Some(upper_mix)) = (lower.mix.as_deref(), upper.mix.as_deref()) else { return Err("appearance.graph.base_layer") };
     let take = |id: &str, port: &str| node(graph, id).and_then(|n| n.inputs.get(port).cloned());
@@ -575,7 +575,7 @@ pub fn shown_constant<'a>(n: &'a Node, port: &str) -> Option<&'a Constant> {
 }
 
 /// The first projection in the graph whose `texcoord` output a pattern can read.
-fn projection(graph: &MaterialGraph) -> Option<String> {
+fn projection(graph: &AppearanceGraph) -> Option<String> {
     graph.nodes.iter().find(|n| matches!(n.kind.as_str(), "texcoord.planar" | "texcoord.triplanar" | "texcoord.cylindrical")).map(|n| n.id.clone())
 }
 
@@ -584,13 +584,13 @@ fn projection(graph: &MaterialGraph) -> Option<String> {
 /// The connection keeps that value as its fallback, so the base response does not change.
 /// Normal inputs get a relief from the pattern; `texture` names an image's file.
 pub fn drive_with(
-    graph: &MaterialGraph,
+    graph: &AppearanceGraph,
     catalogue: &Catalogue,
     node_id: &str,
     port: &str,
     driver: Driver,
     texture: Option<&str>,
-) -> Result<MaterialGraph, &'static str> {
+) -> Result<AppearanceGraph, &'static str> {
     let n = node(graph, node_id).ok_or("appearance.graph.no_node")?;
     let spec = catalogue.port(&n.kind, port).ok_or("appearance.graph.no_port")?;
     // The value the input shows now (its constant, or the fallback of the wire it replaces, or
@@ -614,7 +614,7 @@ pub fn drive_with(
                 &mut g,
                 &pattern,
                 "file",
-                Constant::Texture(solidcraft_viewport::material_graph::graph::TextureRef { texture: sha.into() }),
+                Constant::Texture(solidcraft_viewport::appearance_graph::graph::TextureRef { texture: sha.into() }),
             ),
             None => return Err("appearance.graph.pick_texture"),
         }
@@ -654,7 +654,7 @@ pub fn drive_with(
 }
 
 /// Make `node`'s `port` a constant again (`value`), removing the nodes only its driver used.
-pub fn undrive(graph: &MaterialGraph, node_id: &str, port: &str, value: Option<Constant>) -> Result<MaterialGraph, &'static str> {
+pub fn undrive(graph: &AppearanceGraph, node_id: &str, port: &str, value: Option<Constant>) -> Result<AppearanceGraph, &'static str> {
     node(graph, node_id).ok_or("appearance.graph.no_node")?;
     let before = reachable(graph);
     let mut g = graph.clone();
@@ -672,7 +672,7 @@ pub fn undrive(graph: &MaterialGraph, node_id: &str, port: &str, value: Option<C
 /// say it (the output moves, an interface input or a param goes away). New nodes are added
 /// first, then inputs are set, connected (with their fallbacks) or disconnected, and nodes
 /// `new` no longer has are removed last. The layout is not part of an edit, so it is kept.
-pub fn ops_between(old: &MaterialGraph, new: &MaterialGraph) -> Option<Vec<Value>> {
+pub fn ops_between(old: &AppearanceGraph, new: &AppearanceGraph) -> Option<Vec<Value>> {
     if old.output != new.output || old.name != new.name || old.source != new.source {
         return None;
     }
@@ -731,14 +731,14 @@ pub fn ops_between(old: &MaterialGraph, new: &MaterialGraph) -> Option<Vec<Value
 }
 
 /// `graph` with one input set to a constant, as an edit would leave it (to check before sending).
-pub fn with_input(graph: &MaterialGraph, node_id: &str, port: &str, value: &Constant) -> MaterialGraph {
+pub fn with_input(graph: &AppearanceGraph, node_id: &str, port: &str, value: &Constant) -> AppearanceGraph {
     let mut g = graph.clone();
     set_constant(&mut g, node_id, port, value.clone());
     g
 }
 
 /// `graph` with one param set.
-pub fn with_param(graph: &MaterialGraph, node_id: &str, param: &str, value: &ParamValue) -> MaterialGraph {
+pub fn with_param(graph: &AppearanceGraph, node_id: &str, param: &str, value: &ParamValue) -> AppearanceGraph {
     let mut g = graph.clone();
     if let Some(n) = node_mut(&mut g, node_id) {
         n.params.insert(param.into(), value.clone());
@@ -747,7 +747,7 @@ pub fn with_param(graph: &MaterialGraph, node_id: &str, param: &str, value: &Par
 }
 
 /// `graph` with one interface input added or replaced.
-pub fn with_interface(graph: &MaterialGraph, input: &InterfaceInput) -> MaterialGraph {
+pub fn with_interface(graph: &AppearanceGraph, input: &InterfaceInput) -> AppearanceGraph {
     let mut g = graph.clone();
     match g.interface.iter_mut().find(|i| i.name == input.name) {
         Some(i) => *i = input.clone(),
@@ -757,7 +757,7 @@ pub fn with_interface(graph: &MaterialGraph, input: &InterfaceInput) -> Material
 }
 
 /// The `appearance.graph.set` parameters for `graph`.
-pub fn set(id: &str, graph: &MaterialGraph) -> Value {
+pub fn set(id: &str, graph: &AppearanceGraph) -> Value {
     json!({"id": id, "graph": graph})
 }
 

@@ -843,7 +843,7 @@ pub struct GpuScene {
     /// parameters.
     pub pbr: Vec<u8>,
     /// Material-graph shading of opaque faces this scene also draws (in `tris`, its blocks, plans
-    /// or instances), for the realistic look (docs/material-graph.md §5.2): their uniform pages
+    /// or instances), for the realistic look (docs/appearance-graph.md §5.2): their uniform pages
     /// and one vertex list per (shape, page, texture set). Drawn over those faces without
     /// writing depth, so the faces keep their depth, occlusion, edges and highlights.
     pub graphs: crate::material::GraphScene,
@@ -2440,7 +2440,7 @@ struct Batches {
     ground_ao: Option<Batch>,
     ground_input: Option<GroundAo>,
     pbr: Option<Batch>,
-    /// The scene's material-graph surfaces.
+    /// The scene's appearance-graph surfaces.
     graphs: crate::material::cache::GraphBatches,
     trans: Option<Batch>,
     shadow: Option<Batch>,
@@ -5282,8 +5282,8 @@ impl Renderer {
     }
 
     /// What the last frame drew; the handle stays current as later frames are drawn.
-    /// What material-graph drawing did in the last frame: shapes compiled, waiting and failed, and
-    /// draws that showed a base response (docs/material-graph.md §5.2, §5.6).
+    /// What appearance-graph drawing did in the last frame: shapes compiled, waiting and failed, and
+    /// draws that showed a base response (docs/appearance-graph.md §5.2, §5.6).
     pub fn material_stats(&self) -> crate::material::MaterialStats {
         self.materials.stats()
     }
@@ -5294,14 +5294,14 @@ impl Renderer {
         self.materials.wants_redraw()
     }
 
-    /// Wait, at most `timeout`, for the material-graph pipelines that compile off the frame
-    /// (docs/material-graph.md §5.2): the next frame draws them. For a client that renders until
+    /// Wait, at most `timeout`, for the appearance-graph pipelines that compile off the frame
+    /// (docs/appearance-graph.md §5.2): the next frame draws them. For a client that renders until
     /// [`Self::wants_redraw`] is false and must not spin meanwhile, such as an offscreen image.
     pub fn wait_for_materials(&self, timeout: std::time::Duration) {
         self.materials.wait(timeout);
     }
 
-    /// What this device keeps of material textures (docs/material-graph.md §4.3): what a
+    /// What this device keeps of material textures (docs/appearance-graph.md §4.3): what a
     /// [`crate::material::TextureDecoder`] for it prepares to.
     pub fn material_texture_policy(&self) -> crate::material::ResidentPolicy {
         self.materials.textures.policy
@@ -5388,7 +5388,7 @@ impl Renderer {
 
     /// The look `frame` is drawn in: its product look, except that a look with nothing to light
     /// it, no product lights and its studio not installed yet, draws the standard picture until
-    /// the studio is (the Realistic view of a modelling viewport: docs/material-graph.md §6.3).
+    /// the studio is (the Realistic view of a modelling viewport: docs/appearance-graph.md §6.3).
     fn drawn_look(&self, frame: &Frame) -> Option<ProductLook> {
         product_look(frame).filter(|look| frame.product_lights.is_some() || self.studios.has(look.studio))
     }

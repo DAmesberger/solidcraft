@@ -1,4 +1,4 @@
-//! The viewport's BSDF additions in `bsdf.wgsl` (docs/material-graph.md §5.5, track C2) on the GPU:
+//! The viewport's BSDF additions in `bsdf.wgsl` (docs/appearance-graph.md §5.5, track C2) on the GPU:
 //! anisotropic GGX against `render::anisotropic_surface`, the coat colour against
 //! `render::clear_coat::tinted_coat_brdf`, isotropic equivalence with today's GGX, white-furnace
 //! bounds, the see-through fallback and the tangent, and the GLSL ES 3.00 translation.

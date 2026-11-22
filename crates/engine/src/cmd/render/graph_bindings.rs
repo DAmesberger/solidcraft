@@ -1,11 +1,11 @@
 //! The direction table of `render.library.appearance.apply`'s `graph` variant
-//! (`assets/appearances/graphs/render-library-bindings.json`, docs/render-material-graphs.md):
+//! (`assets/appearances/graphs/render-library-bindings.json`, docs/render-appearance-graphs.md):
 //! a starter surface or Selene appearance with a direction gets a specular anisotropy and a
 //! tangent turned from its projection's u axis. The amounts are authored estimates, and the
 //! reply says so.
 use serde::Deserialize;
 use serde_json::{Value, json};
-use solidcraft_render::material_graph::{Constant, InputValue, MaterialGraph, Node};
+use solidcraft_render::appearance_graph::{AppearanceGraph, Constant, InputValue, Node};
 
 use crate::{Result, params::bad};
 
@@ -49,7 +49,7 @@ pub(crate) fn row(command: &str, id: &str) -> Result<Option<(Row, String)>> {
 /// Give the graph's `surface` node the row's anisotropy, its rotation and the tangent of the
 /// projection `uv` (added from `projection` when the graph has none). Returns the reply's
 /// `anisotropy` record.
-pub(crate) fn bind(command: &str, graph: &mut MaterialGraph, binding: Option<(Row, String)>, projection: impl FnOnce() -> Value) -> Result<Value> {
+pub(crate) fn bind(command: &str, graph: &mut AppearanceGraph, binding: Option<(Row, String)>, projection: impl FnOnce() -> Value) -> Result<Value> {
     let Some((row, basis)) = binding else {
         return Ok(json!({"value": 0.0, "rotation_rad": 0.0, "basis": "isotropic"}));
     };

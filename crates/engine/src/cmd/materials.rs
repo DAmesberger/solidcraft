@@ -32,7 +32,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&CREATE_CONTRACT)
         .output(output_schema_for::<MaterialReply>)
         .params(
-        "name (not a built-in material's); density_g_cm3: (0, 1000]; appearance?: library name (appearance.library) | graph?: material graph id with values? (as appearance.assign) | color?: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1), pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (opaque only, needs color/appearance): the default look. A named appearance keeps its preset response when pbr is omitted; pbr: null selects scalar shading. Optical edits do not change density. physical_card?: validated SI candidate record (null/omitted means unknown); card density never changes assigned density. Assign it with material.assign",
+        "name (not a built-in material's); density_g_cm3: (0, 1000]; appearance?: library name (appearance.library) | graph?: appearance graph id with values? (as appearance.assign) | color?: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1), pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (opaque only, needs color/appearance): the default look. A named appearance keeps its preset response when pbr is omitted; pbr: null selects scalar shading. Optical edits do not change density. physical_card?: validated SI candidate record (null/omitted means unknown); card density never changes assigned density. Assign it with material.assign",
     ),
     CommandSpec::new("material.edit", "Edit Physical Material", crate::checked!("material.edit", edit))
         .icon("material")
@@ -96,7 +96,7 @@ fn density(cmd: &str, p: &Value) -> Result<f64> {
 /// The look `appearance` / `color` / `opacity` give: `None` when none is given, `Some(None)`
 /// to clear it (`color: null`).
 fn look(cmd: &str, p: &Value, material: &str, doc: &solidcraft_doc::Document) -> Result<Option<Option<Look>>> {
-    // A look naming a material graph (`graph`, `values?`), read and settled as assignment does.
+    // A look naming an appearance graph (`graph`, `values?`), read and settled as assignment does.
     if p.get("graph").is_some_and(|g| !g.is_null()) {
         let mut l = super::inspect::appearance_look(cmd, p)?.ok_or_else(|| bad(cmd, "`graph` needs a look"))?;
         if p.get("name").is_none_or(Value::is_null) {

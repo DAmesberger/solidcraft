@@ -8,7 +8,7 @@ SolidCraft draws a design in one of two ways:
   images show.
 
 The design is the same in both views; only the lighting of the faces changes. A
-**material graph** describes how a surface looks in the Realistic view: brushed metal, a
+**appearance graph** describes how a surface looks in the Realistic view: brushed metal, a
 glossy coat, a woven glass fibre, a printed mark.
 
 ## The Realistic view
@@ -32,20 +32,20 @@ The command is `view.look` (`{"look": "realistic"}` or `"standard"`; without `lo
 toggles), for scripts and agents as well. Shift+P can be rebound in File › Keyboard
 Shortcuts.
 
-Appearances without a material graph look sensible in Realistic too: a plain colour is lit
+Appearances without an appearance graph look sensible in Realistic too: a plain colour is lit
 as a satin surface (roughness 0.5, refractive index 1.5), and an appearance with metalness
 and roughness (PBR) keeps exactly its values.
 
 ## Making a material
 
-Materials are made in the **Appearance** dialog (**A**), in its **Material graph** section.
-A material graph belongs to the design, has a name, and can be used by many appearances.
+Materials are made in the **Appearance** dialog (**A**), in its **Appearance graph** section.
+An appearance graph belongs to the design, has a name, and can be used by many appearances.
 
 1. Pick the objects to give the material (bodies, faces or components), then open the
    Appearance dialog.
-2. In **Material graph**, type a name and press **Create**. A new graph starts as one plain
+2. In **Appearance graph**, type a name and press **Create**. A new graph starts as one plain
    surface. To start from an existing appearance instead, choose it and press **Convert to
-   material graph**: the graph draws exactly what the appearance drew.
+   appearance graph**: the graph draws exactly what the appearance drew.
 3. Set the surface's inputs. They are grouped as **Base** (colour, metalness), **Specular**
    (roughness, refractive index, anisotropy), **Coat** (a clear or tinted layer on top),
    **Transmission**, **Emission** and **Geometry** (surface and coat normals, opacity). Each
@@ -80,7 +80,7 @@ can change and apply with **Replace graph**.
 
 ### The built-in materials
 
-SolidCraft ships a small library of ready-made material graphs. In the Appearance dialog's
+SolidCraft ships a small library of ready-made appearance graphs. In the Appearance dialog's
 **Local library** section, press **Built-in materials**, choose an entry and apply it to the
 picked objects. The graph is copied into the design, so the design never depends on the
 library. The library has:
@@ -98,7 +98,7 @@ library. The library has:
 | Printed label with stripe | label colour, print (an image) | A plastic label with a stripe and printed text, wrapped around the Z axis |
 
 The values are visual estimates, not measured optical data. Details, and how these graphs
-are built: [built-in material graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-material-graphs.md).
+are built: [built-in appearance graphs](https://github.com/tangency-labs/solidcraft/blob/main/docs/render-appearance-graphs.md).
 
 ## Textures
 
@@ -124,26 +124,26 @@ A library that holds images is saved as a `.sclib` file rather than `.json`.
 
 ## Compatibility
 
-- **Designs without material graphs** are saved exactly as before: the same file, byte for
+- **Designs without appearance graphs** are saved exactly as before: the same file, byte for
   byte, readable by the releases that read them before. Adding a graph and deleting it again
   returns the design to that form.
-- **Designs with material graphs** need a release that knows them. An older release refuses
+- **Designs with appearance graphs** need a release that knows them. An older release refuses
   to open such a design and asks you to update SolidCraft; it never opens it partly or drops
   the materials.
 - **Appearances with metalness and roughness (PBR)** are never rewritten into graphs. Only
-  **Convert to material graph** makes one, when you ask for it.
+  **Convert to appearance graph** makes one, when you ask for it.
 - The Standard view, exports (STEP and 3MF colours) and older tools show each appearance's
   colour. For an appearance with a graph, that colour is the graph's base colour, kept up to
   date whenever the graph changes.
 
 A design is written in the oldest file format that holds everything it contains. A design
-without graphs therefore never needs the material-graph change: it stays readable by the
+without graphs therefore never needs the appearance-graph change: it stays readable by the
 release that brings the file format changes now pending, and by any later one, even when a
-release with material graphs saved it.
+release with appearance graphs saved it.
 
 ## Scripts and agents
 
 Every step above is a command, and the same commands run from the CLI and MCP:
-[material graph commands](https://github.com/tangency-labs/solidcraft/blob/main/docs/material-graph-commands.md).
-The example design `examples/material-graphs.json` builds several parts with built-in
+[appearance graph commands](https://github.com/tangency-labs/solidcraft/blob/main/docs/appearance-graph-commands.md).
+The example design `examples/appearance-graphs.json` builds several parts with built-in
 materials from commands.

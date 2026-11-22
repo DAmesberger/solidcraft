@@ -19,7 +19,7 @@ Within `document.json`:
   and `triangles` plus a `mesh_blob` reference.
 - Canvases retain placement, format and pixel metadata, with empty `data` plus an
   `image_blob` reference. Raw image bytes replace base64 in the package.
-- Material-graph textures (`appearances.textures`, [material graphs](material-graph.md)
+- Material-graph textures (`appearances.textures`, [appearance graphs](appearance-graph.md)
   §4.1) keep their name, format and size, with no `data` and an `image_blob` reference to a
   `png` or `jpeg` blob; the texture's key must be the blob's SHA-256. A plain JSON design
   holds base64 `data` instead. Textures no graph or look references are dropped on save.

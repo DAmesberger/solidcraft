@@ -1,5 +1,5 @@
 //! A saved GPU path setup may be lit by a studio of the studio library
-//! (`render.setups.*.job.options.studio`: `{id, rotation_rad}`, docs/material-graph.md §5.8), its
+//! (`render.setups.*.job.options.studio`: `{id, rotation_rad}`, docs/appearance-graph.md §5.8), its
 //! rig's lights and cyclorama in place of saved lighting and an environment; the design keeps the
 //! records of the user studios its setups name (`render.studios`, by id), so it renders the same on
 //! another machine. A setup may also ask for Khronos PBR Neutral tone mapping

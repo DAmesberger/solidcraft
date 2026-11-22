@@ -1,4 +1,4 @@
-//! A studio's rig as a path job's lighting (docs/material-graph.md §5.8): the same lights and
+//! A studio's rig as a path job's lighting (docs/appearance-graph.md §5.8): the same lights and
 //! cyclorama the Realistic view bakes (`solidcraft_viewport::studio::StudioRig`), not a second
 //! description. The rig's lights become the job's area lights, placed in multiples of the
 //! subject's extent B about the studio's centre, at their mean radiance and graded as the view

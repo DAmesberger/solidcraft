@@ -1,4 +1,4 @@
-//! Measurements against the targets of docs/material-graph.md §5.4, recorded in docs/perf.md.
+//! Measurements against the targets of docs/appearance-graph.md §5.4, recorded in docs/perf.md.
 //! Records, not checks: every test is ignored and prints its numbers. Run optimised, one at a
 //! time, on an otherwise idle GPU:
 //!
@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use solidcraft_viewport::material_graph::{Ir, MaterialGraph, SurfaceSample, base_sample, lower, uniform_words, validate};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, Ir, SurfaceSample, base_sample, lower, uniform_words, validate};
 
 use crate::view::glass_tests::{studio, test_frame};
 use crate::view::{Frame, GpuScene, GpuTarget, ProductLook, Renderer, StudioPreset, far_depth, reversed_depth};
@@ -46,12 +46,12 @@ fn load() -> String {
     std::process::Command::new("uptime").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
 }
 
-fn graph_of(value: Value) -> MaterialGraph {
+fn graph_of(value: Value) -> AppearanceGraph {
     serde_json::from_value(value).unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// The showcase's graphs, by name.
-fn showcase_graphs() -> Vec<(String, MaterialGraph)> {
+fn showcase_graphs() -> Vec<(String, AppearanceGraph)> {
     let design: Value = serde_json::from_str(SHOWCASE).unwrap_or_else(|e| panic!("{e}"));
     design["commands"]
         .as_array()
@@ -63,7 +63,7 @@ fn showcase_graphs() -> Vec<(String, MaterialGraph)> {
 }
 
 /// 127 maths nodes in a chain into the surface: the node limit (as `validate_tests`).
-fn chain_128() -> MaterialGraph {
+fn chain_128() -> AppearanceGraph {
     let mut nodes = vec![json!({"id": "c0", "kind": "constant", "inputs": {"value": 0.25}})];
     for i in 1..127 {
         nodes.push(json!({"id": format!("c{i}"), "kind": if i % 2 == 0 { "add" } else { "multiply" }, "inputs": {"a": {"from": format!("c{}", i - 1)}, "b": 1}}));
@@ -74,7 +74,7 @@ fn chain_128() -> MaterialGraph {
 
 /// 128 nodes of the kinds a real look uses: a projection, noise, brushed lines, a weave and a
 /// checker, then 119 maths nodes mixing them into colour, roughness and a bump.
-fn mixed_128() -> MaterialGraph {
+fn mixed_128() -> AppearanceGraph {
     let mut nodes = vec![
         json!({"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}}),
         json!({"id": "n", "kind": "pattern.noise", "params": {"octaves": 4, "kind": "gradient", "dimensions": 2}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 3}}),
@@ -107,7 +107,7 @@ fn mixed_128() -> MaterialGraph {
 
 /// The most expensive graph of one-octave 3-D gradient noises summed into the colour that stays
 /// within a typical graph's cost (`limits::COST_TYPICAL`, about 2× today's look).
-fn budget_graph() -> (MaterialGraph, u32) {
+fn budget_graph() -> (AppearanceGraph, u32) {
     let make = |count: usize| {
         let mut nodes = vec![json!({"id": "p", "kind": "geometry.position", "params": {"space": "object"}})];
         let mut last: Option<String> = None;
@@ -127,7 +127,7 @@ fn budget_graph() -> (MaterialGraph, u32) {
     let mut best = None;
     for count in 1..64 {
         let g = make(count);
-        match validate(&g).ok().and_then(|v| lower(&v).ok()).filter(|ir| ir.cost <= solidcraft_viewport::material_graph::limits::COST_TYPICAL) {
+        match validate(&g).ok().and_then(|v| lower(&v).ok()).filter(|ir| ir.cost <= solidcraft_viewport::appearance_graph::limits::COST_TYPICAL) {
             Some(ir) => best = Some((g, ir.cost)),
             None => break,
         }
@@ -140,13 +140,13 @@ struct Lowered {
     base: SurfaceSample,
 }
 
-fn lowered(g: &MaterialGraph) -> Lowered {
+fn lowered(g: &AppearanceGraph) -> Lowered {
     let valid = validate(g).unwrap_or_else(|e| panic!("{e}"));
     Lowered { ir: Arc::new(lower(&valid).unwrap_or_else(|e| panic!("{e}"))), base: base_sample(&valid).unwrap_or_else(|e| panic!("{e}")) }
 }
 
-fn fixtures() -> Vec<(String, MaterialGraph)> {
-    let mut all: Vec<(String, MaterialGraph)> =
+fn fixtures() -> Vec<(String, AppearanceGraph)> {
+    let mut all: Vec<(String, AppearanceGraph)> =
         super::tests::FIXTURES.iter().map(|(n, t)| (n.to_string(), serde_json::from_str(t).unwrap_or_else(|e| panic!("{e}")))).collect();
     all.extend(showcase_graphs());
     all.push(("chain-128".into(), chain_128()));
@@ -320,11 +320,11 @@ fn pbr_layers(surface: solidcraft_viewport::surface::OpaqueSurface) -> GpuScene 
 }
 
 /// `l` on [`LAYERS`] layers over the scalar faces the viewport draws under every graph face.
-fn graph_layers(l: &Lowered, values: &BTreeMap<String, solidcraft_viewport::material_graph::Constant>) -> GpuScene {
+fn graph_layers(l: &Lowered, values: &BTreeMap<String, solidcraft_viewport::appearance_graph::Constant>) -> GpuScene {
     graph_layers_with(l, values, true)
 }
 
-fn graph_layers_with(l: &Lowered, values: &BTreeMap<String, solidcraft_viewport::material_graph::Constant>, underlay: bool) -> GpuScene {
+fn graph_layers_with(l: &Lowered, values: &BTreeMap<String, solidcraft_viewport::appearance_graph::Constant>, underlay: bool) -> GpuScene {
     let mut scene = GpuScene::default();
     let words = uniform_words(&l.ir, values).unwrap_or_else(|e| panic!("{e}"));
     let m = scene.graphs.material(&l.ir, &words, &l.base).unwrap_or_else(|e| panic!("{e}"));
@@ -359,9 +359,9 @@ fn fragment_costs() {
     let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
     println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
     let t = Target::new(&device, SIZE);
-    let copper_graph: MaterialGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
+    let copper_graph: AppearanceGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
     let copper = lowered(&copper_graph);
-    let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
+    let surface = solidcraft_viewport::appearance_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
         .unwrap_or_else(|e| panic!("{e}"));
     let (budget, budget_cost) = budget_graph();
     let budget = lowered(&budget);
@@ -612,7 +612,7 @@ type Copy = fn(usize) -> Vec<Value>;
 
 /// The graph of `count` copies summed into the base colour, over a shared planar texcoord `uv`
 /// and an object position `p`. `slope`: the sum also drives a bump, so every copy carries slopes.
-fn copies_graph(copy: Copy, count: usize, slope: bool) -> MaterialGraph {
+fn copies_graph(copy: Copy, count: usize, slope: bool) -> AppearanceGraph {
     let mut nodes = vec![
         json!({"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}}),
         json!({"id": "p", "kind": "geometry.position", "params": {"space": "object"}}),
@@ -823,8 +823,8 @@ fn node_costs() {
     let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
     println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
     let t = Target::new(&device, SIZE);
-    let copper_graph: MaterialGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
-    let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
+    let copper_graph: AppearanceGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
+    let surface = solidcraft_viewport::appearance_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
         .unwrap_or_else(|e| panic!("{e}"));
     let none = BTreeMap::new();
     let mut key = 1000;
@@ -925,10 +925,10 @@ fn print_copies_source() {
 }
 
 /// The built-in library's graphs, read from the repository's `assets/appearances/graphs` (outside
-/// this crate, so not compiled in): every JSON file there that is a material graph.
-fn library_graphs() -> Vec<(String, MaterialGraph)> {
+/// this crate, so not compiled in): every JSON file there that is an appearance graph.
+fn library_graphs() -> Vec<(String, AppearanceGraph)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/appearances/graphs");
-    let mut out: Vec<(String, MaterialGraph)> = std::fs::read_dir(&dir)
+    let mut out: Vec<(String, AppearanceGraph)> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
         .flatten()
         .map(|entry| entry.path())
@@ -952,11 +952,11 @@ fn library_graph_costs() {
     let Some((adapter, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { panic!("no GPU") };
     println!("adapter: {:?}; load before: {}", adapter.get_info().name, load());
     let t = Target::new(&device, SIZE);
-    let copper_graph: MaterialGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
-    let surface = solidcraft_viewport::material_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
+    let copper_graph: AppearanceGraph = serde_json::from_str(super::tests::FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"));
+    let surface = solidcraft_viewport::appearance_graph::base_response(&validate(&copper_graph).unwrap_or_else(|e| panic!("{e}")))
         .unwrap_or_else(|e| panic!("{e}"));
     let constant = lowered(&copper_graph);
-    let mut graphs: Vec<(String, MaterialGraph)> = library_graphs().into_iter().map(|(id, g)| (format!("library {id}"), g)).collect();
+    let mut graphs: Vec<(String, AppearanceGraph)> = library_graphs().into_iter().map(|(id, g)| (format!("library {id}"), g)).collect();
     graphs.extend(showcase_graphs().into_iter().map(|(n, g)| (format!("showcase {n}"), g)));
     let none = BTreeMap::new();
     let mut key = 9000;

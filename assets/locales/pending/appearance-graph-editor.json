@@ -1,9 +1,9 @@
 {
   "en": {
-    "appearance.graph.section": "Material graph",
+    "appearance.graph.section": "Appearance graph",
     "appearance.graph.graph": "Graph",
     "appearance.graph.entry": "{name} · {uses} uses",
-    "appearance.graph.none": "This design has no material graphs yet.",
+    "appearance.graph.none": "This design has no appearance graphs yet.",
     "appearance.graph.new_name": "New graph",
     "appearance.graph.new_hint": "Name",
     "appearance.graph.new_graph": "Create",
@@ -208,7 +208,7 @@
     "appearance.graph.use_graph": "Use on picked objects",
     "appearance.graph.apply_graph": "Apply to picked objects",
     "appearance.graph.use_hint": "Give the picked objects this graph with this look's values.",
-    "appearance.graph.convert": "Convert to material graph",
+    "appearance.graph.convert": "Convert to appearance graph",
     "appearance.graph.convert_hint": "Make this look a one-node graph that draws the same, and point the picked objects' overrides with this look at it.",
     "appearance.graph.converted": "Converted: {count} overrides now use the graph.",
     "appearance.graph.look_uses": "This look uses the graph {graph}.",

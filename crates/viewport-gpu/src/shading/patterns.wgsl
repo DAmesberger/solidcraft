@@ -1,6 +1,6 @@
 // Shared shading library: patterns (crates/viewport-gpu/src/shading/mod.rs). Pure functions, `sc_` names,
-// WebGL2-safe. The pattern, normal and maths nodes of a material graph (docs/material-graph.md
-// §3.3, §3.4), as the test-only reference (`material_graph::reference`, track T) defines them.
+// WebGL2-safe. The pattern, normal and maths nodes of an appearance graph (docs/appearance-graph.md
+// §3.3, §3.4), as the test-only reference (`appearance_graph::reference`, track T) defines them.
 // Every pattern fades toward its mean as its period nears the pixel footprint, so no graph
 // aliases into moiré; a footprint of zero (the path tracer's) shows it unfiltered. Slopes are
 // forward differences with a step of `0.05` of the pattern's period along each axis.
@@ -443,7 +443,7 @@ struct sc_GraphCtx {
     frame: sc_ObjectFrame,
 };
 
-// One evaluated surface point: the WGSL mirror of `material_graph::SurfaceSample` (the
+// One evaluated surface point: the WGSL mirror of `appearance_graph::SurfaceSample` (the
 // `OpaqueSurface` core, its clear coat and the inputs the core lacks), with its shading frame.
 // Colours are linear.
 struct sc_Surface {

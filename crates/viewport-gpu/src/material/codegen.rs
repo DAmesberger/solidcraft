@@ -1,4 +1,4 @@
-//! The raster back end's code generator (docs/material-graph.md §5.1): a material graph's IR to
+//! The raster back end's code generator (docs/appearance-graph.md §5.1): an appearance graph's IR to
 //! one straight-line WGSL function, `material_eval(c: sc_GraphCtx) -> sc_Surface`, over the shared
 //! shading library (`crate::shading`).
 //!
@@ -10,8 +10,8 @@
 
 use std::fmt::Write as _;
 
-use solidcraft_viewport::material_graph::catalogue::{InputDefault, PortType, node_spec};
-use solidcraft_viewport::material_graph::ir::{GeometryInput, Instr, Ir, Operand, ValueId};
+use solidcraft_viewport::appearance_graph::catalogue::{InputDefault, PortType, node_spec};
+use solidcraft_viewport::appearance_graph::ir::{GeometryInput, Instr, Ir, Operand, ValueId};
 
 /// vec4s of the base response at the head of every material's record (`RECORD`, below); the
 /// graph's own uniform slots follow.
@@ -23,7 +23,7 @@ pub struct CodegenError(pub String);
 
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "material graph code generation: {}", self.0)
+        write!(f, "appearance graph code generation: {}", self.0)
     }
 }
 

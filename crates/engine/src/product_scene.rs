@@ -60,20 +60,20 @@ pub fn extract_where(s: &Session, keep: impl Fn(&ModelBody) -> bool) -> Result<P
     Ok(scene)
 }
 
-/// A look's opaque response: its `pbr`, or for a look naming a material graph, the graph's base
-/// response with the look's values (docs/material-graph.md §2): what every renderer without the
+/// A look's opaque response: its `pbr`, or for a look naming an appearance graph, the graph's base
+/// response with the look's values (docs/appearance-graph.md §2): what every renderer without the
 /// graph's own code draws, and what the path back end's bound bodies keep as their surface.
 fn look_surface(s: &Session, look: &solidcraft_doc::appearance::Look) -> Result<Option<solidcraft_viewport::surface::OpaqueSurface>> {
     let Some(id) = &look.graph else { return look.opaque_surface().map_err(|e| EngineError::Other(e.to_string())) };
-    let fail = |e: solidcraft_render::material_graph::GraphError| EngineError::Other(format!("material graph `{}`: {e}", id.as_str()));
+    let fail = |e: solidcraft_render::appearance_graph::GraphError| EngineError::Other(format!("appearance graph `{}`: {e}", id.as_str()));
     let graph = s
         .doc
         .appearances
         .tables
         .graphs
         .get(id)
-        .ok_or_else(|| EngineError::Other(format!("a look names missing material graph `{}`", id.as_str())))?;
-    solidcraft_render::material_graph::look_base_sample(graph, &look.values).map(|s| Some(s.opaque)).map_err(fail)
+        .ok_or_else(|| EngineError::Other(format!("a look names missing appearance graph `{}`", id.as_str())))?;
+    solidcraft_render::appearance_graph::look_base_sample(graph, &look.values).map(|s| Some(s.opaque)).map_err(fail)
 }
 
 /// For each of `scene`'s meshes, the shared mesh it is drawn from and the placement that moves

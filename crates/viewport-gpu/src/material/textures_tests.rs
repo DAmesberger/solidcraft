@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::io::Cursor;
 
 use serde_json::{Value, json};
-use solidcraft_viewport::material_graph::graph::TextureRef;
-use solidcraft_viewport::material_graph::reference::{self, ReferenceSurface, ReferenceTexture};
-use solidcraft_viewport::material_graph::{MaterialGraph, base_sample, lower, validate};
+use solidcraft_viewport::appearance_graph::graph::TextureRef;
+use solidcraft_viewport::appearance_graph::reference::{self, ReferenceSurface, ReferenceTexture};
+use solidcraft_viewport::appearance_graph::{AppearanceGraph, base_sample, lower, validate};
 use solidcraft_viewport::texture_input::MapRole;
 
 fn png(image: image::DynamicImage) -> Vec<u8> {
@@ -98,8 +98,8 @@ fn an_images_role_follows_its_use() {
 
 #[test]
 fn texture_keys_come_from_constants_and_look_values() {
-    let text = solidcraft_viewport::material_graph::fixtures::worked_example("laser-etched-stainless").unwrap();
-    let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+    let text = solidcraft_viewport::appearance_graph::fixtures::worked_example("laser-etched-stainless").unwrap();
+    let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
     let ir = lower(&validate(&graph).unwrap()).unwrap();
     assert_eq!(texture_keys(&ir, &BTreeMap::new()), [None, None, None, None], "an interface texture with no value");
     let sha = "ab".repeat(32);
@@ -379,7 +379,7 @@ fn smooth(x: u32, y: u32) -> [u8; 4] {
 /// against the reference, at T's points, unfiltered and at a small footprint.
 fn worst(device: &wgpu::Device, queue: &wgpu::Queue, graph: &Value, texture: Option<(&[u8], u32, u32)>) -> (String, f64) {
     let text = graph.to_string();
-    let parsed: MaterialGraph = serde_json::from_str(&text).unwrap();
+    let parsed: AppearanceGraph = serde_json::from_str(&text).unwrap();
     let valid = validate(&parsed).unwrap_or_else(|e| panic!("{e}"));
     let base = base_sample(&valid).unwrap();
     let sha = "5e".repeat(32);
@@ -496,7 +496,7 @@ fn the_texture_shaders_translate_for_webgl2() {
     );
     assert!(mips[1].contains("texelFetch") && mips[2].contains("texelFetch"), "{}", mips[1]);
     for g in [graph("srgb", "mirror", "a"), height_graph(0.05)] {
-        let parsed: MaterialGraph = serde_json::from_value(g).unwrap();
+        let parsed: AppearanceGraph = serde_json::from_value(g).unwrap();
         let ir = lower(&validate(&parsed).unwrap()).unwrap();
         let source = crate::material::shape_source(&ir).unwrap();
         let out = glsl(&source, &[(naga::ShaderStage::Fragment, "fs_mat")]);
@@ -521,7 +521,7 @@ fn each_binding_has_one_wrap_mode() {
         ],
         "output": "s"
     });
-    let parsed: MaterialGraph = serde_json::from_value(g).unwrap();
+    let parsed: AppearanceGraph = serde_json::from_value(g).unwrap();
     let ir = lower(&validate(&parsed).unwrap_or_else(|e| panic!("{e}"))).unwrap();
     assert_eq!(ir.textures.len(), 2, "repeat and clamp; the second repeat shares the first");
     let sha = "7c".repeat(32);

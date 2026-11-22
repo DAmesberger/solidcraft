@@ -1,7 +1,7 @@
 //! The surface node's output: [`OpaqueSurface`] (base colour, metallic, roughness, dielectric
 //! IOR and optional [`ClearCoat`]) plus the inputs it lacks. `OpaqueSurface` is the constant
 //! core: a `pbr` look is exactly a one-node constant graph whose sample has default extensions,
-//! and the two convert losslessly (docs/material-graph.md §5.7).
+//! and the two convert losslessly (docs/appearance-graph.md §5.7).
 //!
 //! GPU back ends mirror this struct as WGSL `Surface`; tests compare against it.
 //!

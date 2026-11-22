@@ -45,10 +45,10 @@ sampling, PDF/throughput agreement and retained null-event mass. Broad-lobe ener
 checks are scoped consistency tests, not universal energy certification, measured
 material data or evidence of an integrated rendered image.
 
-## Viewport consumer (material graphs)
+## Viewport consumer (appearance graphs)
 
-The viewport's realistic view evaluates this lobe on the GPU for a material graph's
-`specular_roughness_anisotropy` (docs/material-graph.md §5.5): `sc_aniso_base_brdf` in
+The viewport's realistic view evaluates this lobe on the GPU for an appearance graph's
+`specular_roughness_anisotropy` (docs/appearance-graph.md §5.5): `sc_aniso_base_brdf` in
 `crates/gpu/src/shading/bsdf.wgsl`, the same D, separable Smith and Fresnel-weighted
 Lambert layer, for the product lights and the fixed preview lights. Roughness axes
 follow OpenPBR: `αt = r²·√(2 / (1 + (1 − a)²))` along the (rotated) tangent and
@@ -75,7 +75,7 @@ tangent and 0.96 across it. Isotropic surfaces keep the single lookup bit for bi
 split-sum albedo stays the isotropic one. The GPU path tracer has no anisotropic lobe
 and draws an isotropic one, reporting the approximation (decision O10).
 
-Cost (counted, not yet measured against docs/material-graph.md §5.4): an anisotropic
+Cost (counted, not yet measured against docs/appearance-graph.md §5.4): an anisotropic
 fragment in the Realistic view samples the studio cube four more times than an
 isotropic one (five base taps instead of one), plus about 30 ALU operations. The loop
 count is fixed, and every sample has an explicit level, so it is valid on WebGL2. Only

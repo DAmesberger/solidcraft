@@ -1,6 +1,6 @@
 //! Portable material libraries; no network, external resources or design links.
 //!
-//! Catalog v3 adds material graphs and their texture assets (docs/material-graph.md §4.2): a
+//! Catalog v3 adds appearance graphs and their texture assets (docs/appearance-graph.md §4.2): a
 //! v3 catalog with textures is a container (a ZIP: `container.json`, `catalog.json` and
 //! `blobs/<sha256>.png|jpeg`, read by the design container's bounded reader); one without
 //! textures stays plain JSON. A library without graphs is written as v2.
@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const FORMAT: &str = "solidcraft-library/2";
 pub const V1_FORMAT: &str = "solidcraft-library/1";
-/// A library with material graphs (and, in a container, textures).
+/// A library with appearance graphs (and, in a container, textures).
 pub const V3_FORMAT: &str = "solidcraft-library/3";
 /// `container.json`'s format for a library container.
 pub const CONTAINER_FORMAT: &str = "solidcraft-library/1";
@@ -77,7 +77,7 @@ pub struct LibraryLook {
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<solidcraft_doc::pbr_appearance::PbrParameters>,
-    /// A material graph of the catalog's `graphs` (v3).
+    /// An appearance graph of the catalog's `graphs` (v3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<appearance_graph::GraphId>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -242,7 +242,7 @@ pub struct Catalog {
     pub name: String,
     #[serde(deserialize_with = "bounded_entries")]
     pub entries: Vec<Entry>,
-    /// Material graphs the entries' looks name (v3).
+    /// Appearance graphs the entries' looks name (v3).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub graphs: Graphs,
     /// Texture assets the graphs and looks name, by SHA-256 (v3): blobs in a container, base64
@@ -291,7 +291,7 @@ impl Catalog {
         }
         let v3 = self.format == V3_FORMAT;
         if !v3 && (!self.graphs.is_empty() || !self.textures.is_empty()) {
-            return Err(invalid("only catalog v3 can preserve material graphs and textures; export refused"));
+            return Err(invalid("only catalog v3 can preserve appearance graphs and textures; export refused"));
         }
         let mut ids = std::collections::BTreeSet::new();
         for entry in &self.entries {
@@ -299,7 +299,7 @@ impl Catalog {
                 return Err(invalid("catalog v1 cannot preserve PBR or engineering cards; export refused"));
             }
             if !v3 && entry.definition.requires_v3() {
-                return Err(invalid("only catalog v3 can preserve material graphs; export refused"));
+                return Err(invalid("only catalog v3 can preserve appearance graphs; export refused"));
             }
             entry.validate(&self.id)?;
             if !ids.insert(&entry.id) {
@@ -468,8 +468,8 @@ impl Catalog {
         let mut entries = Vec::new();
         for (id, color, text) in builtin_graphs::GRAPHS {
             let id = appearance_graph::GraphId::new(id).map_err(|e| invalid(e.to_string()))?;
-            let graph: appearance_graph::MaterialGraph =
-                serde_json::from_str(text).map_err(|e| invalid(format!("built-in material graph `{}`: {e}", id.as_str())))?;
+            let graph: appearance_graph::AppearanceGraph =
+                serde_json::from_str(text).map_err(|e| invalid(format!("built-in appearance graph `{}`: {e}", id.as_str())))?;
             let look =
                 LibraryLook { name: graph.name.clone(), color: *color, opacity: 1.0, pbr: None, graph: Some(id.clone()), values: BTreeMap::new() };
             entries.push(Entry::new(BUILTIN_ID, Definition::Appearance(look), provenance.clone())?);
@@ -536,7 +536,7 @@ impl Catalog {
         for look in entries.iter().filter_map(|e| e.definition.look()) {
             if let Some(graph_id) = &look.graph {
                 let graph =
-                    tables.graphs.get(graph_id).ok_or_else(|| invalid(format!("material graph `{}` is not in the design", graph_id.as_str())))?;
+                    tables.graphs.get(graph_id).ok_or_else(|| invalid(format!("appearance graph `{}` is not in the design", graph_id.as_str())))?;
                 used.extend(appearance_graph::graph_textures(graph).map(str::to_string));
                 graphs.insert(graph_id.clone(), graph.clone());
             }

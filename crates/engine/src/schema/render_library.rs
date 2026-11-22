@@ -521,7 +521,7 @@ pub struct AppearanceApplyParams {
     #[schemars(schema_with = "id_schema")]
     pub id: Option<String>,
     /// `uniform_opaque`: the original scalar look as one opaque colour. `graph`: the recipe as a
-    /// material graph with its maps as design textures.
+    /// appearance graph with its maps as design textures.
     #[serde(default, deserialize_with = "read_string", skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "appearance_variant_schema")]
     pub variant: Option<String>,

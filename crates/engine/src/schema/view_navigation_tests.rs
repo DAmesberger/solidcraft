@@ -337,7 +337,7 @@ fn next_and_previous_tab_echo_their_step_without_editing_the_design() {
     assert_eq!((s.doc.to_json(), s.undo.len()), (before, undo), "nothing in the design changes");
 }
 
-/// `view.look` (docs/material-graph.md §6.1): its schemas name `look` and `view`; a named look
+/// `view.look` (docs/appearance-graph.md §6.1): its schemas name `look` and `view`; a named look
 /// echoes with its view (the modelling viewport by default) and matches the output schema; the
 /// design and its undo are untouched; a toggle needs the window's current look, so a session
 /// without one refuses it with the reason; bad values and unknown keys are refused.

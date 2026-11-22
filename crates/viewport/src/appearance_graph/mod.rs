@@ -1,7 +1,7 @@
-//! Material graphs: a data-only description of a surface, made of typed nodes (projections,
+//! Appearance graphs: a data-only description of a surface, made of typed nodes (projections,
 //! patterns, maths) that feed one standard surface node. The node vocabulary follows the
 //! MaterialX standard library and the surface inputs follow OpenPBR Surface (public
-//! specifications; names only, no code). Design: `docs/material-graph.md`.
+//! specifications; names only, no code). Design: `docs/appearance-graph.md`.
 //!
 //! This module is the contract the GPU back ends (viewport and path tracer), the design format,
 //! the commands and the editor build against:
@@ -31,7 +31,7 @@ pub mod sample;
 mod validate;
 
 pub use catalogue::{CATALOGUE, CATALOGUE_VERSION, InputDefault, InputSpec, NodeSpec, OutputSpec, ParamKind, ParamSpec, PortType, node_spec};
-pub use graph::{Connection, Constant, GraphSource, InputValue, InterfaceInput, InterfaceRef, MaterialGraph, Node, ParamValue};
+pub use graph::{AppearanceGraph, Connection, Constant, GraphSource, InputValue, InterfaceInput, InterfaceRef, Node, ParamValue};
 pub use ir::{
     GraphError, GraphIssue, Ir, ShapeKey, UniformSlot, Validated, base_response, base_sample, look_base_sample, lower, uniform_words, validate,
 };
@@ -52,7 +52,7 @@ pub mod limits {
     pub const ID_BYTES: usize = 64;
     /// Bytes in a graph or texture name (UTF-8, no control characters).
     pub const NAME_BYTES: usize = 256;
-    /// Cost units after triplanar and slope expansion (docs/material-graph.md §3.6) above which a
+    /// Cost units after triplanar and slope expansion (docs/appearance-graph.md §3.6) above which a
     /// graph is refused: a safety bound against pathological or hostile graphs, not a quality
     /// limit. 100,000 units is about 25× today's look per full-screen layer on a fast desktop GPU
     /// (3.4 ms at 1080p on an Apple M5 Max); on a GPU twenty times slower, at 4K with a few
@@ -66,7 +66,7 @@ pub mod limits {
     pub const TEXTURE_SAMPLES: u32 = 8;
     /// Distinct textures one graph reads.
     pub const TEXTURES_PER_GRAPH: usize = 4;
-    /// Uniform floats one material occupies (64 vec4).
+    /// Uniform floats one look occupies (64 vec4).
     pub const UNIFORM_FLOATS: usize = 256;
     /// Pixels per texture side a file may hold: a safety bound, not a quality cap (the largest
     /// 2D texture any current GPU holds). Renderers choose the resident size (§4.3).

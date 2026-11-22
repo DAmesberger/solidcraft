@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::schema::ParamCheck;
 
-const STEEL: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json");
-const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
-const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/brushed-stainless.json");
+const STEEL: &str = include_str!("../../../viewport/tests/fixtures/appearance_graph/pbr-steel.json");
+const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/appearance_graph/laser-etched-stainless.json");
+const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/appearance_graph/brushed-stainless.json");
 
 /// A real 2×1 RGBA PNG (original test data, as in the doc crate's tests).
 const PNG_2X1: &[u8] = &[
@@ -325,7 +325,7 @@ fn converting_a_look_keeps_its_picture_and_rewrites_its_overrides() {
     let can = &s.doc.appearances.bodies["Can"];
     assert_eq!((can.color, can.name.as_str(), can.pbr, can.graph.clone()), ([158, 164, 172], "Steel", None, Some(gid("steel"))));
     // The one-node graph is the look's `pbr` exactly (§3.7), as the fixture spells it.
-    let steel: solidcraft_doc::appearance_graph::MaterialGraph = serde_json::from_str(STEEL).unwrap();
+    let steel: solidcraft_doc::appearance_graph::AppearanceGraph = serde_json::from_str(STEEL).unwrap();
     assert_eq!(s.doc.appearances.tables.graphs[&gid("steel")].nodes, steel.nodes);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.doc.appearances.bodies["Can"].pbr.is_some() && s.doc.appearances.tables.graphs.is_empty());
@@ -347,7 +347,7 @@ fn converting_a_look_keeps_its_picture_and_rewrites_its_overrides() {
 #[test]
 fn library_copies_carry_their_graph_and_update_from_their_library() {
     use solidcraft_io::catalog::{Catalog, Definition, Entry, LibraryLook, Provenance, V3_FORMAT};
-    let mut graph: solidcraft_doc::appearance_graph::MaterialGraph = serde_json::from_str(ETCHED).unwrap();
+    let mut graph: solidcraft_doc::appearance_graph::AppearanceGraph = serde_json::from_str(ETCHED).unwrap();
     graph.name = "Etched".into();
     let (key, texture) = solidcraft_doc::appearance_graph::TextureAsset::from_bytes("mark.png", PNG_2X1).unwrap();
     let look = |graph: &str| LibraryLook {
@@ -359,7 +359,7 @@ fn library_copies_carry_their_graph_and_update_from_their_library() {
         values: [("mark".to_string(), serde_json::from_value(json!({"texture": key})).unwrap())].into(),
     };
     let provenance = Provenance { license: "MIT OR Apache-2.0".into(), author: None, source_url: None };
-    let catalog = |graph_data: &solidcraft_doc::appearance_graph::MaterialGraph| Catalog {
+    let catalog = |graph_data: &solidcraft_doc::appearance_graph::AppearanceGraph| Catalog {
         format: V3_FORMAT.into(),
         id: "user.graphs".into(),
         name: "Graph test library".into(),
@@ -563,7 +563,7 @@ fn library_recipes_apply_as_graphs() {
 }
 
 /// `library.export` without `format` writes the oldest format that keeps everything: v2 for a
-/// design without material graphs (it stays readable by the last release), v3 only when a look
+/// design without appearance graphs (it stays readable by the last release), v3 only when a look
 /// names a graph (`library_copies_carry_their_graph_and_update_from_their_library`).
 #[test]
 fn a_material_free_design_exports_as_v2_by_default() {
@@ -631,14 +631,14 @@ fn the_built_in_material_library_applies_every_graph() {
     assert!(s.execute("library.export", &json!({"path": BUILTIN_PATH})).is_err());
 }
 
-/// `examples/material-graphs.json` runs as it is: every command succeeds, every part ends with
-/// a material graph, and the graphs came from the built-in library (or the Selene pack). A
+/// `examples/appearance-graphs.json` runs as it is: every command succeeds, every part ends with
+/// an appearance graph, and the graphs came from the built-in library (or the Selene pack). A
 /// changed built-in graph changes its entry's id and revision; the message lists the current
 /// ones to put in the script.
 #[test]
-fn the_material_graphs_example_builds() {
+fn the_appearance_graphs_example_builds() {
     use solidcraft_io::catalog::{BUILTIN_ID, Catalog};
-    let script: Value = serde_json::from_str(include_str!("../../../../examples/material-graphs.json")).unwrap();
+    let script: Value = serde_json::from_str(include_str!("../../../../examples/appearance-graphs.json")).unwrap();
     let mut s = strict();
     for command in script["commands"].as_array().unwrap() {
         let id = command["command"].as_str().unwrap();
@@ -697,8 +697,8 @@ mod library;
 /// than typical, which is advisory).
 #[test]
 fn the_built_in_library_and_the_showcase_fit_under_the_safety_bound() {
-    use solidcraft_viewport::material_graph::{MaterialGraph, limits, lower, validate};
-    let mut graphs: Vec<(String, MaterialGraph)> =
+    use solidcraft_viewport::appearance_graph::{AppearanceGraph, limits, lower, validate};
+    let mut graphs: Vec<(String, AppearanceGraph)> =
         library::GRAPHS.iter().map(|(id, _, text)| (format!("library {id}"), serde_json::from_str(text).unwrap())).collect();
     let showcase: Value = serde_json::from_str(include_str!("../../../../examples/realistic-showcase.json")).unwrap();
     for c in showcase["commands"].as_array().into_iter().flatten().filter(|c| c["command"] == "appearance.graph.create") {
@@ -755,9 +755,9 @@ fn a_heavy_graph_is_accepted_with_a_note_and_only_the_safety_bound_refuses() {
 /// library file says.
 #[test]
 fn the_built_in_library_colours_are_the_graphs_base_colours() {
-    use solidcraft_viewport::material_graph::{MaterialGraph, look_base_sample};
+    use solidcraft_viewport::appearance_graph::{AppearanceGraph, look_base_sample};
     for (id, color, text) in library::GRAPHS {
-        let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+        let graph: AppearanceGraph = serde_json::from_str(text).unwrap();
         let base = look_base_sample(&graph, &BTreeMap::new()).unwrap().opaque.base_color();
         assert_eq!([base.x, base.y, base.z].map(solidcraft_color::srgb::encode8), *color, "{id}");
     }

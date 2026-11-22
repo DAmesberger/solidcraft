@@ -239,7 +239,7 @@ fn write_container(
     provenance: Option<&ProvenanceSave<'_>>,
 ) -> Result<Vec<u8>> {
     doc.render.validate().map_err(invalid)?;
-    // Textures nothing references are dropped on save (docs/material-graph.md §4.1).
+    // Textures nothing references are dropped on save (docs/appearance-graph.md §4.1).
     let pruned = doc.without_unreferenced_textures();
     let doc: &Document = &pruned;
     let mut writer = PackageWriter::new();
@@ -3836,7 +3836,7 @@ mod tests {
         65, 84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ];
 
-    /// A design whose look reads a texture through a material graph, plus an unused texture.
+    /// A design whose look reads a texture through an appearance graph, plus an unused texture.
     fn textured_design() -> (Document, String, String) {
         use solidcraft_doc::appearance::Look;
         use solidcraft_doc::appearance_graph::{Constant, GraphId, TextureAsset};
@@ -3846,7 +3846,7 @@ mod tests {
         spare_png.extend(b"trailing bytes make another asset");
         let (spare, spare_texture) = TextureAsset::from_bytes("spare.png", &spare_png).unwrap();
         let tables = &mut doc.appearances.tables;
-        let graph = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
+        let graph = include_str!("../../viewport/tests/fixtures/appearance_graph/laser-etched-stainless.json");
         tables.graphs.insert(GraphId::new("etched").unwrap(), serde_json::from_str(graph).unwrap());
         tables.textures.insert(key.clone(), texture);
         tables.textures.insert(spare.clone(), spare_texture);
@@ -3953,7 +3953,7 @@ mod tests {
     /// the same bytes again after reading what it saved. (Track K compares the written format
     /// number with the last release's.)
     #[test]
-    fn corpus_designs_save_without_the_material_graph_tables() {
+    fn corpus_designs_save_without_the_appearance_graph_tables() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/solidcraft-cli/tests/corpus");
         let mut seen = 0;
         for entry in std::fs::read_dir(&dir).unwrap() {

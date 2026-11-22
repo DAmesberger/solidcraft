@@ -225,7 +225,7 @@ fn pbr_ibl_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec
     return pbr_studio_parts(base, parameters, coat, n, v, pbr_turn(r, rotation), pbr_irradiance(pbr_turn(n, rotation)), 1.0);
 }
 
-// `pbr_ibl_parts` with the inputs a material graph adds (see `pbr_studio_layers`): the coat's
+// `pbr_ibl_parts` with the inputs an appearance graph adds (see `pbr_studio_layers`): the coat's
 // colour and normal, the direction `r` the base's specular looks up from, and its anisotropic
 // `stretch` = (unit world tangent, anisotropy), (0, 0, 0, 0) when isotropic.
 fn pbr_ibl_layers(base: vec3<f32>, parameters: vec3<f32>, specular: vec4<f32>, coat: vec3<f32>, coat_color: vec3<f32>, n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, r: vec3<f32>, rotation: f32, stretch: vec4<f32>) -> PbrIbl {
@@ -251,7 +251,7 @@ fn pbr_room_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: ve
     return pbr_studio_parts(base, parameters, coat, n, v, hit, irradiance, pbr_floor_contact(hit, rotation));
 }
 
-// `pbr_room_parts` with the inputs a material graph adds: the base's reflection `r` (the mirror
+// `pbr_room_parts` with the inputs an appearance graph adds: the base's reflection `r` (the mirror
 // direction; an anisotropic base's spreads by `stretch`) and the coat's own mirror direction
 // about `coat_n` are each box-projected and floor-darkened; the coat colour tints the base; an
 // anisotropic base's `stretch` (as `pbr_ibl_layers`) spreads its lookup along its tangent.
@@ -282,7 +282,7 @@ fn pbr_studio_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: 
     return pbr_studio_layers(base, parameters, vec4<f32>(1.0), coat, vec3<f32>(1.0), n, n, v, lookup, lookup, irradiance, contact, contact, vec4<f32>(0.0));
 }
 
-// `pbr_studio_parts` with a material graph's specular tint `tint` = (weight, colour) and coat: its colour tints the base on the way in and
+// `pbr_studio_parts` with an appearance graph's specular tint `tint` = (weight, colour) and coat: its colour tints the base on the way in and
 // out (`sc_coat_tint`), and it reflects about its own unit normal `coat_n`, looking up
 // `coat_lookup` with its floor contact. An anisotropic base (`stretch` = (unit studio-frame
 // tangent, anisotropy > 0)) reads the studio through `pbr_stretched_studio`. The base's split-sum
@@ -366,7 +366,7 @@ fn pbr_fragment(pos: vec4<f32>, wp: vec3<f32>, n: vec3<f32>) -> PbrFragment {
 }
 
 // One evaluated surface point, as a material gives it to `pbr_shade`: the shared library's
-// `sc_Surface` (the WGSL mirror of `material_graph::SurfaceSample`), which both GPU targets of the
+// `sc_Surface` (the WGSL mirror of `appearance_graph::SurfaceSample`), which both GPU targets of the
 // material system fill.
 alias Surface = sc_Surface;
 
@@ -572,7 +572,7 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
 }
 
 /// [`SOURCE`]'s shared shading alone, for shaders that bring their own material and entries
-/// (material graphs' generated shaders).
+/// (appearance graphs' generated shaders).
 pub const SHADE: &str = concat!(crate::shading::library_source!(), "\n", shade_source!());
 
 /// The PBR shader appended to the viewport's: the shared shading library (`crate::shading`), the

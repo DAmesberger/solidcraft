@@ -7,7 +7,7 @@
 //! window renderer's targets, and its studio is baked off the window thread like the viewport's.
 //!
 //! A graph is drawn as itself: its lowered IR, the look's uniform values and its base response
-//! go into the scene's material-graph surfaces (`GpuScene::graphs`), whose generated pipeline
+//! go into the scene's appearance-graph surfaces (`GpuScene::graphs`), whose generated pipeline
 //! compiles beside the window; until it has, the base response is drawn. A look without a graph
 //! is drawn as its `OpaqueSurface`. Image textures draw as their node's default until the GPU
 //! textures land (track C3).
@@ -20,7 +20,7 @@ use solidcore_record::Vec3;
 use solidcraft_viewport::Camera;
 use solidcraft_viewport::surface::OpaqueSurface;
 
-use solidcraft_viewport::material_graph::{self as mg, Constant, Ir, MaterialGraph, SurfaceSample};
+use solidcraft_viewport::appearance_graph::{self as mg, AppearanceGraph, Constant, Ir, SurfaceSample};
 
 use crate::gpu::{Frame, GpuScene, GpuTarget, ProductLook, Renderer};
 
@@ -36,7 +36,7 @@ pub(crate) struct Material {
 impl Material {
     /// `graph` with the look's `values`; `None` when it does not lower (the swatch then shows
     /// the look's surface).
-    pub(crate) fn new(graph: &MaterialGraph, values: &std::collections::BTreeMap<String, Constant>) -> Option<Material> {
+    pub(crate) fn new(graph: &AppearanceGraph, values: &std::collections::BTreeMap<String, Constant>) -> Option<Material> {
         let valid = mg::validate(graph).ok()?;
         let ir = mg::lower(&valid).ok()?;
         let base = mg::look_base_sample(graph, values).ok()?;

@@ -1,4 +1,4 @@
-//! The shared shading library (docs/material-graph.md §5.7): pure WGSL functions that both GPU
+//! The shared shading library (docs/appearance-graph.md §5.7): pure WGSL functions that both GPU
 //! targets of the material system use, the viewport (`viewport.wgsl` + `pbr::SOURCE`, native and
 //! WebGL2) and the path tracer (`path/path.wgsl`, native). One copy of the BSDF terms, noise,
 //! patterns and projections, instead of today's two.

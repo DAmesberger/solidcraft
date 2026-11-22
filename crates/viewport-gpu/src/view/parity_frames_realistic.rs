@@ -1,4 +1,4 @@
-// Realistic-look parity frames: the product look's PBR, scalar and material-graph paths
+// Realistic-look parity frames: the product look's PBR, scalar and appearance-graph paths
 // (coats, coat colour, anisotropy, patterns) in a fixed set of small frames, for comparing two
 // revisions that both have the Realistic view within a tolerance (`cargo xtask render-parity
 // --realistic-base REV`). Explicit only:
@@ -19,7 +19,7 @@ use super::*;
 /// colour, weave and orange-peel graphs.
 fn graphs() -> Vec<(&'static str, &'static str)> {
     let examples = ["pbr-steel", "gloss-black-clear-coat", "brushed-stainless", "laser-etched-stainless", "candy-coat-over-aluminium"];
-    let worked = examples.into_iter().filter_map(|name| Some((name, solidcraft_viewport::material_graph::fixtures::worked_example(name)?)));
+    let worked = examples.into_iter().filter_map(|name| Some((name, solidcraft_viewport::appearance_graph::fixtures::worked_example(name)?)));
     worked
         .chain([
             ("candy-coat", include_str!("../../tests/fixtures/candy-coat.json")),
@@ -32,8 +32,8 @@ fn graphs() -> Vec<(&'static str, &'static str)> {
 /// `graph` over a square filling the view, turned by `slope` (z = slope·y), in a scene of its
 /// own; `None` when the graph does not validate here.
 fn graph_scene(json: &str, slope: f32) -> Option<GpuScene> {
-    use solidcraft_viewport::material_graph::{MaterialGraph, base_sample, lower, uniform_words, validate};
-    let graph: MaterialGraph = serde_json::from_str(json).ok()?;
+    use solidcraft_viewport::appearance_graph::{AppearanceGraph, base_sample, lower, uniform_words, validate};
+    let graph: AppearanceGraph = serde_json::from_str(json).ok()?;
     let valid = validate(&graph).ok()?;
     let ir = Arc::new(lower(&valid).ok()?);
     let base = base_sample(&valid).ok()?;

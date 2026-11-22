@@ -1,12 +1,12 @@
 //! Validation: the catalogue, the limits, typed connections, cycles and constant ranges
-//! (docs/material-graph.md §3). It builds an [`Analysis`] that lowering and the base response
+//! (docs/appearance-graph.md §3). It builds an [`Analysis`] that lowering and the base response
 //! read, so the three steps agree on every binding and type. Hostile input: every loop is
 //! bounded by the limits, which are checked before anything scales with them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::catalogue::{InputDefault, InputSpec, NodeSpec, ParamKind, PortType, node_spec};
-use super::graph::{Constant, InputValue, MaterialGraph, ParamValue};
+use super::graph::{AppearanceGraph, Constant, InputValue, ParamValue};
 use super::ir::{GraphIssue, Validated};
 use super::limits;
 use crate::surface::srgb8_to_linear;
@@ -319,7 +319,7 @@ fn resolve_source(from: &str, ids: &BTreeMap<&str, usize>, specs: &[Option<&'sta
 }
 
 /// Check `graph` and resolve it. Every issue found, up to [`MAX_ISSUES`].
-pub(super) fn analyse(graph: &MaterialGraph) -> Result<Analysis, Vec<GraphIssue>> {
+pub(super) fn analyse(graph: &AppearanceGraph) -> Result<Analysis, Vec<GraphIssue>> {
     let mut issues = Issues::default();
     if !valid_name(&graph.name, limits::NAME_BYTES) {
         issues.push(None, None, "name", format!("a graph name is 1–{} bytes without control characters", limits::NAME_BYTES));
@@ -823,7 +823,7 @@ fn check_semantics(nodes: &[NodeInfo], id: &[&str], issues: &mut Issues) {
 }
 
 /// Check `graph` and return it with the editor layout cleaned (entries for missing nodes dropped).
-pub(super) fn validate(graph: &MaterialGraph) -> Result<Validated, Vec<GraphIssue>> {
+pub(super) fn validate(graph: &AppearanceGraph) -> Result<Validated, Vec<GraphIssue>> {
     let analysis = analyse(graph)?;
     super::lower::build(&analysis)?;
     let mut clean = graph.clone();

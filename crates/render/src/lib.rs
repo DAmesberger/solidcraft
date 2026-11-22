@@ -15,8 +15,8 @@ pub mod glass_model;
 pub mod job;
 pub mod lighting;
 pub mod mapping;
-/// The material graph moved to the shared viewport crate, which the viewport's GPU shading needs.
-pub use solidcraft_viewport::material_graph;
+/// The appearance graph moved to the shared viewport crate, which the viewport's GPU shading needs.
+pub use solidcraft_viewport::appearance_graph;
 mod model_bounds;
 pub mod optical_boundary;
 mod product;

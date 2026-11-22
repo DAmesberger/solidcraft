@@ -1069,7 +1069,7 @@ fn probe_rig(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-/// The studio term of a material graph's surface (track C2): an anisotropic base looks up its
+/// The studio term of an appearance graph's surface (track C2): an anisotropic base looks up its
 /// bent reflection (`sc_aniso_reflect`) and a coloured coat tints the base. White furnace: a
 /// white anisotropic metal or dielectric still reflects what it receives, exactly as the
 /// isotropic one, whatever the bend (the split-sum albedo is the isotropic one); a white coat

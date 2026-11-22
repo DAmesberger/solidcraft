@@ -1,6 +1,6 @@
 # Realistic view golden frames
 
-Golden GPU frames of `examples/realistic-showcase.json` (docs/material-graph.md §5.9): the actual
+Golden GPU frames of `examples/realistic-showcase.json` (docs/appearance-graph.md §5.9): the actual
 viewport on a native GPU, 1600 × 1000, both looks, every saved view of the showcase. The
 modelling view uses 2 × 2 supersampling; the Render preview draws as the app does, without it.
 

@@ -464,7 +464,7 @@ pub(super) fn apply_appearance(s: &mut Session, params: &Value) -> Result<Value>
     )
 }
 
-/// The `graph` variant (docs/material-graph.md §4.5): the recipe as a material graph in the
+/// The `graph` variant (docs/appearance-graph.md §4.5): the recipe as an appearance graph in the
 /// design, assigned to the bodies. A `SURF-*` binds its maps (copied into the design's textures
 /// by their SHA-256): base colour (sRGB) and the OpenGL normal map always; roughness and metallic
 /// maps under a planar `frame`, their recipe constants under the default triplanar projection
@@ -473,7 +473,7 @@ pub(super) fn apply_appearance(s: &mut Session, params: &Value) -> Result<Value>
 /// stays omitted.
 fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
     use solidcraft_doc::appearance_graph::{GraphId, TextureAsset};
-    use solidcraft_render::material_graph::{GraphSource, MaterialGraph};
+    use solidcraft_render::appearance_graph::{AppearanceGraph, GraphSource};
     let command = "render.library.appearance.apply";
     let state = s.model.state();
     if let Some(missing) = input.bodies.iter().find(|b| state.body(b).is_none()) {
@@ -530,7 +530,7 @@ fn apply_graph(s: &mut Session, input: &Appearance) -> Result<Value> {
             surface["base_metalness"] = json!({"from": "metal.value", "fallback": metallic});
         }
         nodes.push(json!({"id": "surface", "kind": "standard_surface", "inputs": surface}));
-        let graph: MaterialGraph = serde_json::from_value(json!({"name": format!("{} {name}", input.id), "nodes": nodes, "output": "surface"}))
+        let graph: AppearanceGraph = serde_json::from_value(json!({"name": format!("{} {name}", input.id), "nodes": nodes, "output": "surface"}))
             .map_err(|e| bad(command, e.to_string()))?;
         let maps: Vec<&str> = channels.iter().map(|(c, _)| *c).collect();
         // The graph draws the recipe's direction (the binding table's estimate), so only height

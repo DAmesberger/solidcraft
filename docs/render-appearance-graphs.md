@@ -1,9 +1,9 @@
-# Built-in material graphs
+# Built-in appearance graphs
 
 SolidCraft's built-in material library and the bindings of the built-in render recipes, both
-as material graphs ([design note](material-graph.md), §3.7, §3.8 and §4.5). User guide:
+as appearance graphs ([design note](appearance-graph.md), §3.7, §3.8 and §4.5). User guide:
 [materials and the Realistic view](book/src/guide/materials.md). Commands:
-[material graph commands](material-graph-commands.md).
+[appearance graph commands](appearance-graph-commands.md).
 
 All values here are original visual estimates, not measured optical data.
 
@@ -131,8 +131,8 @@ also `roughness_metallic_maps_under_triplanar`.
 
 ## The example design
 
-`examples/material-graphs.json` is a command script (`solidcraft-cli run
-examples/material-graphs.json --out material-graphs.sc`): a row of primitive parts given
+`examples/appearance-graphs.json` is a command script (`solidcraft-cli run
+examples/appearance-graphs.json --out appearance-graphs.sc`): a row of primitive parts given
 eight of the built-in graphs by `library.apply` from `builtin:materials`, two of them with
 their own interface colour through `appearance.assign`, and a brushed Selene housing
 (`SELENE-AP-007`) through `render.library.appearance.apply`, which shows the binding table's
@@ -140,5 +140,5 @@ anisotropy. The label stands on the origin, the axis of its cylindrical projecti
 result and press Shift+P to see it in the Realistic view.
 
 The script names each entry by its id and revision, which follow from the graph's content: a
-changed built-in graph changes them. `the_material_graphs_example_builds` (engine tests) runs
+changed built-in graph changes them. `the_appearance_graphs_example_builds` (engine tests) runs
 the script, and when an entry has changed it lists the current ids and revisions to put in.

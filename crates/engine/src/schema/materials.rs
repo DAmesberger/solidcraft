@@ -164,7 +164,7 @@ pub struct MaterialCreateParams {
     #[serde(default, deserialize_with = "color_or_clear")]
     #[schemars(schema_with = "color_schema")]
     pub color: Option<Option<ColorParam>>,
-    /// A material graph's id (`appearance.graph.list`), for a look that names one: no library
+    /// An appearance graph's id (`appearance.graph.list`), for a look that names one: no library
     /// `appearance` and no `pbr`.
     #[serde(default)]
     pub graph: Option<String>,
@@ -204,7 +204,7 @@ pub struct MaterialEditParams {
     #[serde(default, deserialize_with = "color_or_clear")]
     #[schemars(schema_with = "color_schema")]
     pub color: Option<Option<ColorParam>>,
-    /// A material graph's id (`appearance.graph.list`), for a new look that names one: no library
+    /// An appearance graph's id (`appearance.graph.list`), for a new look that names one: no library
     /// `appearance` and no `pbr`.
     #[serde(default)]
     pub graph: Option<String>,

@@ -890,7 +890,7 @@ fn shade(i: TOut) -> vec4<f32> {
 // An opaque face of a model or product scene (`solid`): lit as `lit` in the standard look. In the
 // Realistic look (`look_on()`) a scalar look is an implicit dielectric `standard_surface` (base
 // colour, roughness 0.5, IOR 1.5) through `pbr_shade`, the shading of every PBR surface: the studio,
-// the frame's product lights, PBR Neutral and the dithered encode (docs/material-graph.md §6.2).
+// the frame's product lights, PBR Neutral and the dithered encode (docs/appearance-graph.md §6.2).
 // Highlights, faded and see-through surfaces, lines and overlays never come here: they keep the
 // standard drawing, in display space, in either look.
 fn face_lit(i: TOut, visibility: f32) -> vec4<f32> {

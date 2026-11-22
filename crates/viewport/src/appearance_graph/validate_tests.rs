@@ -13,28 +13,28 @@ use super::*;
 use crate::clear_coat::ClearCoat;
 use crate::surface::{OpaqueSurface, srgb8_to_linear};
 
-fn fixture(name: &str) -> MaterialGraph {
+fn fixture(name: &str) -> AppearanceGraph {
     let text = match name {
-        "gloss-black-clear-coat" => include_str!("../../tests/fixtures/material_graph/gloss-black-clear-coat.json"),
-        "brushed-stainless" => include_str!("../../tests/fixtures/material_graph/brushed-stainless.json"),
-        "printed-label" => include_str!("../../tests/fixtures/material_graph/printed-label.json"),
-        "laser-etched-stainless" => include_str!("../../tests/fixtures/material_graph/laser-etched-stainless.json"),
-        "pbr-steel" => include_str!("../../tests/fixtures/material_graph/pbr-steel.json"),
-        "candy-coat-over-aluminium" => include_str!("../../tests/fixtures/material_graph/candy-coat-over-aluminium.json"),
+        "gloss-black-clear-coat" => include_str!("../../tests/fixtures/appearance_graph/gloss-black-clear-coat.json"),
+        "brushed-stainless" => include_str!("../../tests/fixtures/appearance_graph/brushed-stainless.json"),
+        "printed-label" => include_str!("../../tests/fixtures/appearance_graph/printed-label.json"),
+        "laser-etched-stainless" => include_str!("../../tests/fixtures/appearance_graph/laser-etched-stainless.json"),
+        "pbr-steel" => include_str!("../../tests/fixtures/appearance_graph/pbr-steel.json"),
+        "candy-coat-over-aluminium" => include_str!("../../tests/fixtures/appearance_graph/candy-coat-over-aluminium.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
 }
 
-fn from_json(v: Value) -> MaterialGraph {
+fn from_json(v: Value) -> AppearanceGraph {
     serde_json::from_value(v).unwrap()
 }
 
-fn ir_of(graph: &MaterialGraph) -> Ir {
+fn ir_of(graph: &AppearanceGraph) -> Ir {
     lower(&validate(graph).unwrap_or_else(|e| panic!("{}: {e:?}", graph.name))).unwrap()
 }
 
-fn codes(graph: &MaterialGraph) -> Vec<&'static str> {
+fn codes(graph: &AppearanceGraph) -> Vec<&'static str> {
     match validate(graph) {
         Err(GraphError::Invalid(issues)) => issues.iter().map(|i| i.code).collect(),
         other => panic!("expected a refusal, got {other:?}"),
@@ -42,7 +42,7 @@ fn codes(graph: &MaterialGraph) -> Vec<&'static str> {
 }
 
 /// A one-surface graph with `inputs` on the surface and `nodes` before it.
-fn surface_graph(nodes: Value, inputs: Value) -> MaterialGraph {
+fn surface_graph(nodes: Value, inputs: Value) -> AppearanceGraph {
     let mut list = nodes.as_array().cloned().unwrap_or_default();
     list.push(json!({"id": "surface", "kind": "standard_surface", "inputs": inputs}));
     from_json(json!({"name": "test", "nodes": list, "output": "surface"}))
@@ -76,7 +76,7 @@ fn every_fixture_validates_lowers_and_costs_what_the_note_says() {
         for instr in &ir.instrs {
             assert_ne!(instr.ty, PortType::Numeric, "{name}: {} unresolved", instr.op);
         }
-        // Every slot sits inside the material's run and no value straddles a vec4.
+        // Every slot sits inside the look's run and no value straddles a vec4.
         for slot in &ir.slots {
             assert!(slot.offset + u32::from(slot.width) <= ir.uniform_floats, "{name}");
             assert_eq!(slot.offset / 4, (slot.offset + u32::from(slot.width) - 1) / 4, "{name}: slot straddles a vec4");
@@ -163,7 +163,7 @@ fn base_responses_read_constants_fallbacks_and_the_bg_surface() {
 
 #[test]
 fn the_shape_ignores_values_layout_ids_and_order() {
-    let key = |g: &MaterialGraph| ir_of(g).shape;
+    let key = |g: &AppearanceGraph| ir_of(g).shape;
     let original = fixture("brushed-stainless");
     let mut text = serde_json::to_value(&original).unwrap();
     // New values everywhere, a layout, a different name and provenance.
@@ -218,7 +218,7 @@ fn uniform_words_take_look_values_and_refuse_bad_ones() {
 
 #[test]
 fn refusals_name_what_is_wrong() {
-    let cases: Vec<(MaterialGraph, &str)> = vec![
+    let cases: Vec<(AppearanceGraph, &str)> = vec![
         (surface_graph(json!([{"id": "x", "kind": "pattern.marble"}]), json!({})), "unknown_kind"),
         (surface_graph(json!([]), json!({"subsurface_weight": 1})), "unknown_input"),
         (surface_graph(json!([]), json!({"base_metalness": 1.5})), "out_of_range"),
@@ -409,7 +409,7 @@ impl Rng {
 
 /// A random graph: mostly well-typed (so lowering runs), with hostile values, wrong types,
 /// unknown names and back edges mixed in.
-fn random_graph(rng: &mut Rng) -> MaterialGraph {
+fn random_graph(rng: &mut Rng) -> AppearanceGraph {
     let big = rng.chance(2);
     let count = 1 + rng.below(if big { limits::NODES + 8 } else { 24 });
     let mut nodes: Vec<Value> = Vec::new();
@@ -479,7 +479,7 @@ fn random_graph(rng: &mut Rng) -> MaterialGraph {
 }
 
 /// Everything a consumer may call on a graph, which must never panic, and must agree.
-fn exercise(graph: &MaterialGraph) -> bool {
+fn exercise(graph: &AppearanceGraph) -> bool {
     let Ok(v) = validate(graph) else { return false };
     let ir = lower(&v).unwrap_or_else(|e| panic!("validated but did not lower: {e}"));
     assert!(ir.cost <= limits::COST_UNITS && ir.samples <= limits::TEXTURE_SAMPLES);
@@ -520,14 +520,7 @@ fn hostile_graphs_never_panic() {
 #[test]
 fn mutated_fixtures_never_panic() {
     let mut rng = Rng(0x0dd_ba11_cafe_f00d);
-    let names = [
-        "gloss-black-clear-coat",
-        "brushed-stainless",
-        "printed-label",
-        "laser-etched-stainless",
-        "pbr-steel",
-        "candy-coat-over-aluminium",
-    ];
+    let names = ["gloss-black-clear-coat", "brushed-stainless", "printed-label", "laser-etched-stainless", "pbr-steel", "candy-coat-over-aluminium"];
     let junk = [
         json!(null),
         json!(-1),
@@ -570,7 +563,7 @@ fn mutated_fixtures_never_panic() {
                 *leaf = junk[rng.below(junk.len())].clone();
             }
         }
-        if let Ok(graph) = serde_json::from_value::<MaterialGraph>(value) {
+        if let Ok(graph) = serde_json::from_value::<AppearanceGraph>(value) {
             exercise(&graph);
         }
     }

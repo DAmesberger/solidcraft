@@ -1,4 +1,4 @@
-//! The Realistic view's acceptance bar (docs/material-graph.md §5.9), shared by the golden-frame
+//! The Realistic view's acceptance bar (docs/appearance-graph.md §5.9), shared by the golden-frame
 //! harness (`viewport_golden_tests`) and the lighting review (`gpu_lighting_review`): one set of
 //! rules over one metrics shape.
 //!

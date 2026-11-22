@@ -1,5 +1,5 @@
-//! The saved form of a material graph, exactly as a design's `appearances.graphs` holds it
-//! (docs/material-graph.md §4.1). Reading a graph only parses it; [`super::validate`] checks it.
+//! The saved form of an appearance graph, exactly as a design's `appearances.graphs` holds it
+//! (docs/appearance-graph.md §4.1). Reading a graph only parses it; [`super::validate`] checks it.
 
 use std::collections::BTreeMap;
 
@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogue::PortType;
 
-/// A material graph: nodes, one output surface node and an optional interface.
+/// An appearance graph: nodes, one output surface node and an optional interface.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MaterialGraph {
+pub struct AppearanceGraph {
     pub name: String,
     /// Inputs a look may override (`Look::values`), at most `limits::INTERFACE_INPUTS`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -82,7 +82,7 @@ pub enum InputValue {
 }
 
 /// A connection, with the constant non-evaluating consumers use in its place (the base
-/// response, docs/material-graph.md §2). Without `fallback`, the input's default.
+/// response, docs/appearance-graph.md §2). Without `fallback`, the input's default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {

@@ -1,6 +1,6 @@
-//! The base response (docs/material-graph.md §2, §5.7): a static read of the output surface's
+//! The base response (docs/appearance-graph.md §2, §5.7): a static read of the output surface's
 //! inputs, constants as they are and driven inputs at their fallback or default. No node is
-//! evaluated. Also the uniform words of one material, from the IR's slots and a look's values.
+//! evaluated. Also the uniform words of one look, from the IR's slots and a look's values.
 
 use std::collections::BTreeMap;
 

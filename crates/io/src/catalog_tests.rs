@@ -405,8 +405,8 @@ const PNG_2X1: &[u8] = &[
 fn graph_design(textured: bool) -> Document {
     use solidcraft_doc::appearance_graph::{GraphId, TextureAsset};
     let mut doc = Document::default();
-    let copper = include_str!("../../viewport/tests/fixtures/material_graph/pbr-steel.json");
-    let etched = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
+    let copper = include_str!("../../viewport/tests/fixtures/appearance_graph/pbr-steel.json");
+    let etched = include_str!("../../viewport/tests/fixtures/appearance_graph/laser-etched-stainless.json");
     let tables = &mut doc.appearances.tables;
     tables.graphs.insert(GraphId::new("copper").unwrap(), serde_json::from_str(copper).unwrap());
     tables.graphs.insert(GraphId::new("unused").unwrap(), serde_json::from_str(copper).unwrap());

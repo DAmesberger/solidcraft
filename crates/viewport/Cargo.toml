@@ -13,8 +13,8 @@ default = []
 # The parts of the shading models and texture sources only the CPU ray tracer uses
 # (the ray tracer's crate turns it on).
 raytrace-cpu = []
-# Test-only f64 references for the GPU back ends' tests: the material-graph interpreter
-# (`material_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only
+# Test-only f64 references for the GPU back ends' tests: the appearance-graph interpreter
+# (`appearance_graph::reference`) and the tinted-coat oracle (`clear_coat::tinted_coat_brdf`). Only
 # dev-dependencies may enable it: `cargo xtask layers` refuses a normal or build dependency, or a
 # feature, that does.
 test-reference = ["dep:serde_json"]
@@ -25,9 +25,9 @@ image = { workspace = true, features = ["jpeg"] }
 moxcms = { workspace = true }
 png = { workspace = true }
 serde = { workspace = true }
-# The material graph's reference interpreter reads graphs as JSON (feature `test-reference`).
+# The appearance graph's reference interpreter reads graphs as JSON (feature `test-reference`).
 serde_json = { workspace = true, optional = true }
-# A material graph's texture names its image by SHA-256.
+# An appearance graph's texture names its image by SHA-256.
 sha2 = { workspace = true }
 solidcore-record = { workspace = true }
 solidcore-tess = { workspace = true }

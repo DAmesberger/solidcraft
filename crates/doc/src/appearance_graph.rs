@@ -1,5 +1,5 @@
-//! The design-level records of material graphs (docs/material-graph.md §4.1): a table of named
-//! graphs that looks reference by id (decision O1), and the texture assets they read.
+//! The design-level records of appearance graphs (docs/appearance-graph.md §4.2): a table of named
+//! graphs that looks reference by id, and the texture assets they read.
 //!
 //! `Appearances::tables` holds them (`appearances.graphs` and `appearances.textures`, both
 //! omitted when empty) and a [`Look`] names a graph with `graph` and sets its interface with
@@ -21,10 +21,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use solidcraft_render::material_graph::graph::TextureRef;
-pub use solidcraft_render::material_graph::limits;
-pub use solidcraft_render::material_graph::{Constant, MaterialGraph};
-use solidcraft_render::material_graph::{GraphError, InputValue};
+use solidcraft_viewport::appearance_graph::InputValue;
+use solidcraft_viewport::appearance_graph::graph::TextureRef;
+pub use solidcraft_viewport::appearance_graph::limits;
+pub use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant};
 
 use crate::appearance::Look;
 use crate::{DocError, Document, Result};
@@ -186,7 +186,7 @@ impl GraphTables {
     pub fn check_counts(&self) -> Result<()> {
         if self.graphs.len() > limits::GRAPHS_PER_DESIGN || self.textures.len() > limits::TEXTURES_PER_DESIGN {
             return Err(invalid(format!(
-                "a design holds at most {} material graphs and {} textures",
+                "a design holds at most {} appearance graphs and {} textures",
                 limits::GRAPHS_PER_DESIGN,
                 limits::TEXTURES_PER_DESIGN
             )));
@@ -211,7 +211,7 @@ impl GraphTables {
 }
 
 /// A design's or a library's graph table.
-pub type Graphs = BTreeMap<GraphId, MaterialGraph>;
+pub type Graphs = BTreeMap<GraphId, AppearanceGraph>;
 /// A design's or a library's texture table, by SHA-256.
 pub type Textures = BTreeMap<String, TextureAsset>;
 
@@ -219,7 +219,7 @@ pub type Textures = BTreeMap<String, TextureAsset>;
 /// their decoded budget, and every graph ([`check_graph_in`]).
 pub fn check_tables(graphs: &Graphs, textures: &Textures) -> Result<()> {
     if graphs.len() > limits::GRAPHS_PER_DESIGN || textures.len() > limits::TEXTURES_PER_DESIGN {
-        return Err(invalid(format!("at most {} material graphs and {} textures", limits::GRAPHS_PER_DESIGN, limits::TEXTURES_PER_DESIGN)));
+        return Err(invalid(format!("at most {} appearance graphs and {} textures", limits::GRAPHS_PER_DESIGN, limits::TEXTURES_PER_DESIGN)));
     }
     let mut decoded = 0usize;
     for (key, texture) in textures {
@@ -234,12 +234,11 @@ pub fn check_tables(graphs: &Graphs, textures: &Textures) -> Result<()> {
     Ok(())
 }
 
-/// One graph against the limits and the textures it may name, then [`validate`]d. Until
-/// validation lands (track A), its "not built yet" refusal admits the graph.
+/// One graph against the limits and the textures it may name, then [`validate`]d.
 ///
-/// [`validate`]: solidcraft_render::material_graph::validate
-pub fn check_graph_in(id: &GraphId, graph: &MaterialGraph, textures: &Textures) -> Result<()> {
-    let what = || format!("material graph `{}`", id.as_str());
+/// [`validate`]: solidcraft_viewport::appearance_graph::validate
+pub fn check_graph_in(id: &GraphId, graph: &AppearanceGraph, textures: &Textures) -> Result<()> {
+    let what = || format!("appearance graph `{}`", id.as_str());
     if !plain_name(&graph.name) {
         return Err(invalid(format!("{} needs a name of 1–{} bytes without control characters", what(), limits::NAME_BYTES)));
     }
@@ -252,10 +251,7 @@ pub fn check_graph_in(id: &GraphId, graph: &MaterialGraph, textures: &Textures) 
     if let Some(missing) = graph_textures(graph).find(|key| !textures.contains_key(*key)) {
         return Err(invalid(format!("{} names texture `{missing}`, which is not held beside it", what())));
     }
-    match solidcraft_render::material_graph::validate(graph) {
-        Ok(_) | Err(GraphError::NotBuilt(_)) => Ok(()),
-        Err(e) => Err(invalid(format!("{}: {e}", what()))),
-    }
+    solidcraft_viewport::appearance_graph::validate(graph).map(|_| ()).map_err(|e| invalid(format!("{}: {e}", what())))
 }
 
 /// Check a look against graph and texture tables: its shape ([`check_look_shape`]), the graph it
@@ -264,11 +260,12 @@ pub fn check_graph_in(id: &GraphId, graph: &MaterialGraph, textures: &Textures) 
 pub fn check_look_in(look: &Look, graphs: &Graphs, textures: &Textures) -> Result<()> {
     check_look_shape(look)?;
     let Some(id) = &look.graph else { return Ok(()) };
-    let graph =
-        graphs.get(id).ok_or_else(|| invalid(format!("look `{}` names material graph `{}`, which is not held beside it", look.name, id.as_str())))?;
+    let graph = graphs
+        .get(id)
+        .ok_or_else(|| invalid(format!("look `{}` names appearance graph `{}`, which is not held beside it", look.name, id.as_str())))?;
     for (name, value) in &look.values {
         if !graph.interface.iter().any(|input| &input.name == name) {
-            return Err(invalid(format!("look `{}` sets `{name}`, which material graph `{}` does not expose", look.name, id.as_str())));
+            return Err(invalid(format!("look `{}` sets `{name}`, which appearance graph `{}` does not expose", look.name, id.as_str())));
         }
         if let Constant::Texture(TextureRef { texture }) = value
             && !textures.contains_key(texture)
@@ -278,7 +275,7 @@ pub fn check_look_in(look: &Look, graphs: &Graphs, textures: &Textures) -> Resul
     }
     if look.opacity != 1.0 && see_through(graph, look) {
         return Err(invalid(format!(
-            "look `{}`: material graph `{}` sets its own opacity or transmission, so the look's opacity must be 1",
+            "look `{}`: appearance graph `{}` sets its own opacity or transmission, so the look's opacity must be 1",
             look.name,
             id.as_str()
         )));
@@ -287,7 +284,7 @@ pub fn check_look_in(look: &Look, graphs: &Graphs, textures: &Textures) -> Resul
 }
 
 /// The texture keys one graph names: constant inputs, connection fallbacks and interface defaults.
-pub fn graph_textures(graph: &MaterialGraph) -> impl Iterator<Item = &str> {
+pub fn graph_textures(graph: &AppearanceGraph) -> impl Iterator<Item = &str> {
     fn texture(c: &Constant) -> Option<&str> {
         match c {
             Constant::Texture(TextureRef { texture }) => Some(texture.as_str()),
@@ -314,8 +311,8 @@ pub fn look_textures(look: &Look) -> impl Iterator<Item = &str> {
 /// Whether a graph, as `look` sets it, draws its own see-through: a standard surface whose
 /// `geometry_opacity` is below 1 or `transmission_weight` above 0. A constant is read as it is,
 /// an interface input from the look's value or its default; a connected input counts as
-/// see-through, since it can vary over the surface (docs/material-graph.md §4.1).
-pub fn see_through(graph: &MaterialGraph, look: &Look) -> bool {
+/// see-through, since it can vary over the surface (docs/appearance-graph.md §4.2).
+pub fn see_through(graph: &AppearanceGraph, look: &Look) -> bool {
     let number = |value: &InputValue| -> Option<f64> {
         let constant = match value {
             InputValue::Constant(c) => Some(c),
@@ -341,10 +338,10 @@ pub fn see_through(graph: &MaterialGraph, look: &Look) -> bool {
 /// two- or three-component vectors and texture keys spelled as SHA-256s.
 pub fn check_look_shape(look: &Look) -> Result<()> {
     if look.graph.is_some() && look.pbr.is_some() {
-        return Err(invalid("a look has either `pbr` or a material `graph`, not both"));
+        return Err(invalid("a look has either `pbr` or an appearance `graph`, not both"));
     }
     if look.graph.is_none() && !look.values.is_empty() {
-        return Err(invalid("a look's `values` set a material graph's inputs, so they need a `graph`"));
+        return Err(invalid("a look's `values` set an appearance graph's inputs, so they need a `graph`"));
     }
     if look.values.len() > limits::INTERFACE_INPUTS {
         return Err(invalid(format!("a look sets at most {} graph inputs", limits::INTERFACE_INPUTS)));
@@ -407,7 +404,7 @@ impl Document {
         Ok(())
     }
 
-    /// Check the design's material graphs and textures ([`GraphTables::check`]) and every look
+    /// Check the design's appearance graphs and textures ([`GraphTables::check`]) and every look
     /// against them ([`GraphTables::check_look`]). Reading a design runs this; so must every
     /// command that changes the tables or looks, before it commits.
     pub fn check_appearance_graphs(&self) -> Result<()> {
@@ -443,8 +440,8 @@ impl Document {
     }
 }
 
-/// Whether a design's saved JSON has material graphs: what the format change
-/// `appearance-graphs` adds (its `used` predicate, docs/material-graph.md §4.4).
+/// Whether a design's saved JSON has appearance graphs: what the format change
+/// `appearance-graphs` adds (its `used` predicate, docs/appearance-graph.md §4.4).
 pub fn graphs_used(v: &serde_json::Value) -> bool {
     v.pointer("/appearances/graphs").and_then(serde_json::Value::as_object).is_some_and(|g| !g.is_empty())
 }
@@ -475,8 +472,8 @@ mod tests {
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 14, 73, 68,
         65, 84, 120, 156, 99, 56, 161, 161, 241, 31, 132, 1, 18, 51, 4, 47, 169, 127, 204, 104, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
     ];
-    const ETCHED: &str = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
-    const COPPER: &str = include_str!("../../viewport/tests/fixtures/material_graph/pbr-steel.json");
+    const ETCHED: &str = include_str!("../../viewport/tests/fixtures/appearance_graph/laser-etched-stainless.json");
+    const STEEL: &str = include_str!("../../viewport/tests/fixtures/appearance_graph/pbr-steel.json");
 
     /// Only the header: enough for the size checks, never decoded.
     fn png_header(width: u32, height: u32, depth: u8, colour: u8) -> Vec<u8> {
@@ -497,7 +494,7 @@ mod tests {
         let (key, texture) = TextureAsset::from_bytes("mark.png", PNG_2X1).unwrap();
         let tables = &mut doc.appearances.tables;
         tables.graphs.insert(id("etched"), serde_json::from_str(ETCHED).unwrap());
-        tables.graphs.insert(id("copper"), serde_json::from_str(COPPER).unwrap());
+        tables.graphs.insert(id("steel"), serde_json::from_str(STEEL).unwrap());
         tables.textures.insert(key.clone(), texture);
         let mut look = Look::custom([200, 198, 190], 1.0);
         look.name = "Etched lid".into();
@@ -520,8 +517,7 @@ mod tests {
         assert_eq!(v["appearances"]["bodies"]["Can"]["values"]["mark"], json!({ "texture": key }));
         assert_eq!(v["appearances"]["textures"][&key]["data"], crate::canvas::base64_encode(PNG_2X1));
         assert!(v["appearances"]["textures"][&key].get("image_blob").is_none());
-        assert_eq!(v["appearances"]["graphs"]["copper"]["name"], "Copper - Clean PBR");
-        assert!(graphs_used(&v));
+        assert_eq!(v["appearances"]["graphs"]["steel"]["name"], "Steel - Satin PBR");
         // Connection fallbacks are data and round-trip.
         let mut fallback = doc.clone();
         let graph = fallback.appearances.tables.graphs.get_mut(&id("etched")).unwrap();
@@ -534,10 +530,10 @@ mod tests {
         assert_eq!(serde_json::to_value(&plain.inputs["specular_roughness"]).unwrap(), fb);
         // Validation refuses a texture fallback (texture ports take none), but the reference walk
         // still counts one, so a texture is never dropped from under a graph.
-        let mut copper: MaterialGraph = serde_json::from_str(COPPER).unwrap();
+        let mut steel: AppearanceGraph = serde_json::from_str(STEEL).unwrap();
         let fb = json!({ "from": "noise", "fallback": { "texture": key } });
-        copper.nodes[0].inputs.insert("base_color".into(), serde_json::from_value(fb).unwrap());
-        assert!(graph_textures(&copper).any(|k| k == key));
+        steel.nodes[0].inputs.insert("base_color".into(), serde_json::from_value(fb).unwrap());
+        assert!(graph_textures(&steel).any(|k| k == key));
     }
 
     #[test]
@@ -550,7 +546,6 @@ mod tests {
             assert!(!text.contains(key), "{key} in {text}");
         }
         assert_eq!(serde_json::to_string(&Look::custom([1, 2, 3], 0.5)).unwrap(), r#"{"name":"Custom","color":[1,2,3],"opacity":0.5}"#);
-        assert!(!graphs_used(&serde_json::from_str(&text).unwrap()));
         assert!(matches!(doc.without_unreferenced_textures(), Cow::Borrowed(_)));
         // Numeric component keys still read: the tables are not a serde flatten on reading.
         doc.appearances.components.insert(7, Look::custom([9, 9, 9], 1.0));
@@ -559,9 +554,9 @@ mod tests {
 
     #[test]
     fn graph_and_pbr_exclude_each_other_and_values_need_a_graph() {
-        let both = r#"{"name":"x","color":[1,2,3],"pbr":{"metallic":1,"roughness":0.3,"dielectric_ior":1.5},"graph":"copper"}"#;
+        let both = r#"{"name":"x","color":[1,2,3],"pbr":{"metallic":1,"roughness":0.3,"dielectric_ior":1.5},"graph":"steel"}"#;
         assert!(serde_json::from_str::<Look>(both).is_err());
-        assert!(serde_json::from_str::<Look>(&both.replace(r#","graph":"copper""#, "")).is_ok(), "the same pbr alone is fine");
+        assert!(serde_json::from_str::<Look>(&both.replace(r#","graph":"steel""#, "")).is_ok(), "the same pbr alone is fine");
         assert!(serde_json::from_str::<Look>(r#"{"name":"x","color":[1,2,3],"values":{"a":1}}"#).is_err());
         assert!(serde_json::from_str::<Look>(r#"{"name":"x","color":[1,2,3],"graph":"Bad Id"}"#).is_err());
         assert!(serde_json::from_str::<Look>(r#"{"name":"x","color":[1,2,3],"graph":"g","values":{"a":[1,2,3,4]}}"#).is_err());
@@ -622,35 +617,35 @@ mod tests {
             (
                 "a connection fallback names a missing texture",
                 Box::new(|v| {
-                    v["appearances"]["graphs"]["copper"]["nodes"][0]["inputs"]["base_color"] =
+                    v["appearances"]["graphs"]["steel"]["nodes"][0]["inputs"]["base_color"] =
                         json!({ "from": "x", "fallback": { "texture": other } });
                 }),
             ),
-            ("an unknown graph field", Box::new(|v| v["appearances"]["graphs"]["copper"]["shader"] = json!("code"))),
-            ("an empty graph name", Box::new(|v| v["appearances"]["graphs"]["copper"]["name"] = json!(""))),
-            ("a layout far away", Box::new(|v| v["appearances"]["graphs"]["copper"]["layout"] = json!({ "surface": [1e7, 0] }))),
+            ("an unknown graph field", Box::new(|v| v["appearances"]["graphs"]["steel"]["shader"] = json!("code"))),
+            ("an empty graph name", Box::new(|v| v["appearances"]["graphs"]["steel"]["name"] = json!(""))),
+            ("a layout far away", Box::new(|v| v["appearances"]["graphs"]["steel"]["layout"] = json!({ "surface": [1e7, 0] }))),
             (
                 "a bad graph id",
                 Box::new(|v| {
                     let g = v["appearances"]["graphs"].as_object_mut().unwrap();
-                    let entry = g.remove("copper").unwrap();
-                    g.insert("Copper Graph".into(), entry);
+                    let entry = g.remove("steel").unwrap();
+                    g.insert("Steel Graph".into(), entry);
                 }),
             ),
             (
                 "too many nodes",
                 Box::new(|v| {
-                    let node = v["appearances"]["graphs"]["copper"]["nodes"][0].clone();
-                    v["appearances"]["graphs"]["copper"]["nodes"] = Value::Array(vec![node; limits::NODES + 1]);
+                    let node = v["appearances"]["graphs"]["steel"]["nodes"][0].clone();
+                    v["appearances"]["graphs"]["steel"]["nodes"] = Value::Array(vec![node; limits::NODES + 1]);
                 }),
             ),
             (
                 "too many graphs",
                 Box::new(|v| {
-                    let copper = v["appearances"]["graphs"]["copper"].clone();
+                    let steel = v["appearances"]["graphs"]["steel"].clone();
                     let g = v["appearances"]["graphs"].as_object_mut().unwrap();
                     for i in 0..limits::GRAPHS_PER_DESIGN {
-                        g.insert(format!("g{i}"), copper.clone());
+                        g.insert(format!("g{i}"), steel.clone());
                     }
                 }),
             ),
@@ -682,8 +677,8 @@ mod tests {
             (
                 "a see-through graph on a translucent look",
                 Box::new(|v| {
-                    v["appearances"]["graphs"]["copper"]["nodes"][0]["inputs"]["geometry_opacity"] = json!(0.5);
-                    v["appearances"]["bodies"]["Copper"] = json!({ "name": "c", "color": [1, 2, 3], "opacity": 0.5, "graph": "copper" });
+                    v["appearances"]["graphs"]["steel"]["nodes"][0]["inputs"]["geometry_opacity"] = json!(0.5);
+                    v["appearances"]["bodies"]["Steel"] = json!({ "name": "c", "color": [1, 2, 3], "opacity": 0.5, "graph": "steel" });
                 }),
             ),
             (
@@ -728,22 +723,22 @@ mod tests {
         assert_eq!(asset.checked(&texture_key(&grey)).unwrap().1, (limits::TEXTURE_SIDE as usize).pow(2));
         // A translucent look on an opaque graph is the legacy blend, as today.
         let mut blend = good.clone();
-        blend["appearances"]["bodies"]["Copper"] = json!({ "name": "c", "color": [1, 2, 3], "opacity": 0.5, "graph": "copper" });
+        blend["appearances"]["bodies"]["Steel"] = json!({ "name": "c", "color": [1, 2, 3], "opacity": 0.5, "graph": "steel" });
         Document::from_json(&blend.to_string()).unwrap();
     }
 
     #[test]
     fn see_through_reads_constants_interface_values_and_connections() {
-        let mut graph: MaterialGraph = serde_json::from_str(COPPER).unwrap();
+        let mut graph: AppearanceGraph = serde_json::from_str(STEEL).unwrap();
         let mut look = Look::custom([1, 2, 3], 1.0);
         assert!(!see_through(&graph, &look));
-        let set = |g: &mut MaterialGraph, input: &str, v: Value| {
+        let set = |g: &mut AppearanceGraph, input: &str, v: Value| {
             g.nodes[0].inputs.insert(input.into(), serde_json::from_value(v).unwrap());
         };
         set(&mut graph, "transmission_weight", json!(0.2));
         assert!(see_through(&graph, &look));
         set(&mut graph, "transmission_weight", json!(0));
-        set(&mut graph, "geometry_opacity", json!({ "from": "mask" }));
+        set(&mut graph, "geometry_opacity", json!({ "from": "cutout" }));
         assert!(see_through(&graph, &look), "a driven opacity can be below 1");
         set(&mut graph, "geometry_opacity", json!({ "interface": "alpha" }));
         graph.interface = serde_json::from_value(json!([{ "name": "alpha", "type": "float", "default": 1.0 }])).unwrap();

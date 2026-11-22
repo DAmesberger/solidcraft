@@ -12,8 +12,8 @@ use solidcore_record::Vec3;
 use crate::Document;
 
 /// A look: a name (a library entry's, or "Custom"), sRGB colour and opacity (1 = opaque), and
-/// optionally its shading: fixed `pbr` parameters, or a material `graph` of the design's table
-/// with interface `values` (docs/material-graph.md §4.1). `pbr` and `graph` exclude each other.
+/// optionally its shading: fixed `pbr` parameters, or an appearance `graph` of the design's table
+/// with interface `values` (docs/appearance-graph.md §4.1). `pbr` and `graph` exclude each other.
 /// With a graph, `color` stays what the standard view and exports show.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "LookWire")]
@@ -24,7 +24,7 @@ pub struct Look {
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<crate::pbr_appearance::PbrParameters>,
-    /// A material graph of `appearances.graphs`, by id.
+    /// An appearance graph of `appearances.graphs`, by id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<crate::appearance_graph::GraphId>,
     /// Values for the graph's interface inputs, by name; the others keep their defaults.
@@ -168,7 +168,7 @@ impl ImportedLook {
 }
 
 /// The design's appearances: the looks of bodies, faces and components, and the material
-/// graphs and texture assets looks use (docs/material-graph.md §4.1).
+/// graphs and texture assets looks use (docs/appearance-graph.md §4.1).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "AppearancesWire")]
 pub struct Appearances {
@@ -191,7 +191,7 @@ pub struct Appearances {
 #[derive(Deserialize)]
 struct AppearancesWire {
     #[serde(default)]
-    graphs: BTreeMap<crate::appearance_graph::GraphId, crate::appearance_graph::MaterialGraph>,
+    graphs: BTreeMap<crate::appearance_graph::GraphId, crate::appearance_graph::AppearanceGraph>,
     #[serde(default)]
     textures: BTreeMap<String, crate::appearance_graph::TextureAsset>,
     #[serde(default)]

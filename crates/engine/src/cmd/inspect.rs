@@ -146,7 +146,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
         "bodies?: [names]; faces?: [[x,y,z] on faces] (body?: which body, default the nearest); components?: [names or ids, or occurrence names]; \
              appearance?: library name or stable starter.* ID (appearance.library) | color: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1, default 1); \
-             name?: inert copied look label (requires color, mutually exclusive with appearance); pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (requires color/appearance and opacity 1); a starter ID or registered starter name resolves its recipe before color overrides; omitted pbr retains that response and pbr: null explicitly clears it. Unavailable glass recipes refuse through either selector. Other custom labels with an explicit color retain legacy scalar behavior. graph?: a material graph id (appearance.graph.list) with values?: {interface input: number | vector | {srgb8} | {texture: sha256}}, name? (default the id), opacity? (default 1); excludes appearance and pbr, and color is computed from the graph's base response. Neither appearance nor color nor graph (or color: null): clear, so the face follows its body, the body its component, the component its material",
+             name?: inert copied look label (requires color, mutually exclusive with appearance); pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (requires color/appearance and opacity 1); a starter ID or registered starter name resolves its recipe before color overrides; omitted pbr retains that response and pbr: null explicitly clears it. Unavailable glass recipes refuse through either selector. Other custom labels with an explicit color retain legacy scalar behavior. graph?: an appearance graph id (appearance.graph.list) with values?: {interface input: number | vector | {srgb8} | {texture: sha256}}, name? (default the id), opacity? (default 1); excludes appearance and pbr, and color is computed from the graph's base response. Neither appearance nor color nor graph (or color: null): clear, so the face follows its body, the body its component, the component its material",
     ),
     CommandSpec::new("appearance.copy", "Copy Look", crate::checked!("appearance.copy", appearance_gestures::copy)).icon("copy").noundo().key("Ctrl+Alt+C")
         .contract(&COPY_CONTRACT).output(crate::schema::output_schema_for::<AppearanceCopyResult>)
@@ -1078,7 +1078,7 @@ pub(super) fn appearance_look(cmd: &str, p: &Value) -> Result<Option<solidcraft_
         return graph_look(cmd, p, graph).map(Some);
     }
     if p.get("values").is_some_and(|v| !v.is_null()) {
-        return Err(bad(cmd, "`values` set a material graph's inputs, so they need `graph`"));
+        return Err(bad(cmd, "`values` set an appearance graph's inputs, so they need `graph`"));
     }
     // A saved label is data, not a request to resolve a recipe. Keep the explicit
     // appearance selector separate so an owned look may have any recipe's ID as its name.
@@ -1146,19 +1146,19 @@ pub(super) fn appearance_look(cmd: &str, p: &Value) -> Result<Option<solidcraft_
     Ok(look)
 }
 
-/// A look that names a material graph: `graph`, `values?`, `name?` (default: the graph's id),
+/// A look that names an appearance graph: `graph`, `values?`, `name?` (default: the graph's id),
 /// `opacity?` (default 1). Its `color` is the graph's base colour, which the assigning command
 /// computes (`appearance_graph::settle_look`): a given `color` is replaced by it. A graph look
 /// takes no library `appearance` and no `pbr`.
 fn graph_look(cmd: &str, p: &Value, graph: &Value) -> Result<solidcraft_doc::appearance::Look> {
     use solidcraft_doc::appearance::Look;
-    let id = graph.as_str().ok_or_else(|| bad(cmd, "`graph` is a material graph's id (appearance.graph.list)"))?;
+    let id = graph.as_str().ok_or_else(|| bad(cmd, "`graph` is an appearance graph's id (appearance.graph.list)"))?;
     let id = solidcraft_doc::appearance_graph::GraphId::new(id).map_err(|e| bad(cmd, e.to_string()))?;
     if p.get("appearance").is_some_and(|v| !v.is_null()) {
-        return Err(bad(cmd, "a look names a library `appearance` or a material `graph`, not both"));
+        return Err(bad(cmd, "a look names a library `appearance` or an appearance `graph`, not both"));
     }
     if p.get("pbr").is_some_and(|v| !v.is_null()) {
-        return Err(bad(cmd, "a look has either `pbr` or a material `graph`, not both"));
+        return Err(bad(cmd, "a look has either `pbr` or an appearance `graph`, not both"));
     }
     let name = match p.get("name") {
         None | Some(Value::Null) => id.as_str().to_string(),

@@ -1,6 +1,6 @@
-//! Validation and the lowered form both GPU code generators read (docs/material-graph.md §5.1,
+//! Validation and the lowered form both GPU code generators read (docs/appearance-graph.md §5.1,
 //! §5.7). One front end, two back ends: the viewport (uniform pages, WebGL2-safe) and the path
-//! tracer (a storage-buffer material table, native only).
+//! tracer (a storage-buffer table of looks, native only).
 //!
 //! [`validate`] checks a graph, [`lower`] builds the IR and [`base_response`] reads the output
 //! node's constants; the work lives in `validate.rs`, `lower.rs` and `base.rs`. Nothing here
@@ -25,7 +25,7 @@ use std::fmt;
 use serde::Serialize;
 
 use super::catalogue::PortType;
-use super::graph::{Constant, MaterialGraph};
+use super::graph::{AppearanceGraph, Constant};
 use super::sample::SurfaceSample;
 use crate::surface::OpaqueSurface;
 
@@ -47,18 +47,15 @@ pub struct GraphIssue {
 pub enum GraphError {
     /// The graph breaks the catalogue or the limits; every issue found.
     Invalid(Vec<GraphIssue>),
-    /// The step is part of the contract but its implementation has not landed yet.
-    NotBuilt(&'static str),
 }
 
 impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             GraphError::Invalid(issues) => {
-                let first = issues.first().map(|i| i.message.as_str()).unwrap_or("invalid material graph");
+                let first = issues.first().map(|i| i.message.as_str()).unwrap_or("invalid appearance graph");
                 if issues.len() > 1 { write!(f, "{first} (and {} more)", issues.len() - 1) } else { f.write_str(first) }
             }
-            GraphError::NotBuilt(what) => write!(f, "not built yet: {what}"),
         }
     }
 }
@@ -68,14 +65,14 @@ impl std::error::Error for GraphError {}
 /// A graph that passed validation. Only [`validate`] makes one, so holding one proves it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Validated {
-    graph: MaterialGraph,
+    graph: AppearanceGraph,
 }
 
 impl Validated {
-    pub(super) fn new(graph: MaterialGraph) -> Self {
+    pub(super) fn new(graph: AppearanceGraph) -> Self {
         Validated { graph }
     }
-    pub fn graph(&self) -> &MaterialGraph {
+    pub fn graph(&self) -> &AppearanceGraph {
         &self.graph
     }
 }
@@ -95,7 +92,7 @@ pub struct ValueId(pub u32);
 pub enum Operand {
     /// An earlier instruction's result.
     Value(ValueId),
-    /// A constant or interface value: `width` floats at `offset` in the material's uniform
+    /// A constant or interface value: `width` floats at `offset` in the look's uniform
     /// slots (vec4-aligned per value).
     Uniform { offset: u32, width: u8 },
     /// A texture binding, by its index in [`Ir::textures`].
@@ -151,7 +148,7 @@ impl Instr {
     }
 }
 
-/// A texture the material reads.
+/// A texture the graph reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TextureBinding {
     /// SHA-256 of the asset, or the interface input that supplies it.
@@ -178,7 +175,7 @@ impl TextureBinding {
 /// What one uniform slot holds. (The back ends need it to fill pages.)
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UniformSlot {
-    /// In floats from the material's first float; a vec2 starts on an even float and a vec3 on
+    /// In floats from the look's first float; a vec2 starts on an even float and a vec3 on
     /// a vec4 boundary, so no value straddles a vec4.
     pub offset: u32,
     pub width: u8,
@@ -205,7 +202,7 @@ pub struct Ir {
     /// For a `surface.mix` output: the blend factor and the two surfaces' operands (v1 blends
     /// parameters). Empty otherwise.
     pub mix_layers: Vec<MixLayer>,
-    /// Floats of uniform data one material of this graph needs (≤ `limits::UNIFORM_FLOATS`).
+    /// Floats of uniform data one look of this graph needs (≤ `limits::UNIFORM_FLOATS`).
     pub uniform_floats: u32,
     pub textures: Vec<TextureBinding>,
     /// Cost units after expansion (≤ `limits::COST_UNITS`, the safety bound; above
@@ -230,7 +227,7 @@ pub struct MixLayer {
 /// Check a graph against the catalogue and the limits: known kinds, ports and params, typed
 /// connections, no cycles, constants in range, one surface output, cost and texture budgets.
 /// Never panics on hostile input. The validated copy drops layout entries for missing nodes.
-pub fn validate(graph: &MaterialGraph) -> Result<Validated, GraphError> {
+pub fn validate(graph: &AppearanceGraph) -> Result<Validated, GraphError> {
     super::validate::validate(graph).map_err(GraphError::Invalid)
 }
 
@@ -257,8 +254,8 @@ pub fn base_sample(graph: &Validated) -> Result<SurfaceSample, GraphError> {
 
 /// [`base_sample`] for a look: `graph` with the look's interface `values` in place of the
 /// interface's defaults. What the look shows while its shape compiles and its display colour, so
-/// a look never shows the graph's own default colours (docs/material-graph.md §5.6).
-pub fn look_base_sample(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<SurfaceSample, GraphError> {
+/// a look never shows the graph's own default colours (docs/appearance-graph.md §5.6).
+pub fn look_base_sample(graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> Result<SurfaceSample, GraphError> {
     let mut graph = graph.clone();
     for input in &mut graph.interface {
         if let Some(v) = values.get(&input.name) {
@@ -268,7 +265,7 @@ pub fn look_base_sample(graph: &MaterialGraph, values: &BTreeMap<String, Constan
     base_sample(&validate(&graph)?)
 }
 
-/// One material's uniform data: `ir.uniform_floats` 32-bit words (`f32` bits; seeds as `u32`),
+/// One look's uniform data: `ir.uniform_floats` 32-bit words (`f32` bits; seeds as `u32`),
 /// with interface slots taken from `values` where given, else their defaults. Values are checked
 /// for type and range; names that no slot reads (a texture, an unused input) are ignored.
 ///

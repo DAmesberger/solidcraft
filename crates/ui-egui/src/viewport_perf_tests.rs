@@ -1,4 +1,4 @@
-//! Per-frame GPU cost of the modelling view in both looks (docs/material-graph.md §5.4), on a
+//! Per-frame GPU cost of the modelling view in both looks (docs/appearance-graph.md §5.4), on a
 //! saved design (`$PERF_DESIGN`, e.g. the realistic showcase built with `solidcraft-cli run
 //! examples/realistic-showcase.json --save …`). A record, not a check (`--ignored`); run
 //! optimised:

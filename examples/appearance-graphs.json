@@ -1,7 +1,7 @@
 {
   "commands": [
-    {"command":"file.new","params":{"name":"Material graph examples"}},
-    {"command":"document.metadata.set","params":{"values":{"license":"MIT OR Apache-2.0","author":"SolidCraft contributors","project":"Built-in material graphs on simple parts","description":"Original illustrative material previews, not measured optical data"}}},
+    {"command":"file.new","params":{"name":"Appearance graph examples"}},
+    {"command":"document.metadata.set","params":{"values":{"license":"MIT OR Apache-2.0","author":"SolidCraft contributors","project":"Built-in appearance graphs on simple parts","description":"Original illustrative material previews, not measured optical data"}}},
     {"command":"solid.cylinder","params":{"body_name":"Label","base":[0,0,0],"radius":4,"height":12,"operation":"new"}},
     {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-6a9bc13bcd6a1b72","revision":"6a9bc13bcd6a1b728c776008c0b5b4880d2f24772a9e0fca053affbf92a31b89","targets":{"bodies":["Label"]}}},
     {"command":"solid.box","params":{"body_name":"Glass fibre panel","corner":[15,-12,0],"length":24,"width":24,"height":1.6,"operation":"new"}},

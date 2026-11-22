@@ -1,12 +1,12 @@
-//! The CPU side of material-graph drawing (docs/material-graph.md §5.2): uniform pages, each
+//! The CPU side of appearance-graph drawing (docs/appearance-graph.md §5.2): uniform pages, each
 //! material's record in one, and the vertices of every (shape, page, texture set), which one draw
 //! covers. Data preparation only.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use solidcraft_viewport::material_graph::ir::{Ir, ShapeKey};
-use solidcraft_viewport::material_graph::{SurfaceSample, limits};
+use solidcraft_viewport::appearance_graph::ir::{Ir, ShapeKey};
+use solidcraft_viewport::appearance_graph::{SurfaceSample, limits};
 
 use super::textures::TextureKey;
 use super::{BASE_VEC4, OBJECT_VERTEX_SIZE, PAGE_VEC4, VERTEX_SIZE};
@@ -72,7 +72,7 @@ struct Entry {
     object: bool,
 }
 
-/// The material-graph surfaces of a scene.
+/// The appearance-graph surfaces of a scene.
 #[derive(Clone, Debug, Default)]
 pub struct GraphScene {
     shapes: HashMap<ShapeKey, Arc<Ir>>,
@@ -139,7 +139,7 @@ pub fn base_record(s: &SurfaceSample) -> [f32; 4 * BASE_VEC4 as usize] {
 /// surface layer drives `transmission_weight` or `geometry_opacity`, or holds a transmission
 /// above 0 or an opacity below 1.
 pub fn see_through(ir: &Ir, words: &[u32]) -> bool {
-    use solidcraft_viewport::material_graph::ir::Operand;
+    use solidcraft_viewport::appearance_graph::ir::Operand;
     let value = |op: &Operand| match op {
         Operand::Uniform { offset, .. } => usize::try_from(*offset).ok().and_then(|i| words.get(i)).map(|w| f32::from_bits(*w)),
         _ => None,

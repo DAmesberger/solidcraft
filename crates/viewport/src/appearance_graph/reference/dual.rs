@@ -1,5 +1,5 @@
 //! Forward-mode derivatives for the reference: a value with its gradient in world space, per mm
-//! (docs/material-graph.md §3, "Slopes"). The GPU back ends carry the same gradients for
+//! (docs/appearance-graph.md §3, "Slopes"). The GPU back ends carry the same gradients for
 //! slope-marked wires; the reference carries them everywhere, which changes no value.
 
 use std::ops::{Add, Div, Mul, Neg, Sub};

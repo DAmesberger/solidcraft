@@ -1,4 +1,4 @@
-//! The Realistic view of a modelling viewport (docs/material-graph.md §6): the same scenes with
+//! The Realistic view of a modelling viewport (docs/appearance-graph.md §6): the same scenes with
 //! the frame's product look. Opaque scalar faces are lit by the studio as an implicit dielectric;
 //! highlights, edges and the standard picture itself stay exactly as they are.
 
@@ -188,8 +188,8 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
 #[test]
 fn an_instanced_highlight_draws_after_material_surfaces() {
     let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
-    use solidcraft_viewport::material_graph::{MaterialGraph, base_sample, lower, uniform_words, validate};
-    let graph: MaterialGraph = serde_json::from_value(serde_json::json!({
+    use solidcraft_viewport::appearance_graph::{AppearanceGraph, base_sample, lower, uniform_words, validate};
+    let graph: AppearanceGraph = serde_json::from_value(serde_json::json!({
         "name": "plain", "nodes": [{"id": "surface", "kind": "standard_surface",
             "inputs": {"base_color": [0.2, 0.4, 0.2], "specular_roughness": 0.4}}], "output": "surface"}))
     .unwrap_or_else(|e| panic!("{e}"));

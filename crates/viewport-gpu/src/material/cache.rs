@@ -1,4 +1,4 @@
-//! Shape pipelines and the per-scene GPU state of material graphs (docs/material-graph.md §5.2).
+//! Shape pipelines and the per-scene GPU state of appearance graphs (docs/appearance-graph.md §5.2).
 //!
 //! A pipeline per shape, made from naga-validated generated WGSL: on a worker thread where the
 //! device makes pipelines from any thread (`compile`), else on the frame's thread, at most
@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use solidcraft_viewport::material_graph::ir::{Ir, ShapeKey};
+use solidcraft_viewport::appearance_graph::ir::{Ir, ShapeKey};
 
 use super::compile::{Compiler, Done, Job, PipelineSpec};
 use super::scene::{GraphMaterial, GraphScene, TextureSet};
@@ -22,7 +22,7 @@ use crate::view::ibl::{StudioPreset, Studios};
 /// Failed shapes remembered (so each logs once); forgotten all at once past this.
 const FAILED_SHAPES: usize = 4096;
 
-/// What the material-graph drawing did in the last frame.
+/// What the appearance-graph drawing did in the last frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MaterialStats {
     /// Shape pipelines created this frame.

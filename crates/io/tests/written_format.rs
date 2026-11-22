@@ -1,5 +1,5 @@
-//! Designs without material graphs save exactly as they did before the change existed
-//! (docs/material-graph.md §4.4): every design of the CLI corpus and the Selene models, in
+//! Designs without appearance graphs save exactly as they did before the change existed
+//! (docs/appearance-graph.md §4.4): every design of the CLI corpus and the Selene models, in
 //! plain JSON and in a container, is written in the format and with the `format_pending` that a
 //! build without `appearance-graphs` writes, byte for byte. A design with a graph takes this
 //! build's number and lists the change; deleting it writes the older form again.
@@ -85,7 +85,7 @@ fn designs_without_graphs_save_as_a_build_without_the_change_does() {
 
 #[test]
 fn a_design_with_a_graph_takes_the_new_number_until_its_last_graph_is_deleted() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewport/tests/fixtures/material_graph/pbr-steel.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewport/tests/fixtures/appearance_graph/pbr-steel.json");
     let graph = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut doc = Document::new("Graphs");
     doc.appearances.tables.graphs.insert(solidcraft_doc::appearance_graph::GraphId::new("copper").unwrap(), graph);

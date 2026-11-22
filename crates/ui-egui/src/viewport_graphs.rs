@@ -1,4 +1,4 @@
-//! Material-graph looks in the model view (docs/material-graph.md §5.2, §6): in the Realistic
+//! Material-graph looks in the model view (docs/appearance-graph.md §5.2, §6): in the Realistic
 //! view, the opaque faces whose look names a graph are shaded by it. Their triangles go into the
 //! scene's material stream (`GpuScene::graphs`), which the renderer draws over the faces the
 //! scene draws anyway (blocks, plans or instances), so those keep their depth, occlusion, edges
@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use solidcraft_engine::doc::appearance_graph::Constant;
-use solidcraft_viewport::material_graph::{self as mg, Ir, MaterialGraph, SurfaceSample};
+use solidcraft_viewport::appearance_graph::{self as mg, AppearanceGraph, Ir, SurfaceSample};
 
 use crate::gpu::GpuScene;
 
@@ -43,14 +43,14 @@ pub(crate) struct GraphLooks {
 /// At most this many lowered looks are kept; past it the cache starts again.
 const MAX_LOOKS: usize = 4096;
 
-fn content_key(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> u64 {
+fn content_key(graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     serde_json::to_string(graph).unwrap_or_default().hash(&mut h);
     serde_json::to_string(values).unwrap_or_default().hash(&mut h);
     h.finish()
 }
 
-fn lower(graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Result<Lowered, String> {
+fn lower(graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> Result<Lowered, String> {
     let valid = mg::validate(graph).map_err(|e| e.to_string())?;
     let ir = mg::lower(&valid).map_err(|e| e.to_string())?;
     // The look's values, not the graph's defaults: this is what shows until the shape compiles.
@@ -74,7 +74,7 @@ impl GraphLooks {
     }
 
     /// The lowered graph look, or `None` when it cannot draw as a graph.
-    fn get(&mut self, graph: &MaterialGraph, values: &BTreeMap<String, Constant>) -> Option<Arc<Lowered>> {
+    fn get(&mut self, graph: &AppearanceGraph, values: &BTreeMap<String, Constant>) -> Option<Arc<Lowered>> {
         let key = content_key(graph, values);
         if let Some(l) = self.lowered.get(&key) {
             return l.clone();
@@ -86,7 +86,7 @@ impl GraphLooks {
             Ok(l) => Some(Arc::new(l)),
             Err(e) => {
                 if self.warned.len() < MAX_LOOKS && self.warned.insert(key) {
-                    log::warn!("material graph {:?} draws as its look's colour: {e}", graph.name);
+                    log::warn!("appearance graph {:?} draws as its look's colour: {e}", graph.name);
                 }
                 None
             }
@@ -122,7 +122,7 @@ pub(crate) fn see_through_faces(
 /// A `pbr` look as the constant graph it is (O9): one `standard_surface` with the look's colour
 /// (exact sRGB8), metalness, roughness and dielectric IOR. Always the same four inputs, so every
 /// `pbr` look has the same shape.
-pub(crate) fn pbr_graph(color: [u8; 3], pbr: &solidcraft_engine::doc::pbr_appearance::PbrParameters) -> Option<MaterialGraph> {
+pub(crate) fn pbr_graph(color: [u8; 3], pbr: &solidcraft_engine::doc::pbr_appearance::PbrParameters) -> Option<AppearanceGraph> {
     let graph = serde_json::json!({"name": "pbr", "nodes": [{"id": "surface", "kind": "standard_surface", "inputs": {
         "base_color": {"srgb8": color},
         "base_metalness": pbr.metallic(),

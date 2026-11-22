@@ -1,4 +1,4 @@
-//! The look of a view (`view.look`, docs/material-graph.md §6): Standard, today's drawing and the
+//! The look of a view (`view.look`, docs/appearance-graph.md §6): Standard, today's drawing and the
 //! default, or Realistic, faces lit by the studio through the product look
 //! ([`crate::gpu::ProductLook`]). The modelling viewport and the Render workspace preview each
 //! have their own. Both are UI preferences remembered like the visual style, never saved in the

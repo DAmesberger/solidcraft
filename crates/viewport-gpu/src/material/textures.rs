@@ -1,4 +1,4 @@
-//! Material textures on the GPU (docs/material-graph.md §4.3, §5.3): the decode worker, the
+//! Material textures on the GPU (docs/appearance-graph.md §4.3, §5.3): the decode worker, the
 //! resident size, the upload and the mip chain built by render passes.
 //!
 //! - **Decoding** goes through `solidcraft_viewport::texture_input`, the one decoder, on a
@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use solidcraft_viewport::material_graph::Constant;
-use solidcraft_viewport::material_graph::ir::Ir;
+use solidcraft_viewport::appearance_graph::Constant;
+use solidcraft_viewport::appearance_graph::ir::Ir;
 use solidcraft_viewport::texture_input::{DecodeBudget, DecodedTexture, MAX_TEXTURE_EDGE, PixelLayout, TextureError, TextureSource};
 
 use super::scene::TEXTURE_SLOTS;
