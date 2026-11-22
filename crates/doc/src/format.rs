@@ -2115,6 +2115,7 @@ mod tests {
                         direction: Direction::Negative,
                         distance2: None,
                         start_offset: None,
+                        symmetric_offset: false,
                         through_all: false,
                         second_follows_first: false,
                         taper: Some("0 deg".into()),
