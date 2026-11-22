@@ -98,7 +98,7 @@ fn an_images_role_follows_its_use() {
 
 #[test]
 fn texture_keys_come_from_constants_and_look_values() {
-    let text = solidcraft_viewport::material_graph::fixtures::worked_example("laser-etched-nickel-silver").unwrap();
+    let text = solidcraft_viewport::material_graph::fixtures::worked_example("laser-etched-stainless").unwrap();
     let graph: MaterialGraph = serde_json::from_str(text).unwrap();
     let ir = lower(&validate(&graph).unwrap()).unwrap();
     assert_eq!(texture_keys(&ir, &BTreeMap::new()), [None, None, None, None], "an interface texture with no value");

@@ -1,5 +1,5 @@
 {
- "name": "Brushed nickel silver",
+ "name": "Brushed stainless steel",
  "nodes": [
   {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]}},
   {"id": "lines", "kind": "pattern.brushed", "inputs": {"texcoord": {"from": "uv"}, "density_per_mm": 40, "streak_mm": 4, "contrast": 0.6, "jitter": 0.3, "seed": 7}},

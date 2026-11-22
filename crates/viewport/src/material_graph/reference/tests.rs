@@ -9,12 +9,12 @@ use super::*;
 use crate::material_graph::{Constant, base_sample};
 
 const FIXTURES: &[(&str, &str)] = &[
-    ("black-epoxy-clear-coat", include_str!("../../../tests/fixtures/material_graph/black-epoxy-clear-coat.json")),
-    ("brushed-nickel-silver", include_str!("../../../tests/fixtures/material_graph/brushed-nickel-silver.json")),
-    ("electrolytic-sleeve", include_str!("../../../tests/fixtures/material_graph/electrolytic-sleeve.json")),
-    ("laser-etched-nickel-silver", include_str!("../../../tests/fixtures/material_graph/laser-etched-nickel-silver.json")),
-    ("pbr-copper", include_str!("../../../tests/fixtures/material_graph/pbr-copper.json")),
-    ("solder-mask-over-copper", include_str!("../../../tests/fixtures/material_graph/solder-mask-over-copper.json")),
+    ("gloss-black-clear-coat", include_str!("../../../tests/fixtures/material_graph/gloss-black-clear-coat.json")),
+    ("brushed-stainless", include_str!("../../../tests/fixtures/material_graph/brushed-stainless.json")),
+    ("printed-label", include_str!("../../../tests/fixtures/material_graph/printed-label.json")),
+    ("laser-etched-stainless", include_str!("../../../tests/fixtures/material_graph/laser-etched-stainless.json")),
+    ("pbr-steel", include_str!("../../../tests/fixtures/material_graph/pbr-steel.json")),
+    ("candy-coat-over-aluminium", include_str!("../../../tests/fixtures/material_graph/candy-coat-over-aluminium.json")),
 ];
 
 fn fixture(name: &str) -> &'static str {
@@ -79,7 +79,7 @@ fn every_fixture_evaluates_to_a_sane_surface() {
 /// (up to the `f32` rounding of the uniform words).
 #[test]
 fn the_pbr_fixture_is_its_base_response() {
-    let text = fixture("pbr-copper");
+    let text = fixture("pbr-steel");
     let (ir, words) = prepare_json(text, &none()).unwrap();
     let graph: MaterialGraph = serde_json::from_str(text).unwrap();
     let base = base_sample(&validate(&graph).unwrap()).unwrap();
@@ -99,11 +99,11 @@ fn the_pbr_fixture_is_its_base_response() {
     }
 }
 
-/// Brushed nickel: roughness and tint are remaps of one brushed value, the base colour is the
+/// Brushed stainless: roughness and tint are remaps of one brushed value, the base colour is the
 /// constant times the tint, and the anisotropy runs along the planar u (+X) made tangential.
 #[test]
-fn brushed_nickel_silver_follows_its_remaps() {
-    let (ir, words) = prepare_json(fixture("brushed-nickel-silver"), &none()).unwrap();
+fn brushed_stainless_follows_its_remaps() {
+    let (ir, words) = prepare_json(fixture("brushed-stainless"), &none()).unwrap();
     for p in sample_points() {
         let e = eval(&ir, &words, &p);
         let v = first_of(&ir, &e, "pattern.brushed");
@@ -122,17 +122,17 @@ fn brushed_nickel_silver_follows_its_remaps() {
     }
 }
 
-/// The sleeve: angle u (radians) past the stripe's edges is printed, before them plain PVC in
+/// The label: angle u (radians) past the stripe's edges is printed, before them plain film in
 /// the interface colour; a look's value overrides the colour; an unbound print adds no ink.
 #[test]
-fn the_sleeve_stripe_and_interface_colour() {
-    let (ir, words) = prepare_json(fixture("electrolytic-sleeve"), &none()).unwrap();
+fn the_label_stripe_and_interface_colour() {
+    let (ir, words) = prepare_json(fixture("printed-label"), &none()).unwrap();
     let at = |angle: f64| Point::new([4.0 * angle.cos(), 4.0 * angle.sin(), 1.3], [angle.cos(), angle.sin(), 0.0]);
-    let pvc = eval(&ir, &words, &at(0.4)).surface;
+    let film = eval(&ir, &words, &at(0.4)).surface;
     for (k, c) in [0.020, 0.045, 0.16].iter().enumerate() {
-        assert!(close(pvc.base_color[k], *c, 1e-7));
+        assert!(close(film.base_color[k], *c, 1e-7));
     }
-    assert!(close(pvc.ior, 1.54, 1e-6) && close(pvc.roughness, 0.35, 1e-6));
+    assert!(close(film.ior, 1.54, 1e-6) && close(film.roughness, 0.35, 1e-6));
     let printed = eval(&ir, &words, &at(3.0)).surface;
     for (k, c) in [0.80, 0.80, 0.78].iter().enumerate() {
         assert!(close(printed.base_color[k], *c, 1e-7));
@@ -140,8 +140,8 @@ fn the_sleeve_stripe_and_interface_colour() {
     // Halfway up the smoothstep the parameters are halfway.
     let mid = eval(&ir, &words, &at(2.61)).surface;
     assert!(close(mid.roughness, 0.40, 1e-4), "{}", mid.roughness);
-    let values = BTreeMap::from([("sleeve".to_owned(), Constant::Vector(vec![0.5, 0.1, 0.05]))]);
-    let (ir2, words2) = prepare_json(fixture("electrolytic-sleeve"), &values).unwrap();
+    let values = BTreeMap::from([("label".to_owned(), Constant::Vector(vec![0.5, 0.1, 0.05]))]);
+    let (ir2, words2) = prepare_json(fixture("printed-label"), &values).unwrap();
     assert_eq!(ir2.shape, ir.shape, "a value is not a shape");
     let red = eval(&ir2, &words2, &at(0.4)).surface;
     assert!(close(red.base_color[0], 0.5, 1e-7) && close(red.base_color[2], 0.05, 1e-7));
@@ -151,7 +151,7 @@ fn the_sleeve_stripe_and_interface_colour() {
 /// with its pitted normal, read through the planar lid projection with v up.
 #[test]
 fn the_laser_etched_lid_reads_its_mark() {
-    let (ir, words) = prepare_json(fixture("laser-etched-nickel-silver"), &none()).unwrap();
+    let (ir, words) = prepare_json(fixture("laser-etched-stainless"), &none()).unwrap();
     let p = Point::new([1.13, 2.27, 0.0], [0.0, 0.0, 1.0]);
     let plain = eval(&ir, &words, &p).surface;
     assert!(close(plain.roughness, 0.45, 1e-6) && plain.normal == [0.0, 0.0, 1.0]);
@@ -171,16 +171,16 @@ fn the_laser_etched_lid_reads_its_mark() {
     assert!(close(clear.roughness, 0.45, 1e-6));
 }
 
-/// The solder mask: copper base under a tinted coat; the peel perturbs only the coat normal.
+/// The candy coat: an aluminium base under a tinted coat; the peel perturbs only the coat normal.
 #[test]
-fn solder_mask_peel_moves_only_the_coat_normal() {
-    let (ir, words) = prepare_json(fixture("solder-mask-over-copper"), &none()).unwrap();
+fn candy_coat_peel_moves_only_the_coat_normal() {
+    let (ir, words) = prepare_json(fixture("candy-coat-over-aluminium"), &none()).unwrap();
     let mut tilted = 0;
     for p in sample_points() {
         let s = eval(&ir, &words, &p).surface;
         assert_eq!(s.normal, p.world_normal);
         assert!(close(s.coat_weight, 1.0, 0.0) && close(s.coat_ior, 1.52, 1e-6));
-        assert!(close(s.coat_color[1], 0.45, 1e-7));
+        assert!(close(s.coat_color[1], 0.06, 1e-7));
         if dot3(s.coat_normal, p.world_normal) < 1.0 - 1e-12 {
             tilted += 1;
         }
@@ -190,10 +190,10 @@ fn solder_mask_peel_moves_only_the_coat_normal() {
     assert!(tilted > 0, "the orange peel tilts the coat somewhere");
 }
 
-/// Black epoxy: the EDM roughness is the remapped 3D cellular noise of the object position.
+/// Gloss black: the EDM roughness is the remapped 3D cellular noise of the object position.
 #[test]
-fn black_epoxy_roughness_is_its_remapped_noise() {
-    let (ir, words) = prepare_json(fixture("black-epoxy-clear-coat"), &none()).unwrap();
+fn gloss_black_roughness_is_its_remapped_noise() {
+    let (ir, words) = prepare_json(fixture("gloss-black-clear-coat"), &none()).unwrap();
     for p in sample_points() {
         let e = eval(&ir, &words, &p);
         let n = first_of(&ir, &e, "pattern.noise");
@@ -209,7 +209,7 @@ fn black_epoxy_roughness_is_its_remapped_noise() {
 /// A GPU readback round-trips through the WGSL field order.
 #[test]
 fn a_surface_round_trips_through_floats() {
-    let (ir, words) = prepare_json(fixture("brushed-nickel-silver"), &none()).unwrap();
+    let (ir, words) = prepare_json(fixture("brushed-stainless"), &none()).unwrap();
     let s = eval(&ir, &words, &sample_points()[1]).surface;
     let floats: Vec<f32> = s.to_floats().iter().map(|x| *x as f32).collect();
     assert_eq!(ReferenceSurface::NAMES.len(), ReferenceSurface::FLOATS);

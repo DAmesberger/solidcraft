@@ -1,5 +1,5 @@
 {
- "name": "Black epoxy, clear coated",
+ "name": "Gloss black plastic, clear coated",
  "nodes": [
   {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
   {"id": "edm", "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 2}, "inputs": {"position": {"from": "p"}, "scale_mm": 0.04, "seed": 11}},

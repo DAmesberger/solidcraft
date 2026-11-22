@@ -1,6 +1,6 @@
 # Material graph fixtures
 
-The worked examples of `docs/material-graph.md` §3.8, as saved graphs, and `pbr-copper.json`,
+The worked examples of `docs/material-graph.md` §3.8, as saved graphs, and `pbr-steel.json`,
 the one-node graph equivalent to a `pbr` look (the library's "Copper - Clean PBR").
 
 - `crates/viewport/src/material_graph/tests.rs` parses them and checks that every kind, port and

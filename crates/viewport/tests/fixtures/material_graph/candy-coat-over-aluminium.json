@@ -1,5 +1,5 @@
 {
- "name": "Gloss green solder mask over copper",
+ "name": "Candy red coat over polished aluminium",
  "nodes": [
   {
    "id": "uv",
@@ -89,17 +89,17 @@
    "kind": "standard_surface",
    "inputs": {
     "base_color": [
-     0.955,
-     0.638,
-     0.538
+     0.91,
+     0.92,
+     0.92
     ],
     "base_metalness": 1,
     "specular_roughness": 0.35,
     "coat_weight": 1,
     "coat_color": [
-     0.1,
-     0.45,
-     0.12
+     0.6,
+     0.06,
+     0.05
     ],
     "coat_roughness": 0.12,
     "coat_ior": 1.52,

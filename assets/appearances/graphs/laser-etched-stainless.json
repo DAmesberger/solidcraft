@@ -1,5 +1,5 @@
 {
- "name": "Laser-etched nickel silver",
+ "name": "Laser-etched stainless steel",
  "interface": [{"name": "mark", "type": "texture"}],
  "nodes": [
   {"id": "lid", "kind": "texcoord.planar", "params": {"space": "object"}, "inputs": {"origin": [-6, -4, 0], "u": [12, 0, 0], "v": [0, 8, 0]}},

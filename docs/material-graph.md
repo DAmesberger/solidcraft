@@ -422,12 +422,12 @@ Texture assets live beside them and are stored as container blobs.
 ```json
 "appearances": {
   "graphs": {
-    "brushed-nickel-silver": {
+    "brushed-stainless": {
       "name": "Brushed nickel silver",
       "interface": [],
       "nodes": [ … ],
       "output": "surface",
-      "source": {"library": "6f1c…uuid", "entry": "brushed-nickel-silver", "revision": 3}
+      "source": {"library": "6f1c…uuid", "entry": "brushed-stainless", "revision": 3}
     }
   },
   "textures": {
@@ -435,7 +435,7 @@ Texture assets live beside them and are stored as container blobs.
   },
   "bodies": {
     "Can": {"name": "Brushed nickel silver", "color": [227,224,218], "opacity": 1,
-            "graph": "brushed-nickel-silver", "values": {}}
+            "graph": "brushed-stainless", "values": {}}
   }
 }
 ```
@@ -1342,7 +1342,7 @@ The automation reference, with every parameter, is [material graph commands](mat
 Example (MCP or CLI, `solidcraft-cli run`):
 
 ```json
-{"command":"appearance.graph.edit","params":{"id":"brushed-nickel-silver","ops":[
+{"command":"appearance.graph.edit","params":{"id":"brushed-stainless","ops":[
   {"op":"set_input","node":"surface","port":"coat_weight","value":1},
   {"op":"set_input","node":"surface","port":"coat_roughness","value":0.1}]}}
 ```

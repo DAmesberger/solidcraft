@@ -1,10 +1,10 @@
-//! The test-only reference: an f64 interpreter of the material-graph [`Ir`] (decision O12,
-//! docs/material-graph.md §5.7, §10 track T). It is an **oracle**, never a renderer: product code
+//! The test-only reference: an f64 interpreter of the material-graph [`Ir`]
+//! (docs/material-graph.md §5.7). It is an **oracle**, never a renderer: product code
 //! never evaluates a graph on the CPU. The module exists only under `cfg(test)` or the
 //! `test-reference` feature, which only dev-dependencies enable; `cargo xtask layers` refuses a
 //! normal or build dependency that enables it.
 //!
-//! Both GPU back ends (the viewport's raster back end, track C1, and the path tracer's, track PT)
+//! The GPU back ends (the viewport's raster back end and the path tracer's)
 //! read back their evaluation at fixed points and compare it with [`evaluate`] at the same
 //! [`Point`]s. The reference reads the same uniform words the GPU reads ([`uniform_words`]), so
 //! constants arrive with the same `f32` rounding.
@@ -37,9 +37,8 @@
 //!
 //! # The node formulas (the contract the back ends mirror)
 //!
-//! The noise and projection functions mirror the shared library (`crates/viewport-gpu/src/shading/`,
-//! track S, mg-s de76684da). The patterns are defined here first; **re-check** them when track
-//! C1's `patterns.wgsl` lands.
+//! These formulas are the definition the GPU shading library's noise, projection and pattern
+//! functions must match; change both together.
 //!
 //! - **Gradients.** Every float carries its world-space gradient per mm. Positions carry their
 //!   Jacobian (identity in world space, rows of the inverse object-to-world map in object space);

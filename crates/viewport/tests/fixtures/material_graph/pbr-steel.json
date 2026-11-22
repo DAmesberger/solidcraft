@@ -1,5 +1,5 @@
 {
- "name": "Copper - Clean PBR",
+ "name": "Steel - Satin PBR",
  "nodes": [
   {
    "id": "surface",
@@ -7,13 +7,13 @@
    "inputs": {
     "base_color": {
      "srgb8": [
-      204,
-      122,
-      80
+      158,
+      164,
+      172
      ]
     },
     "base_metalness": 1,
-    "specular_roughness": 0.25,
+    "specular_roughness": 0.4,
     "specular_ior": 1.5
    }
   }

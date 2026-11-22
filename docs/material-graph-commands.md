@@ -41,7 +41,7 @@ the graphs and looks that name it.
   (over 4,000 units, about 2× today's look), and the graph is still accepted. Only a graph
   over the 100,000-unit safety bound is refused (error code `cost`).
 - **Ids** are 1–64 characters of `a–z 0–9 _ . -`. Without `id`, one is made from the name
-  (`"Brushed Nickel/Silver"` → `brushed-nickel-silver`, then `-2`, `-3` …). A given id that
+  (`"Brushed Nickel/Silver"` → `brushed-stainless`, then `-2`, `-3` …). A given id that
   is taken is refused.
 - **`create`** starts from `graph`, or `from: "standard"` (one `standard_surface` with its
   defaults, also the default), or `from: {name, color, opacity?, pbr?}`: the one-node graph

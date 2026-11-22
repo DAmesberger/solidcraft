@@ -3846,7 +3846,7 @@ mod tests {
         spare_png.extend(b"trailing bytes make another asset");
         let (spare, spare_texture) = TextureAsset::from_bytes("spare.png", &spare_png).unwrap();
         let tables = &mut doc.appearances.tables;
-        let graph = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
+        let graph = include_str!("../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
         tables.graphs.insert(GraphId::new("etched").unwrap(), serde_json::from_str(graph).unwrap());
         tables.textures.insert(key.clone(), texture);
         tables.textures.insert(spare.clone(), spare_texture);

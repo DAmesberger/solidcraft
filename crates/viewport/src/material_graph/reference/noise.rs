@@ -1,7 +1,5 @@
-//! The shared library's noise (`crates/viewport-gpu/src/shading/noise.wgsl`), mirrored in f64. The hashes
-//! are integer functions and are mirrored bit for bit, including their final `f32` rounding.
-//!
-//! Mirrors track S's `noise.wgsl` as committed on mg-s (de76684da): `sc_hash2`, `sc_hash3`, the
+//! The noise of the GPU shading library, in f64. The hashes are integer functions and are
+//! defined bit for bit, including their final `f32` rounding: `sc_hash2`, `sc_hash3`, the
 //! value, gradient and cellular noises, `sc_noise` and `sc_fbm`. Change both together.
 
 const KIND_GRADIENT: i64 = 1;

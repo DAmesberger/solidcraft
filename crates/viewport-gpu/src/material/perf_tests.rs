@@ -397,7 +397,7 @@ fn fragment_costs() {
         ("standard, scalar faces".into(), scalar.clone(), false),
         ("realistic, scalar faces".into(), scalar, true),
         ("realistic, pbr look (fs_pbr)".into(), pbr_layers(surface), true),
-        ("realistic, constant graph (pbr-copper)".into(), graph_layers(&copper, &none), true),
+        ("realistic, constant graph (pbr-steel)".into(), graph_layers(&copper, &none), true),
         ("realistic, constant graph without the scalar underlay".into(), graph_layers_with(&copper, &none, false), true),
         (format!("realistic, budget graph ({budget_cost} units)"), graph_layers(&budget, &none), true),
         ("realistic, brushed aluminium (anisotropic)".into(), graph_layers(&brushed, &none), true),

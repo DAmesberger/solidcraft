@@ -48,7 +48,7 @@ pub(super) fn is_maths(kind: &str) -> bool {
 enum TexKey {
     /// A constant texture on one `image` node.
     Node(usize),
-    /// An interface texture read in one colour space with one wrap mode. (Track C3: a binding
+    /// An interface texture read in one colour space with one wrap mode. (A binding
     /// has one sampler, as GLSL ES's combined samplers need.)
     Interface(usize, bool, i64),
 }

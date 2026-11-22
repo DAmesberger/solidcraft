@@ -18,12 +18,12 @@ use super::*;
 /// epoxy, brushed and etched nickel silver, solder mask over copper) and the built-in coat
 /// colour, weave and orange-peel graphs.
 fn graphs() -> Vec<(&'static str, &'static str)> {
-    let examples = ["pbr-copper", "black-epoxy-clear-coat", "brushed-nickel-silver", "laser-etched-nickel-silver", "solder-mask-over-copper"];
+    let examples = ["pbr-steel", "gloss-black-clear-coat", "brushed-stainless", "laser-etched-stainless", "candy-coat-over-aluminium"];
     let worked = examples.into_iter().filter_map(|name| Some((name, solidcraft_viewport::material_graph::fixtures::worked_example(name)?)));
     worked
         .chain([
-            ("tinted-coat-over-copper", include_str!("../../tests/fixtures/tinted-coat-over-copper.json")),
-            ("woven-laminate", include_str!("../../tests/fixtures/woven-laminate.json")),
+            ("candy-coat", include_str!("../../tests/fixtures/candy-coat.json")),
+            ("glass-fibre-weave", include_str!("../../tests/fixtures/glass-fibre-weave.json")),
             ("orange-peel-gloss", include_str!("../../tests/fixtures/orange-peel-gloss.json")),
         ])
         .collect()

@@ -26,15 +26,15 @@ library afterwards.
 
 | Graph id | Name | Interface | Cost (units of 2000) |
 |---|---|---|---|
-| `woven-laminate` | Woven laminate | `color` (color3), `strength` (float, 1) | 585 |
-| `coated-woven-laminate` | Gloss coat over woven laminate | `color`, `coat_color` (color3), `strength` (0.5) | 572 |
+| `glass-fibre-weave` | Woven laminate | `color` (color3), `strength` (float, 1) | 585 |
+| `coated-glass-fibre-weave` | Gloss coat over woven laminate | `color`, `coat_color` (color3), `strength` (0.5) | 572 |
 | `orange-peel-gloss` | Gloss paint, orange peel | `color` | 378 |
 | `printed-ink` | Printed ink | `color`, `strength` (1) | 384 |
-| `brushed-nickel-silver` | Brushed nickel silver | – | 39 |
-| `laser-etched-nickel-silver` | Laser-etched nickel silver | `mark` (texture) | 208 (1 sample) |
-| `tinted-coat-over-copper` | Tinted gloss coat over copper | `coat_color` | 136 |
-| `black-epoxy-clear-coat` | Black epoxy, clear coated | – | 242 |
-| `printed-sleeve` | Printed sleeve with stripe | `sleeve` (color3), `print` (texture) | 31 (1 sample) |
+| `brushed-stainless` | Brushed nickel silver | – | 39 |
+| `laser-etched-stainless` | Laser-etched nickel silver | `mark` (texture) | 208 (1 sample) |
+| `candy-coat` | Tinted gloss coat over copper | `coat_color` | 136 |
+| `gloss-black-clear-coat` | Black epoxy, clear coated | – | 242 |
+| `printed-label` | Printed sleeve with stripe | `sleeve` (color3), `print` (texture) | 31 (1 sample) |
 
 A texture input has no default: until a look binds an image (`values: {"mark": {"texture":
 sha256}}`, or a runtime override, §7.3), the image node reads its default colour with alpha 0,

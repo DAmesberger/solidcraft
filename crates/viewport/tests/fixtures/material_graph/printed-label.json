@@ -1,8 +1,8 @@
 {
- "name": "Electrolytic sleeve, blue",
+ "name": "Printed label, blue",
  "interface": [
   {
-   "name": "sleeve",
+   "name": "label",
    "type": "color3",
    "default": [
     0.02,
@@ -92,11 +92,11 @@
    }
   },
   {
-   "id": "pvc",
+   "id": "film",
    "kind": "standard_surface",
    "inputs": {
     "base_color": {
-     "interface": "sleeve"
+     "interface": "label"
     },
     "specular_roughness": 0.35,
     "specular_ior": 1.54
@@ -123,7 +123,7 @@
      "from": "printed"
     },
     "bg": {
-     "from": "pvc"
+     "from": "film"
     },
     "mix": {
      "from": "ink"

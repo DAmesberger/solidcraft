@@ -4,12 +4,12 @@
 
 /// Each example's name and graph.
 pub const WORKED_EXAMPLES: &[(&str, &str)] = &[
-    ("black-epoxy-clear-coat", include_str!("../../tests/fixtures/material_graph/black-epoxy-clear-coat.json")),
-    ("brushed-nickel-silver", include_str!("../../tests/fixtures/material_graph/brushed-nickel-silver.json")),
-    ("electrolytic-sleeve", include_str!("../../tests/fixtures/material_graph/electrolytic-sleeve.json")),
-    ("laser-etched-nickel-silver", include_str!("../../tests/fixtures/material_graph/laser-etched-nickel-silver.json")),
-    ("pbr-copper", include_str!("../../tests/fixtures/material_graph/pbr-copper.json")),
-    ("solder-mask-over-copper", include_str!("../../tests/fixtures/material_graph/solder-mask-over-copper.json")),
+    ("gloss-black-clear-coat", include_str!("../../tests/fixtures/material_graph/gloss-black-clear-coat.json")),
+    ("brushed-stainless", include_str!("../../tests/fixtures/material_graph/brushed-stainless.json")),
+    ("printed-label", include_str!("../../tests/fixtures/material_graph/printed-label.json")),
+    ("laser-etched-stainless", include_str!("../../tests/fixtures/material_graph/laser-etched-stainless.json")),
+    ("pbr-steel", include_str!("../../tests/fixtures/material_graph/pbr-steel.json")),
+    ("candy-coat-over-aluminium", include_str!("../../tests/fixtures/material_graph/candy-coat-over-aluminium.json")),
 ];
 
 /// The worked example called `name`, if there is one.

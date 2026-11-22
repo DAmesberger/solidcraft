@@ -846,8 +846,8 @@ fn screenshot_graph_looks_in_the_realistic_view() {
     app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
     app.run("solid.box", json!({"corner": [50, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
     app.run("solid.box", json!({"corner": [100, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
-    app.run("appearance.graph.create", json!({"id": "brushed", "name": "Brushed", "graph": fixture("brushed-nickel-silver")})).unwrap();
-    app.run("appearance.graph.create", json!({"id": "epoxy", "name": "Epoxy", "graph": fixture("black-epoxy-clear-coat")})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "brushed", "name": "Brushed", "graph": fixture("brushed-stainless")})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "epoxy", "name": "Epoxy", "graph": fixture("gloss-black-clear-coat")})).unwrap();
     let names: Vec<String> = crate::open_meshing::shown_world(&app).bodies.iter().map(|b| b.name.clone()).collect();
     app.run("appearance.assign", json!({"bodies": [names[0]], "graph": "brushed"})).unwrap();
     app.run("appearance.assign", json!({"bodies": [names[1]], "graph": "epoxy"})).unwrap();

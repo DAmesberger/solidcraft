@@ -8,7 +8,7 @@
     {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-b0645458a814d06a","revision":"b0645458a814d06a04915c5d6505f8d065cd8046c8288d6495ccc51180b30ac5","targets":{"bodies":["Laminate"]}}},
     {"command":"solid.box","params":{"body_name":"Coated laminate","corner":[45,-12,0],"length":24,"width":24,"height":1.6,"operation":"new"}},
     {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-d0af7b1e53acc3a6","revision":"d0af7b1e53acc3a66d7519a86603276223d23b849a57ef9fd3aec6677eb67c61","targets":{"bodies":["Coated laminate"]}}},
-    {"command":"appearance.assign","params":{"bodies":["Coated laminate"],"graph":"coated-woven-laminate","name":"Gloss coat over woven laminate, blue","values":{"coat_color":[0.04,0.12,0.42]}}},
+    {"command":"appearance.assign","params":{"bodies":["Coated laminate"],"graph":"coated-glass-fibre-weave","name":"Gloss coat over woven laminate, blue","values":{"coat_color":[0.04,0.12,0.42]}}},
     {"command":"solid.box","params":{"body_name":"Coated copper","corner":[75,-12,0],"length":24,"width":24,"height":0.2,"operation":"new"}},
     {"command":"library.apply","params":{"path":"builtin:materials","entry":"solidcraft-materials/appearance-2cc3ec642520c3f0","revision":"2cc3ec642520c3f0b19d1d9aa69d3056c870c5f6a7fbad63f8e2a211b6942be8","targets":{"bodies":["Coated copper"]}}},
     {"command":"solid.box","params":{"body_name":"Painted panel","corner":[15,20,0],"length":24,"width":24,"height":3,"operation":"new"}},

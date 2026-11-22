@@ -10,12 +10,12 @@ use super::model::{self, Driver};
 use super::{Action, Commands, Editor, Link, LookContext, Next, Outcome, Pending, TextureUse};
 
 const FIXTURES: &[(&str, &str, usize)] = &[
-    ("black-epoxy-clear-coat", include_str!("../../../viewport/tests/fixtures/material_graph/black-epoxy-clear-coat.json"), 1),
-    ("brushed-nickel-silver", include_str!("../../../viewport/tests/fixtures/material_graph/brushed-nickel-silver.json"), 1),
-    ("electrolytic-sleeve", include_str!("../../../viewport/tests/fixtures/material_graph/electrolytic-sleeve.json"), 2),
-    ("laser-etched-nickel-silver", include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json"), 2),
-    ("pbr-copper", include_str!("../../../viewport/tests/fixtures/material_graph/pbr-copper.json"), 1),
-    ("solder-mask-over-copper", include_str!("../../../viewport/tests/fixtures/material_graph/solder-mask-over-copper.json"), 1),
+    ("gloss-black-clear-coat", include_str!("../../../viewport/tests/fixtures/material_graph/gloss-black-clear-coat.json"), 1),
+    ("brushed-stainless", include_str!("../../../viewport/tests/fixtures/material_graph/brushed-stainless.json"), 1),
+    ("printed-label", include_str!("../../../viewport/tests/fixtures/material_graph/printed-label.json"), 2),
+    ("laser-etched-stainless", include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json"), 2),
+    ("pbr-steel", include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json"), 1),
+    ("candy-coat-over-aluminium", include_str!("../../../viewport/tests/fixtures/material_graph/candy-coat-over-aluminium.json"), 1),
 ];
 
 /// A real 2×1 RGBA PNG (original test data).
@@ -134,25 +134,25 @@ fn every_worked_example_is_stack_shaped() {
         assert!(stack.layers[0].mix.is_none());
         assert!(stack.layers[1..].iter().all(|l| l.mix.is_some()));
     }
-    let etched = model::stack(&fixture("laser-etched-nickel-silver")).unwrap();
+    let etched = model::stack(&fixture("laser-etched-stainless")).unwrap();
     assert_eq!(etched.layers[0].surface, "plain");
     assert_eq!(etched.layers[1].surface, "etched");
 }
 
 #[test]
 fn graphs_the_stack_cannot_show_are_named_not_drawn() {
-    let mut g = fixture("laser-etched-nickel-silver");
+    let mut g = fixture("laser-etched-stainless");
     // fg is a mix: not a stack.
     let mix = g.nodes.iter_mut().find(|n| n.id == "surface").unwrap();
     mix.inputs.insert("fg".into(), InputValue::Connection(model_connection("surface")));
     assert_eq!(model::stack(&g), Err("appearance.graph.not_stack_mix"));
-    let mut g = fixture("brushed-nickel-silver");
+    let mut g = fixture("brushed-stainless");
     g.output = "rough".into();
     assert_eq!(model::stack(&g), Err("appearance.graph.not_stack_output"));
     g.output = "missing".into();
     assert!(model::stack(&g).is_err());
     // A bg cycle through two mixes ends.
-    let mut g = fixture("electrolytic-sleeve");
+    let mut g = fixture("printed-label");
     let mix = g.nodes.iter_mut().find(|n| n.id == "surface").unwrap();
     mix.inputs.insert("bg".into(), InputValue::Connection(model_connection("surface")));
     assert!(model::stack(&g).is_err());
@@ -181,7 +181,7 @@ fn the_editor_lists_creates_and_undoes_through_the_real_engine() {
 
 #[test]
 fn a_value_edit_is_one_command_sent_when_it_settles() {
-    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut fake = Fake::new(fixture("brushed-stainless"));
     let mut ed = editor(&mut fake);
     assert_eq!(ed.graph().unwrap().id, "g");
     assert!(matches!(&ed.validation, Some(Ok(v)) if v.ok && v.cost > 0));
@@ -208,7 +208,7 @@ fn a_value_edit_is_one_command_sent_when_it_settles() {
 
 #[test]
 fn a_refused_edit_leaves_the_replies_and_shows_why() {
-    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut fake = Fake::new(fixture("brushed-stainless"));
     let mut ed = editor(&mut fake);
     let before = ed.loaded.clone();
     fake.refuse = true;
@@ -226,7 +226,7 @@ fn model_param(text: &str) -> solidcraft_viewport::material_graph::ParamValue {
 
 #[test]
 fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
-    let mut graph = fixture("laser-etched-nickel-silver");
+    let mut graph = fixture("laser-etched-stainless");
     graph.layout.insert("plain".into(), [10.0, 20.0]);
     graph.layout.insert("pits".into(), [30.0, 40.0]);
     let mut fake = Fake::new(graph);
@@ -279,7 +279,7 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
     assert!(model::node(&g, "etched").is_none());
     assert_eq!(g.layout.get("plain"), Some(&[10.0, 20.0]), "an edit keeps the layout");
     // Removing the top layer moves the output down.
-    let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
+    let mut fake = Fake::new(fixture("laser-etched-stainless"));
     let stack = model::stack(&fake.graph).unwrap();
     let g = model::remove_layer(&fake.graph, &stack, 1).unwrap();
     assert_eq!(g.output, "plain");
@@ -293,7 +293,7 @@ fn layers_are_added_removed_and_reordered_by_whole_graph_replacement() {
 #[test]
 fn driving_an_input_keeps_its_value_as_the_fallback_and_reuses_the_projection() {
     let c = catalogue();
-    let graph = fixture("brushed-nickel-silver");
+    let graph = fixture("brushed-stainless");
     let g = model::drive_with(&graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
     let surface = model::node(&g, "surface").unwrap();
     let Some(InputValue::Connection(wire)) = surface.inputs.get("base_metalness") else { panic!("wired") };
@@ -311,7 +311,7 @@ fn driving_an_input_keeps_its_value_as_the_fallback_and_reuses_the_projection() 
     assert_eq!(model::shown_constant(model::node(&g, wire.source().0).unwrap(), "out_max"), Some(&Constant::Vector(vec![1.0, 1.0, 1.0])));
     let g = model::drive_with(&graph, &c, "surface", "geometry_normal", Driver::Noise, None).unwrap();
     assert!(g.nodes.iter().any(|n| n.kind == "normal.from_height"));
-    let fresh = fixture("pbr-copper");
+    let fresh = fixture("pbr-steel");
     let g =
         model::drive_with(&fresh, &c, model::stack(&fresh).unwrap().layers[0].surface.as_str(), "geometry_tangent", Driver::Brushed, None).unwrap();
     assert!(g.nodes.iter().any(|n| n.kind == "texcoord.planar"), "a projection is added when the graph has none");
@@ -325,7 +325,7 @@ fn driving_an_input_keeps_its_value_as_the_fallback_and_reuses_the_projection() 
 
 #[test]
 fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
-    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut fake = Fake::new(fixture("brushed-stainless"));
     let mut ed = editor(&mut fake);
     let use_ = TextureUse::Drive { node: "surface".into(), port: "base_color".into() };
     assert_eq!(ed.apply(&mut fake, Action::AddTexture(use_.clone()), &no_look()), Some(Next::PickTexture(use_.clone())), "the picker opens");
@@ -343,7 +343,7 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
     let wire = g.nodes.iter().find(|n| n.id == "surface").and_then(|n| n.inputs.get("base_color"));
     assert!(matches!(wire, Some(InputValue::Connection(c)) if c.fallback.is_some()), "the image's connection keeps the colour: {wire:?}");
     // Laser-etched's mark is an interface input: its default is set by set_interface.
-    let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
+    let mut fake = Fake::new(fixture("laser-etched-stainless"));
     let key = fake.texture(PNG_2X1);
     let mut ed = editor(&mut fake);
     let input = fake.graph.interface[0].clone();
@@ -357,7 +357,7 @@ fn an_added_texture_drives_an_image_and_textures_bind_interfaces() {
 
 #[test]
 fn graphs_are_chosen_created_duplicated_and_replaced_as_json() {
-    let mut fake = Fake::new(fixture("pbr-copper"));
+    let mut fake = Fake::new(fixture("pbr-steel"));
     let mut ed = editor(&mut fake);
     ed.apply(&mut fake, Action::Create("  ".into()), &no_look());
     assert!(fake.changes.is_empty(), "an empty name is not sent");
@@ -368,12 +368,12 @@ fn graphs_are_chosen_created_duplicated_and_replaced_as_json() {
     ed.apply(&mut fake, Action::Json("{not json".into()), &no_look());
     assert_eq!(fake.changes.len(), 2);
     assert!(ed.note.as_ref().is_some_and(|(_, e)| *e));
-    let text = serde_json::to_string(&fixture("brushed-nickel-silver")).unwrap();
+    let text = serde_json::to_string(&fixture("brushed-stainless")).unwrap();
     ed.sync(&mut fake);
     ed.apply(&mut fake, Action::Json(text), &no_look());
     let (id, params) = fake.changes.last().unwrap();
     assert_eq!(id, "appearance.graph.set");
-    assert_eq!(serde_json::from_value::<MaterialGraph>(params["graph"].clone()).unwrap(), fixture("brushed-nickel-silver"));
+    assert_eq!(serde_json::from_value::<MaterialGraph>(params["graph"].clone()).unwrap(), fixture("brushed-stainless"));
 }
 
 #[test]
@@ -390,7 +390,7 @@ fn values_read_srgb_constants_defaults_and_clamp_to_range() {
     assert_eq!(model::unit("density_per_mm"), model::Unit::PerMm);
     assert_eq!(model::unit("radius_mm"), model::Unit::Mm);
     assert_eq!(model::unit("specular_rotation"), model::Unit::Degrees);
-    let mut g = fixture("pbr-copper");
+    let mut g = fixture("pbr-steel");
     for _ in 0..3 {
         let id = model::fresh_id(&g, "Base Colour.Range!");
         assert!(id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'), "{id}");
@@ -438,7 +438,7 @@ fn the_section_draws_every_example_without_sending_anything() {
     }
     // Not stack-shaped: a summary, no layer rows. Track A's v1 rules make every graph the engine
     // holds stack-shaped (a mix's `fg` is a standard surface), so this one is served as replies.
-    let mut g = fixture("brushed-nickel-silver");
+    let mut g = fixture("brushed-stainless");
     g.output = "rough".into();
     let mut canned = Canned(g);
     let mut ed = Editor::default();
@@ -530,7 +530,7 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
         h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
         h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
         h.app.start("appearance.assign");
-        let mut fake = Fake::new(fixture("laser-etched-nickel-silver"));
+        let mut fake = Fake::new(fixture("laser-etched-stainless"));
         fake.revision = Some(h.app.session.revision);
         fake.texture(PNG_2X1);
         let mut ed = editor(&mut fake);
@@ -577,7 +577,7 @@ fn the_dialog_shows_the_stack_editor_in_both_themes() {
 #[test]
 fn a_driver_is_one_edit_whose_connection_keeps_the_value() {
     let c = catalogue();
-    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut fake = Fake::new(fixture("brushed-stainless"));
     let before = fake.graph.nodes.len();
     let mut ed = editor(&mut fake);
     let driven = model::drive_with(&fake.graph, &c, "surface", "base_metalness", Driver::Noise, None).unwrap();
@@ -601,7 +601,7 @@ fn a_driver_is_one_edit_whose_connection_keeps_the_value() {
 /// cost shown is the one the last change's reply gave.
 #[test]
 fn a_refused_change_is_not_sent_and_names_its_row_and_the_cost_follows_replies() {
-    let mut fake = Fake::new(fixture("brushed-nickel-silver"));
+    let mut fake = Fake::new(fixture("brushed-stainless"));
     let mut ed = editor(&mut fake);
     // A required input left without a texture: the image node's `file`.
     let c = catalogue();
@@ -634,7 +634,7 @@ fn a_refused_change_is_not_sent_and_names_its_row_and_the_cost_follows_replies()
 /// The web build adds a picked image by its bytes; the engine takes them.
 #[test]
 fn the_web_build_adds_textures_as_base64() {
-    let mut fake = Fake::new(fixture("pbr-copper"));
+    let mut fake = Fake::new(fixture("pbr-steel"));
     let params = super::texture_bytes("/picked/dir/mark.png", PNG_2X1);
     assert_eq!(params["name"], "mark.png");
     let reply = fake.engine.execute("appearance.texture.add", &params).unwrap();
@@ -645,7 +645,7 @@ fn the_web_build_adds_textures_as_base64() {
 /// look's own values are kept on the link, not sent as graph edits.
 #[test]
 fn the_look_link_chooses_the_graph_and_carries_its_values() {
-    let mut fake = Fake::new(fixture("electrolytic-sleeve"));
+    let mut fake = Fake::new(fixture("printed-label"));
     fake.engine.execute("appearance.graph.create", &json!({"id": "a-first", "name": "A first"})).unwrap();
     let mut ed = Editor::default();
     ed.link_to(Some(Link { graph: "g".into(), values: Default::default() }));
@@ -715,11 +715,11 @@ fn the_dialog_converts_edits_and_assigns_a_graph_through_the_engine() {
 #[test]
 fn the_swatch_draws_a_graph_with_its_coat() {
     use solidcore_record::Vec3;
-    let epoxy = super::swatch::Material::new(&fixture("black-epoxy-clear-coat"), &Default::default()).expect("the example lowers");
+    let epoxy = super::swatch::Material::new(&fixture("gloss-black-clear-coat"), &Default::default()).expect("the example lowers");
     let sample = super::swatch::Sample::Graph(std::sync::Arc::new(epoxy));
     let scene = super::swatch::scene(&sample);
     assert!(!scene.graphs.is_empty() && scene.pbr.is_empty(), "drawn as a graph, not as a PBR surface");
-    let copper = super::swatch::Material::new(&fixture("pbr-copper"), &Default::default()).unwrap();
+    let copper = super::swatch::Material::new(&fixture("pbr-steel"), &Default::default()).unwrap();
     assert_ne!(super::swatch::key(&sample), super::swatch::key(&super::swatch::Sample::Graph(std::sync::Arc::new(copper))));
     let size = 256;
     let camera = super::swatch::camera();

@@ -548,7 +548,7 @@ fn save(name: &str, bytes: &[u8]) {
 /// generated code reads the same values from its page that the PBR vertices carry, and both go
 /// through the one `pbr_shade`.
 #[test]
-fn pbr_copper_draws_as_its_pbr_look() {
+fn pbr_steel_draws_as_its_pbr_look() {
     let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
     let copper = fixture(FIXTURES[4].1);
     let Ok(valid) = validate(&serde_json::from_str::<MaterialGraph>(FIXTURES[4].1).unwrap_or_else(|e| panic!("{e}"))) else { panic!("valid") };
@@ -560,7 +560,7 @@ fn pbr_copper_draws_as_its_pbr_look() {
     let graph = render_frame(&mut r, &device, &queue, &realistic(scene, 2, 1.0), true);
     assert_eq!(r.material_stats().compiled, 1);
     assert_eq!(r.material_stats().fallback_draws, 0, "drawn by its own pipeline");
-    save("pbr-copper", &graph);
+    save("pbr-steel", &graph);
     let (a, b) = (inner_pixels(&pbr), inner_pixels(&graph));
     let worst = a.iter().zip(&b).map(|(x, y)| x.iter().zip(y).map(|(p, q)| p.abs_diff(*q)).max().unwrap_or(0)).max().unwrap_or(255);
     assert!(worst <= 1, "the graph matches its pbr look (worst channel difference {worst})");
@@ -595,11 +595,11 @@ fn the_fixtures_draw_in_the_realistic_look() {
         let changed = pixels.iter().zip(&base).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 1)).count();
         let share = changed as f64 / pixels.len().max(1) as f64;
         match *name {
-            "pbr-copper" => assert_eq!(changed, 0, "{name}: a constant graph is its base response"),
+            "pbr-steel" => assert_eq!(changed, 0, "{name}: a constant graph is its base response"),
             // Black epoxy's texture is the base roughness under an index-matched coat (base IOR 1:
             // no base reflection), so it shows only once the coat's own normal is shaded.
             // The etched mark is an image: until textures are sampled (track C3) it shows none.
-            "brushed-nickel-silver" | "electrolytic-sleeve" => {
+            "brushed-stainless" | "printed-label" => {
                 assert!(share > 0.05, "{name}: its pattern shows ({:.1} % of pixels differ from the base response)", share * 100.0)
             }
             _ => {}

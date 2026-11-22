@@ -1,5 +1,5 @@
 {
- "name": "Woven laminate",
+ "name": "Woven glass fibre",
  "interface": [{"name": "color", "type": "color3", "default": [0.42, 0.36, 0.17]}, {"name": "strength", "type": "float", "default": 1}],
  "nodes": [
   {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 0.173]}},

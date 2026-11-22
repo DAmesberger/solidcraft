@@ -1,4 +1,4 @@
-//! Track A: validation, lowering, the cost model, the shape key, the base response and uniform
+//! Validation, lowering, the cost model, the shape key, the base response and uniform
 //! words, against the fixtures and against hostile graphs.
 
 use std::collections::BTreeMap;
@@ -15,12 +15,12 @@ use crate::surface::{OpaqueSurface, srgb8_to_linear};
 
 fn fixture(name: &str) -> MaterialGraph {
     let text = match name {
-        "black-epoxy-clear-coat" => include_str!("../../tests/fixtures/material_graph/black-epoxy-clear-coat.json"),
-        "brushed-nickel-silver" => include_str!("../../tests/fixtures/material_graph/brushed-nickel-silver.json"),
-        "electrolytic-sleeve" => include_str!("../../tests/fixtures/material_graph/electrolytic-sleeve.json"),
-        "laser-etched-nickel-silver" => include_str!("../../tests/fixtures/material_graph/laser-etched-nickel-silver.json"),
-        "pbr-copper" => include_str!("../../tests/fixtures/material_graph/pbr-copper.json"),
-        "solder-mask-over-copper" => include_str!("../../tests/fixtures/material_graph/solder-mask-over-copper.json"),
+        "gloss-black-clear-coat" => include_str!("../../tests/fixtures/material_graph/gloss-black-clear-coat.json"),
+        "brushed-stainless" => include_str!("../../tests/fixtures/material_graph/brushed-stainless.json"),
+        "printed-label" => include_str!("../../tests/fixtures/material_graph/printed-label.json"),
+        "laser-etched-stainless" => include_str!("../../tests/fixtures/material_graph/laser-etched-stainless.json"),
+        "pbr-steel" => include_str!("../../tests/fixtures/material_graph/pbr-steel.json"),
+        "candy-coat-over-aluminium" => include_str!("../../tests/fixtures/material_graph/candy-coat-over-aluminium.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -53,16 +53,16 @@ fn every_fixture_validates_lowers_and_costs_what_the_note_says() {
     // (fixture, expanded cost, texture samples, textures, mix layers, object space)
     let expected = [
         // planar 4 + brushed 100 + 2 × remap 2 + multiply 1 (§3.8).
-        ("brushed-nickel-silver", 109, 0, 0, 0, true),
+        ("brushed-stainless", 109, 0, 0, 0, true),
         // planar 4 + image 8 + cellular 2D noise (100 + 400) × slope 3 + from_height 6 + mix 10.
-        ("laser-etched-nickel-silver", 1528, 1, 1, 1, true),
+        ("laser-etched-stainless", 1528, 1, 1, 1, true),
         // planar 4 + 2 × value noise (100 + 75) × 3 + (multiply 1 + add 1) × 3 + from_height 6.
-        ("solder-mask-over-copper", 1066, 0, 0, 0, true),
+        ("candy-coat-over-aluminium", 1066, 0, 0, 0, true),
         // cellular 3D noise, 2 octaves: 100 + 2 × 1500, + remap 2.
-        ("black-epoxy-clear-coat", 3102, 0, 0, 0, true),
+        ("gloss-black-clear-coat", 3102, 0, 0, 0, true),
         // cylindrical 8 + smoothstep 4 + image 8 + max 1 + mix 10; separate3 is free.
-        ("electrolytic-sleeve", 31, 1, 1, 1, true),
-        ("pbr-copper", 0, 0, 0, 0, false),
+        ("printed-label", 31, 1, 1, 1, true),
+        ("pbr-steel", 0, 0, 0, 0, false),
     ];
     for (name, cost, samples, textures, layers, object) in expected {
         let ir = ir_of(&fixture(name));
@@ -88,7 +88,7 @@ fn every_fixture_validates_lowers_and_costs_what_the_note_says() {
 
 #[test]
 fn the_brushed_example_lowers_to_the_documented_ir() {
-    let ir = ir_of(&fixture("brushed-nickel-silver"));
+    let ir = ir_of(&fixture("brushed-stainless"));
     let ops: Vec<&str> = ir.instrs.iter().map(|i| i.op).collect();
     // base_color's multiply comes first (catalogue order), the tangent selection last.
     assert_eq!(ops, ["texcoord.planar", "pattern.brushed", "remap", "multiply", "remap", "pattern.brushed.tangent"]);
@@ -110,7 +110,7 @@ fn the_brushed_example_lowers_to_the_documented_ir() {
 
 #[test]
 fn slopes_and_triplanar_expansion_are_marked() {
-    let ir = ir_of(&fixture("solder-mask-over-copper"));
+    let ir = ir_of(&fixture("candy-coat-over-aluminium"));
     let sloped: Vec<&str> = ir.instrs.iter().filter(|i| i.slope).map(|i| i.op).collect();
     assert_eq!(sloped, ["pattern.noise", "pattern.noise", "multiply", "add"]);
     let tri = surface_graph(
@@ -130,32 +130,32 @@ fn slopes_and_triplanar_expansion_are_marked() {
 }
 
 #[test]
-fn pbr_copper_base_response_is_the_pbr_look_exactly() {
-    let base = base_response(&validate(&fixture("pbr-copper")).unwrap()).unwrap();
-    // As `PbrParameters::surface` builds the "Copper - Clean PBR" look.
-    let [r, g, b] = [204u8, 122, 80].map(srgb8_to_linear);
-    let pbr = OpaqueSurface::new(Vec3::new(r, g, b), 1.0, 0.25, 1.5).unwrap();
+fn pbr_steel_base_response_is_the_pbr_look_exactly() {
+    let base = base_response(&validate(&fixture("pbr-steel")).unwrap()).unwrap();
+    // As `PbrParameters::surface` builds the "Steel - Satin PBR" look.
+    let [r, g, b] = [158u8, 164, 172].map(srgb8_to_linear);
+    let pbr = OpaqueSurface::new(Vec3::new(r, g, b), 1.0, 0.4, 1.5).unwrap();
     assert_eq!(base, pbr);
-    let sample = base_sample(&validate(&fixture("pbr-copper")).unwrap()).unwrap();
+    let sample = base_sample(&validate(&fixture("pbr-steel")).unwrap()).unwrap();
     assert_eq!(sample.as_opaque(), Some(pbr), "default extensions");
 }
 
 #[test]
 fn base_responses_read_constants_fallbacks_and_the_bg_surface() {
-    let coat = base_response(&validate(&fixture("solder-mask-over-copper")).unwrap()).unwrap();
-    assert_eq!(coat.base_color(), Vec3::new(0.955, 0.638, 0.538));
+    let coat = base_response(&validate(&fixture("candy-coat-over-aluminium")).unwrap()).unwrap();
+    assert_eq!(coat.base_color(), Vec3::new(0.91, 0.92, 0.92));
     assert_eq!(coat.clear_coat(), Some(ClearCoat::new(1.0, 0.12, 1.52).unwrap()));
-    let sample = base_sample(&validate(&fixture("solder-mask-over-copper")).unwrap()).unwrap();
-    assert_eq!(sample.coat_color, Vec3::new(0.10, 0.45, 0.12));
-    // A mix shows its bg: the plain metal, and the sleeve's interface default.
-    let etched = base_response(&validate(&fixture("laser-etched-nickel-silver")).unwrap()).unwrap();
+    let sample = base_sample(&validate(&fixture("candy-coat-over-aluminium")).unwrap()).unwrap();
+    assert_eq!(sample.coat_color, Vec3::new(0.60, 0.06, 0.05));
+    // A mix shows its bg: the plain metal, and the label's interface default.
+    let etched = base_response(&validate(&fixture("laser-etched-stainless")).unwrap()).unwrap();
     assert_eq!((etched.base_color(), etched.roughness()), (Vec3::new(0.80, 0.77, 0.70), 0.45));
-    let sleeve = base_response(&validate(&fixture("electrolytic-sleeve")).unwrap()).unwrap();
-    assert_eq!((sleeve.base_color(), sleeve.dielectric_ior()), (Vec3::new(0.020, 0.045, 0.16), 1.54));
+    let label = base_response(&validate(&fixture("printed-label")).unwrap()).unwrap();
+    assert_eq!((label.base_color(), label.dielectric_ior()), (Vec3::new(0.020, 0.045, 0.16), 1.54));
     // A driven input reads its fallback, else the input's default.
-    let epoxy = base_response(&validate(&fixture("black-epoxy-clear-coat")).unwrap()).unwrap();
-    assert_eq!(epoxy.roughness(), 0.3, "no fallback: the catalogue default");
-    let mut graph = fixture("black-epoxy-clear-coat");
+    let gloss = base_response(&validate(&fixture("gloss-black-clear-coat")).unwrap()).unwrap();
+    assert_eq!(gloss.roughness(), 0.3, "no fallback: the catalogue default");
+    let mut graph = fixture("gloss-black-clear-coat");
     let surface = graph.nodes.iter_mut().find(|n| n.id == "surface").unwrap();
     surface.inputs.insert("specular_roughness".into(), serde_json::from_value(json!({"from": "edm_r", "fallback": 0.46})).unwrap());
     assert_eq!(base_response(&validate(&graph).unwrap()).unwrap().roughness(), 0.46);
@@ -164,7 +164,7 @@ fn base_responses_read_constants_fallbacks_and_the_bg_surface() {
 #[test]
 fn the_shape_ignores_values_layout_ids_and_order() {
     let key = |g: &MaterialGraph| ir_of(g).shape;
-    let original = fixture("brushed-nickel-silver");
+    let original = fixture("brushed-stainless");
     let mut text = serde_json::to_value(&original).unwrap();
     // New values everywhere, a layout, a different name and provenance.
     text["name"] = json!("Brushed steel");
@@ -196,14 +196,14 @@ fn the_shape_ignores_values_layout_ids_and_order() {
 
 #[test]
 fn uniform_words_take_look_values_and_refuse_bad_ones() {
-    let ir = ir_of(&fixture("electrolytic-sleeve"));
-    let sleeve = ir.slots.iter().find(|s| s.interface.as_deref() == Some("sleeve")).unwrap();
-    assert_eq!((sleeve.ty, sleeve.width, sleeve.range), (PortType::Color3, 3, Some((0.0, 1.0))));
-    let at = sleeve.offset as usize;
+    let ir = ir_of(&fixture("printed-label"));
+    let label = ir.slots.iter().find(|s| s.interface.as_deref() == Some("label")).unwrap();
+    assert_eq!((label.ty, label.width, label.range), (PortType::Color3, 3, Some((0.0, 1.0))));
+    let at = label.offset as usize;
     let defaults = uniform_words(&ir, &BTreeMap::new()).unwrap();
     assert_eq!(f32::from_bits(defaults[at + 2]), 0.16);
     let red =
-        BTreeMap::from([("sleeve".to_owned(), Constant::Srgb8(graph::Srgb8 { srgb8: [255, 0, 0] })), ("print".to_owned(), Constant::Number(3.0))]);
+        BTreeMap::from([("label".to_owned(), Constant::Srgb8(graph::Srgb8 { srgb8: [255, 0, 0] })), ("print".to_owned(), Constant::Number(3.0))]);
     let words = uniform_words(&ir, &red).unwrap();
     assert_eq!(&words[at..at + 3], &[1.0f32.to_bits(), 0, 0]);
     assert_eq!(words.len(), ir.uniform_floats as usize);
@@ -211,7 +211,7 @@ fn uniform_words_take_look_values_and_refuse_bad_ones() {
     assert_eq!(ir.textures[0].interface(), Some("print"));
     assert_eq!(ir.textures[0].sha256(), None);
     for bad in [Constant::Vector(vec![2.0, 0.0, 0.0]), Constant::Number(f64::NAN), Constant::Vector(vec![0.1, 0.2])] {
-        let values = BTreeMap::from([("sleeve".to_owned(), bad)]);
+        let values = BTreeMap::from([("label".to_owned(), bad)]);
         assert!(uniform_words(&ir, &values).is_err());
     }
 }
@@ -521,12 +521,12 @@ fn hostile_graphs_never_panic() {
 fn mutated_fixtures_never_panic() {
     let mut rng = Rng(0x0dd_ba11_cafe_f00d);
     let names = [
-        "black-epoxy-clear-coat",
-        "brushed-nickel-silver",
-        "electrolytic-sleeve",
-        "laser-etched-nickel-silver",
-        "pbr-copper",
-        "solder-mask-over-copper",
+        "gloss-black-clear-coat",
+        "brushed-stainless",
+        "printed-label",
+        "laser-etched-stainless",
+        "pbr-steel",
+        "candy-coat-over-aluminium",
     ];
     let junk = [
         json!(null),
@@ -536,7 +536,7 @@ fn mutated_fixtures_never_panic() {
         json!([]),
         json!([1, 2, 3, 4]),
         json!({"from": "surface"}),
-        json!({"interface": "sleeve"}),
+        json!({"interface": "label"}),
         json!({"srgb8": [1, 2, 3]}),
         json!(true),
     ];

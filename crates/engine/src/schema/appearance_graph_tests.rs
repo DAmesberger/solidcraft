@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -5,9 +6,9 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::schema::ParamCheck;
 
-const COPPER: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-copper.json");
-const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-nickel-silver.json");
-const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/brushed-nickel-silver.json");
+const COPPER: &str = include_str!("../../../viewport/tests/fixtures/material_graph/pbr-steel.json");
+const ETCHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/laser-etched-stainless.json");
+const BRUSHED: &str = include_str!("../../../viewport/tests/fixtures/material_graph/brushed-stainless.json");
 
 /// A real 2×1 RGBA PNG (original test data, as in the doc crate's tests).
 const PNG_2X1: &[u8] = &[
@@ -71,24 +72,24 @@ fn validation_reports_without_touching_the_design() {
 fn graphs_live_in_the_design_and_each_change_is_one_undo_step() {
     let mut s = strict();
     let created = s.execute("appearance.graph.create", &json!({"name": "Brushed Nickel/Silver"})).unwrap();
-    assert_eq!(created["id"], "brushed-nickel-silver");
+    assert_eq!(created["id"], "brushed-stainless");
     assert!(created["cost"].is_u64());
     // `from: "standard"` is the default graph; an id is taken once.
     let standard = s.execute("appearance.graph.create", &json!({"name": "Brushed Nickel/Silver", "from": "standard"})).unwrap();
-    assert_eq!(standard["id"], "brushed-nickel-silver-2");
-    assert!(s.execute("appearance.graph.create", &json!({"id": "brushed-nickel-silver", "name": "Again"})).is_err());
+    assert_eq!(standard["id"], "brushed-stainless-2");
+    assert!(s.execute("appearance.graph.create", &json!({"id": "brushed-stainless", "name": "Again"})).is_err());
     s.execute("appearance.graph.create", &json!({"id": "copper", "name": "Copper", "graph": fixture(COPPER)})).unwrap();
     assert_eq!(s.doc.appearances.tables.graphs.len(), 3);
     assert_eq!(s.undo.len(), 3);
 
     let list = s.execute("appearance.graph.list", &json!({})).unwrap();
     let ids: Vec<&str> = list["graphs"].as_array().unwrap().iter().map(|g| g["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["brushed-nickel-silver", "brushed-nickel-silver-2", "copper"]);
+    assert_eq!(ids, ["brushed-stainless", "brushed-stainless-2", "copper"]);
     let got = s.execute("appearance.graph.get", &json!({"id": "copper"})).unwrap();
     assert_eq!(got["graph"]["name"], "Copper", "create names the graph");
     assert_eq!(got["uses"], 0);
 
-    s.execute("appearance.graph.set", &json!({"id": "brushed-nickel-silver", "graph": fixture(BRUSHED)})).unwrap();
+    s.execute("appearance.graph.set", &json!({"id": "brushed-stainless", "graph": fixture(BRUSHED)})).unwrap();
     assert_eq!(s.doc.appearances.tables.graphs.values().next().unwrap().nodes.len(), fixture(BRUSHED)["nodes"].as_array().unwrap().len());
     let edited = s
         .execute(
@@ -747,4 +748,16 @@ fn a_heavy_graph_is_accepted_with_a_note_and_only_the_safety_bound_refuses() {
     let refused = s.execute("appearance.graph.validate", &json!({"graph": graph(9)})).unwrap();
     assert_eq!(refused["ok"], false, "{refused}");
     assert!(refused["errors"].as_array().unwrap().iter().any(|e| e["code"] == "cost"), "{refused}");
+}
+
+/// Each built-in library look shows its graph's base colour in the standard view, as the
+/// library file says.
+#[test]
+fn the_built_in_library_colours_are_the_graphs_base_colours() {
+    use solidcraft_viewport::material_graph::{MaterialGraph, look_base_sample};
+    for (id, color, text) in library::GRAPHS {
+        let graph: MaterialGraph = serde_json::from_str(text).unwrap();
+        let base = look_base_sample(&graph, &BTreeMap::new()).unwrap().opaque.base_color();
+        assert_eq!([base.x, base.y, base.z].map(solidcraft_color::srgb::encode8), *color, "{id}");
+    }
 }

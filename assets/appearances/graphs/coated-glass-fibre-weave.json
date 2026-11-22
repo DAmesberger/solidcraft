@@ -1,6 +1,6 @@
 {
- "name": "Gloss coat over woven laminate",
- "interface": [{"name": "color", "type": "color3", "default": [0.42, 0.36, 0.17]}, {"name": "coat_color", "type": "color3", "default": [0.1, 0.45, 0.12]}, {"name": "strength", "type": "float", "default": 0.5}],
+ "name": "Gloss coat over woven glass fibre",
+ "interface": [{"name": "color", "type": "color3", "default": [0.42, 0.36, 0.17]}, {"name": "coat_color", "type": "color3", "default": [0.95, 0.9, 0.75]}, {"name": "strength", "type": "float", "default": 0.5}],
  "nodes": [
   {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 0.173]}},
   {"id": "weave", "kind": "pattern.weave", "params": {"kind": "plain"}, "inputs": {"texcoord": {"from": "uv"}, "pitch_mm": [0.577, 0.819], "fibres": 7, "fibre_contrast": 0.3}},

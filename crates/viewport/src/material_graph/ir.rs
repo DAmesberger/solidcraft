@@ -103,7 +103,7 @@ pub enum Operand {
     /// Supplied by the geometry: position, normal or the tangent of the active texcoord.
     Geometry(GeometryInput),
     /// An unconnected optional input (a noise's `texcoord` or `position`); the node's params say
-    /// which input it reads. (Added by track A.)
+    /// which input it reads.
     Absent,
 }
 
@@ -118,7 +118,7 @@ pub enum GeometryInput {
     /// |n·v|.
     Facing,
     /// The default of an unconnected `geometry_tangent`: a tangent the back end derives from the
-    /// geometry (unit, perpendicular to the normal). (Added by track A.)
+    /// geometry (unit, perpendicular to the normal).
     Tangent,
 }
 
@@ -175,7 +175,7 @@ impl TextureBinding {
     }
 }
 
-/// What one uniform slot holds. (Added by track A: the back ends need it to fill pages.)
+/// What one uniform slot holds. (The back ends need it to fill pages.)
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UniformSlot {
     /// In floats from the material's first float; a vec2 starts on an even float and a vec3 on
@@ -203,7 +203,7 @@ pub struct Ir {
     /// The surface node's inputs, by catalogue name, in catalogue order.
     pub surface: Vec<(&'static str, Operand)>,
     /// For a `surface.mix` output: the blend factor and the two surfaces' operands (v1 blends
-    /// parameters, decision O3). Empty otherwise.
+    /// parameters). Empty otherwise.
     pub mix_layers: Vec<MixLayer>,
     /// Floats of uniform data one material of this graph needs (≤ `limits::UNIFORM_FLOATS`).
     pub uniform_floats: u32,
@@ -216,7 +216,7 @@ pub struct Ir {
     /// Whether the generated code reads the object-space position (a 40-byte vertex).
     pub object_space: bool,
     pub shape: ShapeKey,
-    /// Every uniform slot, by offset. (Added by track A.)
+    /// Every uniform slot, by offset.
     pub slots: Vec<UniformSlot>,
 }
 
@@ -249,7 +249,7 @@ pub fn base_response(graph: &Validated) -> Result<OpaqueSurface, GraphError> {
 }
 
 /// The base response with every `standard_surface` input, read the same way: what the
-/// constant-graph pipeline draws while a shape compiles. (Added by track A.)
+/// constant-graph pipeline draws while a shape compiles.
 pub fn base_sample(graph: &Validated) -> Result<SurfaceSample, GraphError> {
     let analysis = super::validate::analyse(graph.graph()).map_err(GraphError::Invalid)?;
     super::base::sample(&analysis).map_err(GraphError::Invalid)
@@ -271,7 +271,7 @@ pub fn look_base_sample(graph: &MaterialGraph, values: &BTreeMap<String, Constan
 /// One material's uniform data: `ir.uniform_floats` 32-bit words (`f32` bits; seeds as `u32`),
 /// with interface slots taken from `values` where given, else their defaults. Values are checked
 /// for type and range; names that no slot reads (a texture, an unused input) are ignored.
-/// (Added by track A.)
+///
 pub fn uniform_words(ir: &Ir, values: &BTreeMap<String, Constant>) -> Result<Vec<u32>, GraphError> {
     super::base::uniform_words(ir, values).map_err(GraphError::Invalid)
 }

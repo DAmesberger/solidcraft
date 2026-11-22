@@ -1,0 +1,7 @@
+{
+ "name": "Clear glass",
+ "nodes": [
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": [0.93, 0.97, 0.95], "specular_roughness": 0.05, "specular_ior": 1.52, "transmission_weight": 1, "transmission_color": [0.93, 0.97, 0.95], "transmission_depth_mm": 10}}
+ ],
+ "output": "surface"
+}

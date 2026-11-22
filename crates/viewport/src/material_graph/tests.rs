@@ -7,15 +7,15 @@ use super::graph::{Constant, InputValue, ParamValue};
 use super::*;
 use crate::surface::OpaqueSurface;
 
-/// The worked examples of docs/material-graph.md §3.8 and a `pbr`-equivalent graph. Track A's
-/// validation tests and the back ends' golden tests read the same files.
+/// The worked examples of docs/material-graph.md §3.8 and a `pbr`-equivalent graph. The
+/// validation tests and the back ends' tests read the same files.
 const FIXTURES: &[(&str, &str)] = &[
-    ("black-epoxy-clear-coat", include_str!("../../tests/fixtures/material_graph/black-epoxy-clear-coat.json")),
-    ("brushed-nickel-silver", include_str!("../../tests/fixtures/material_graph/brushed-nickel-silver.json")),
-    ("electrolytic-sleeve", include_str!("../../tests/fixtures/material_graph/electrolytic-sleeve.json")),
-    ("laser-etched-nickel-silver", include_str!("../../tests/fixtures/material_graph/laser-etched-nickel-silver.json")),
-    ("pbr-copper", include_str!("../../tests/fixtures/material_graph/pbr-copper.json")),
-    ("solder-mask-over-copper", include_str!("../../tests/fixtures/material_graph/solder-mask-over-copper.json")),
+    ("gloss-black-clear-coat", include_str!("../../tests/fixtures/material_graph/gloss-black-clear-coat.json")),
+    ("brushed-stainless", include_str!("../../tests/fixtures/material_graph/brushed-stainless.json")),
+    ("printed-label", include_str!("../../tests/fixtures/material_graph/printed-label.json")),
+    ("laser-etched-stainless", include_str!("../../tests/fixtures/material_graph/laser-etched-stainless.json")),
+    ("pbr-steel", include_str!("../../tests/fixtures/material_graph/pbr-steel.json")),
+    ("candy-coat-over-aluminium", include_str!("../../tests/fixtures/material_graph/candy-coat-over-aluminium.json")),
 ];
 
 #[test]
@@ -49,7 +49,7 @@ fn catalogue_is_consistent() {
 
 /// The contract-level check the fixtures must pass already: every kind, input, param and
 /// connection names something the catalogue has. Full validation (types, cycles, ranges,
-/// budgets) is track A's.
+/// budgets) is in `validate_tests.rs`.
 #[test]
 fn worked_examples_parse_and_name_catalogue_ports() {
     for (name, text) in FIXTURES {
@@ -117,7 +117,7 @@ fn constants_take_every_documented_form() {
     assert_eq!(c.source(), ("lines", Some("tangent")));
 }
 
-/// Track A's steps are built: the fixtures validate (its own tests are in `validate_tests.rs`).
+/// The fixtures validate (the validation tests themselves are in `validate_tests.rs`).
 #[test]
 fn the_fixtures_validate() {
     for (name, text) in FIXTURES {
