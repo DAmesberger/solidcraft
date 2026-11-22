@@ -4754,6 +4754,8 @@ impl Document {
         if d.features.len() > MAX_FEATURES || d.params.len() > MAX_PARAMS {
             return Err(DocError::Invalid("document too large".into()));
         }
+        // Appearance graphs, textures and the looks that use them (docs/appearance-graph.md §4).
+        d.check_appearance_graphs()?;
         // A test build's Coped corner type is Butt with Coped (#17854).
         for f in &mut d.features {
             if let FeatureKind::FrameMember { corner, corners, coped, .. } = &mut f.kind {

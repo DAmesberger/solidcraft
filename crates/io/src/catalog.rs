@@ -65,8 +65,10 @@ impl LibraryLook {
         out.validate()?;
         Ok(out)
     }
+    /// The look this entry gives. A library entry has no appearance graph yet, so a graph look
+    /// is stored by its colour (the colour every older reader shows).
     pub fn to_look(&self) -> Look {
-        Look { name: self.name.clone(), color: self.color, opacity: self.opacity, pbr: self.pbr }
+        Look { name: self.name.clone(), color: self.color, opacity: self.opacity, pbr: self.pbr, graph: None, values: Default::default() }
     }
     fn validate(&self) -> Result<()> {
         if !text(&self.name, 128) || !self.opacity.is_finite() || !(0.0..=1.0).contains(&self.opacity) {

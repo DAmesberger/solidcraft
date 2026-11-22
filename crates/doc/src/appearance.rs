@@ -11,7 +11,10 @@ use solidcore_record::Vec3;
 
 use crate::Document;
 
-/// A look: a name (a library entry's, or "Custom"), sRGB colour and opacity (1 = opaque).
+/// A look: a name (a library entry's, or "Custom"), sRGB colour and opacity (1 = opaque), and
+/// optionally its shading: fixed `pbr` parameters, or an appearance `graph` of the design's table
+/// with interface `values` (docs/appearance-graph.md §4.2). `pbr` and `graph` exclude each other.
+/// With a graph, `color` stays what the standard view and exports show.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "LookWire")]
 pub struct Look {
@@ -21,6 +24,12 @@ pub struct Look {
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pbr: Option<crate::pbr_appearance::PbrParameters>,
+    /// An appearance graph of `appearances.graphs`, by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::appearance_graph::GraphId>,
+    /// Values for the graph's interface inputs, by name; the others keep their defaults.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, crate::appearance_graph::Constant>,
 }
 
 #[derive(Deserialize)]
@@ -31,6 +40,10 @@ struct LookWire {
     opacity: f64,
     #[serde(default)]
     pbr: Option<crate::pbr_appearance::PbrParameters>,
+    #[serde(default)]
+    graph: Option<crate::appearance_graph::GraphId>,
+    #[serde(default)]
+    values: BTreeMap<String, crate::appearance_graph::Constant>,
 }
 
 impl TryFrom<LookWire> for Look {
@@ -39,7 +52,9 @@ impl TryFrom<LookWire> for Look {
         if value.pbr.is_some() && value.opacity != 1.0 {
             return Err("opaque PBR requires opacity 1; refraction/transmission is not supported".into());
         }
-        Ok(Self { name: value.name, color: value.color, opacity: value.opacity, pbr: value.pbr })
+        let look = Self { name: value.name, color: value.color, opacity: value.opacity, pbr: value.pbr, graph: value.graph, values: value.values };
+        crate::appearance_graph::check_look_shape(&look).map_err(|e| e.to_string())?;
+        Ok(look)
     }
 }
 
@@ -68,14 +83,14 @@ pub fn unnamed_colour(color: [u8; 3], opacity: f64) -> String {
 
 impl Look {
     pub fn custom(color: [u8; 3], opacity: f64) -> Look {
-        Look { name: CUSTOM.into(), color, opacity: opacity.clamp(0.0, 1.0), pbr: None }
+        Look { name: CUSTOM.into(), color, opacity: opacity.clamp(0.0, 1.0), pbr: None, graph: None, values: BTreeMap::new() }
     }
 
     /// A colour read from a file: called what the file calls it, else [`unnamed_colour`].
     pub fn imported(color: [u8; 3], opacity: f64, name: Option<&str>) -> Look {
         let opacity = opacity.clamp(0.0, 1.0);
         let name = name.map_or_else(|| unnamed_colour(color, opacity), str::to_string);
-        Look { name, color, opacity, pbr: None }
+        Look { name, color, opacity, pbr: None, graph: None, values: BTreeMap::new() }
     }
 
     /// The name to write with this look's colour in a file (a STEP `COLOUR_RGB` name): its own,
@@ -152,9 +167,15 @@ impl ImportedLook {
     }
 }
 
-/// The design's appearances.
+/// The design's appearances: the looks of bodies, faces and components, and the appearance
+/// graphs and texture assets looks use (docs/appearance-graph.md §4.2).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "AppearancesWire")]
 pub struct Appearances {
+    /// `graphs` and `textures`, both omitted when empty, so a design without graphs saves as it
+    /// did before them.
+    #[serde(flatten)]
+    pub tables: crate::appearance_graph::GraphTables,
     /// By body name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bodies: BTreeMap<String, Look>,
@@ -165,9 +186,34 @@ pub struct Appearances {
     pub components: BTreeMap<u64, Look>,
 }
 
+/// What a file holds. Read without `#[serde(flatten)]`, which would read the components' numeric
+/// keys as text; written through `Appearances`, whose empty tables write nothing.
+#[derive(Deserialize)]
+struct AppearancesWire {
+    #[serde(default)]
+    graphs: BTreeMap<crate::appearance_graph::GraphId, crate::appearance_graph::AppearanceGraph>,
+    #[serde(default)]
+    textures: BTreeMap<String, crate::appearance_graph::TextureAsset>,
+    #[serde(default)]
+    bodies: BTreeMap<String, Look>,
+    #[serde(default)]
+    faces: Vec<FaceLook>,
+    #[serde(default)]
+    components: BTreeMap<u64, Look>,
+}
+
+impl TryFrom<AppearancesWire> for Appearances {
+    type Error = String;
+    fn try_from(w: AppearancesWire) -> std::result::Result<Self, Self::Error> {
+        let tables = crate::appearance_graph::GraphTables { graphs: w.graphs, textures: w.textures };
+        tables.check_counts().map_err(|e| e.to_string())?;
+        Ok(Self { tables, bodies: w.bodies, faces: w.faces, components: w.components })
+    }
+}
+
 impl Appearances {
     pub fn is_empty(&self) -> bool {
-        self.bodies.is_empty() && self.faces.is_empty() && self.components.is_empty()
+        self.bodies.is_empty() && self.faces.is_empty() && self.components.is_empty() && self.tables.is_empty()
     }
 
     /// Bound bulk appearance operations, including designs read from untrusted files.
@@ -273,11 +319,11 @@ pub fn library(name: &str) -> Option<Look> {
     LIBRARY
         .iter()
         .find(|(n, _, _)| n.eq_ignore_ascii_case(name.trim()))
-        .map(|(n, c, o)| Look { name: n.to_string(), color: *c, opacity: *o, pbr: None })
+        .map(|(n, c, o)| Look { name: n.to_string(), color: *c, opacity: *o, pbr: None, graph: None, values: BTreeMap::new() })
         .or_else(|| {
             let (name, color, metallic, roughness) = OPAQUE_FINISHES.iter().find(|(n, ..)| n.eq_ignore_ascii_case(name.trim()))?;
             let pbr = crate::pbr_appearance::PbrParameters::new(*metallic, *roughness, 1.5).ok()?;
-            Some(Look { name: (*name).to_string(), color: *color, opacity: 1.0, pbr: Some(pbr) })
+            Some(Look { name: (*name).to_string(), color: *color, opacity: 1.0, pbr: Some(pbr), graph: None, values: BTreeMap::new() })
         })
         .or_else(|| crate::appearance_pack::find(name)?.opaque_look().ok())
 }
@@ -286,7 +332,7 @@ pub fn library(name: &str) -> Option<Look> {
 pub fn material_look(material: &str) -> Option<Look> {
     let color = crate::material_color(material)?;
     let opacity = if material == "Glass" { 0.25 } else { 1.0 };
-    Some(Look { name: material.to_string(), color, opacity, pbr: None })
+    Some(Look { name: material.to_string(), color, opacity, pbr: None, graph: None, values: BTreeMap::new() })
 }
 
 impl Document {
