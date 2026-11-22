@@ -13,7 +13,7 @@ use crate::schema::{ParamCheck, input_schema_for, issues, output_schema_for};
 fn schemas_and_the_key_check_agree() {
     assert_keys(
         input_schema_for::<AppearanceAssignParams>(),
-        &["appearance", "bodies", "body", "color", "components", "faces", "name", "opacity", "pbr"],
+        &["appearance", "bodies", "body", "color", "components", "faces", "graph", "name", "opacity", "pbr", "values"],
     );
     assert_keys(input_schema_for::<AppearanceLibraryParams>(), &[]);
     assert_keys(input_schema_for::<AppearanceFavoriteParams>(), &["favorite", "look"]);

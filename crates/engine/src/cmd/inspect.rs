@@ -40,6 +40,7 @@ const COMMANDS_CONTRACT: TypedContract<CommandsParams> = TypedContract::new();
 
 #[path = "appearance_chain.rs"]
 mod appearance_chain;
+pub(super) use appearance_chain::scope as replace_scope;
 
 #[path = "appearance_gestures.rs"]
 pub(super) mod appearance_gestures;
@@ -145,7 +146,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
         "bodies?: [names]; faces?: [[x,y,z] on faces] (body?: which body, default the nearest); components?: [names or ids, or occurrence names]; \
              appearance?: library name or stable starter.* ID (appearance.library) | color: \"#rrggbb\" or [r, g, b] (0–255), opacity? (0–1, default 1); \
-             name?: inert copied look label (requires color, mutually exclusive with appearance); pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (requires color/appearance and opacity 1); a starter ID or registered starter name resolves its recipe before color overrides; omitted pbr retains that response and pbr: null explicitly clears it. Unavailable glass recipes refuse through either selector. Other custom labels with an explicit color retain legacy scalar behavior. Neither appearance nor color (or color: null): clear, so the face follows its body, the body its component, the component its material",
+             name?: inert copied look label (requires color, mutually exclusive with appearance); pbr?: {metallic:0..1, roughness:0.045..1, dielectric_ior:1..3} (requires color/appearance and opacity 1); a starter ID or registered starter name resolves its recipe before color overrides; omitted pbr retains that response and pbr: null explicitly clears it. Unavailable glass recipes refuse through either selector. Other custom labels with an explicit color retain legacy scalar behavior. graph?: an appearance graph id (appearance.graph.list) with values?: {interface input: number | vector | {srgb8} | {texture: sha256}}, name? (default the id), opacity? (default 1); excludes appearance and pbr, and color is computed from the graph's base response. Neither appearance nor color nor graph (or color: null): clear, so the face follows its body, the body its component, the component its material",
     ),
     CommandSpec::new("appearance.copy", "Copy Look", crate::checked!("appearance.copy", appearance_gestures::copy)).icon("copy").noundo().key("Ctrl+Alt+C")
         .contract(&COPY_CONTRACT).output(crate::schema::output_schema_for::<AppearanceCopyResult>)
@@ -971,7 +972,10 @@ fn appearance_reply(cmd: &str, r: impl serde::Serialize) -> Result<Value> {
 pub(super) fn appearance(s: &mut Session, p: &Value) -> Result<Value> {
     use solidcraft_doc::appearance::FaceLook;
     let cmd = "appearance.assign";
-    let look = appearance_look(cmd, p)?;
+    let mut look = appearance_look(cmd, p)?;
+    if let Some(l) = &mut look {
+        super::appearance_graph::settle_look(cmd, &s.doc, l)?;
+    }
     let bodies = string_list(cmd, p, "bodies")?;
     let st = s.model.state();
     if bodies.iter().any(|b| st.body(b).is_none()) {
@@ -1070,6 +1074,12 @@ pub(super) fn appearance(s: &mut Session, p: &Value) -> Result<Value> {
 /// Shared look parser for assignment and atomic replacement.
 pub(super) fn appearance_look(cmd: &str, p: &Value) -> Result<Option<solidcraft_doc::appearance::Look>> {
     use solidcraft_doc::appearance::{Look, library};
+    if let Some(graph) = p.get("graph").filter(|g| !g.is_null()) {
+        return graph_look(cmd, p, graph).map(Some);
+    }
+    if p.get("values").is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "`values` set an appearance graph's inputs, so they need `graph`"));
+    }
     // A saved label is data, not a request to resolve a recipe. Keep the explicit
     // appearance selector separate so an owned look may have any recipe's ID as its name.
     let copied_name = match p.get("name") {
@@ -1136,6 +1146,41 @@ pub(super) fn appearance_look(cmd: &str, p: &Value) -> Result<Option<solidcraft_
     Ok(look)
 }
 
+/// A look that names an appearance graph: `graph`, `values?`, `name?` (default: the graph's id),
+/// `opacity?` (default 1). Its `color` is the graph's base colour, which the assigning command
+/// computes (`appearance_graph::settle_look`): a given `color` is replaced by it. A graph look
+/// takes no library `appearance` and no `pbr`.
+fn graph_look(cmd: &str, p: &Value, graph: &Value) -> Result<solidcraft_doc::appearance::Look> {
+    use solidcraft_doc::appearance::Look;
+    let id = graph.as_str().ok_or_else(|| bad(cmd, "`graph` is an appearance graph's id (appearance.graph.list)"))?;
+    let id = solidcraft_doc::appearance_graph::GraphId::new(id).map_err(|e| bad(cmd, e.to_string()))?;
+    if p.get("appearance").is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "a look names a library `appearance` or an appearance `graph`, not both"));
+    }
+    if p.get("pbr").is_some_and(|v| !v.is_null()) {
+        return Err(bad(cmd, "a look has either `pbr` or an appearance `graph`, not both"));
+    }
+    let name = match p.get("name") {
+        None | Some(Value::Null) => id.as_str().to_string(),
+        Some(Value::String(name)) if !name.is_empty() && name.chars().count() <= 128 && !name.chars().any(char::is_control) => name.clone(),
+        _ => return Err(bad(cmd, "`name` must be a nonempty label of at most 128 characters without controls")),
+    };
+    let opacity = match p.get("opacity") {
+        None | Some(Value::Null) => 1.0,
+        Some(o) => o.as_f64().filter(|x| x.is_finite() && (0.0..=1.0).contains(x)).ok_or_else(|| bad(cmd, "`opacity` must be 0…1"))?,
+    };
+    let values = match p.get("values") {
+        None | Some(Value::Null) => Default::default(),
+        Some(v) => serde_json::from_value(v.clone()).map_err(|_| {
+            bad(cmd, "`values` maps interface input names to constants: a number, a 2- or 3-vector, {\"srgb8\": [r,g,b]} or {\"texture\": sha256}")
+        })?,
+    };
+    let color = p.get("color").and_then(color_param).unwrap_or([0, 0, 0]);
+    let look = Look { name, color, opacity, pbr: None, graph: Some(id), values };
+    solidcraft_doc::appearance_graph::check_look_shape(&look).map_err(|e| bad(cmd, e.to_string()))?;
+    Ok(look)
+}
+
 fn dist_to(b: &solidcraft_doc::ModelBody, p: solidcore_record::Vec3) -> f64 {
     let bb = b.body.exact_bounds().unwrap_or_else(|_| b.outline_bounds());
     let c = solidcore_record::Vec3::new(p.x.clamp(bb.min.x, bb.max.x), p.y.clamp(bb.min.y, bb.max.y), p.z.clamp(bb.min.z, bb.max.z));
@@ -1146,6 +1191,12 @@ pub(super) fn look_json(l: &solidcraft_doc::appearance::Look) -> Value {
     let mut value = json!({"name": l.name, "color": l.hex(), "opacity": l.opacity});
     if let Some(pbr) = l.pbr {
         value["pbr"] = json!(pbr);
+    }
+    if let Some(graph) = &l.graph {
+        value["graph"] = json!(graph.as_str());
+        if !l.values.is_empty() {
+            value["values"] = json!(l.values);
+        }
     }
     value
 }
@@ -1190,7 +1241,14 @@ fn appearance_library(_s: &mut Session, _p: &Value) -> Result<Value> {
     let mut list: Vec<LibraryAppearance> = solidcraft_doc::appearance::LIBRARY
         .iter()
         .map(|(n, c, o)| {
-            let look = LookReply { name: n.to_string(), color: format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]), opacity: *o, pbr: None };
+            let look = LookReply {
+                name: n.to_string(),
+                color: format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]),
+                opacity: *o,
+                pbr: None,
+                graph: None,
+                values: None,
+            };
             LibraryAppearance::Plain(PlainAppearance { look, category: category(n) })
         })
         .collect();

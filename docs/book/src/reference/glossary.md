@@ -70,6 +70,22 @@ An appearance sets colour and surface finish only. It has no effect on mass or s
 - **Elsewhere:** appearance, visual material, colour.
 - **For translators:** not the physical material.
 
+### appearance graph
+
+An appearance described as a small graph of nodes: patterns, projections and maths feeding one
+surface node, for finishes a colour and three numbers cannot give, such as brushed metal, a
+clear coat or a printed label.
+
+A look can name an appearance graph and set the graph's inputs. The look's colour stays what
+plain views and exports show. Compare *material*.
+
+- **In SolidCraft:** `appearance.graph.*`, `appearance.texture.*`; the `graphs` and `textures`
+  keys under `appearances` in the design file.
+- **Don't use:** material graph, shader graph, node material.
+- **Elsewhere:** material graph, shader graph, node-based material.
+- **For translators:** a graph of nodes that describes how a surface looks; not a chart and not
+  a physical material.
+
 ### bill of materials
 
 The list of the components placed in a design or in one component, with the quantity of each.

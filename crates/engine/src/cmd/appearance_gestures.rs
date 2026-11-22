@@ -11,11 +11,12 @@ fn reply(cmd: &str, reply: impl serde::Serialize) -> Result<Value> {
     serde_json::to_value(reply).map_err(|e| bad(cmd, e.to_string()))
 }
 
-pub(in crate::cmd) fn paint(_s: &mut Session, p: &Value) -> Result<Value> {
+pub(in crate::cmd) fn paint(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("done").and_then(Value::as_bool) == Some(true) {
         return reply("appearance.paint", AppearancePaintResult { done: Some(true), look: None, param_warnings: Vec::new() });
     }
-    let look = super::appearance_look("appearance.paint", p)?.ok_or_else(|| bad("appearance.paint", "choose a look first"))?;
+    let mut look = super::appearance_look("appearance.paint", p)?.ok_or_else(|| bad("appearance.paint", "choose a look first"))?;
+    crate::cmd::appearance_graph::settle_look("appearance.paint", &s.doc, &mut look)?;
     reply("appearance.paint", AppearancePaintResult { done: None, look: Some(LookReply::from(&look)), param_warnings: Vec::new() })
 }
 
@@ -76,7 +77,7 @@ pub(in crate::cmd) fn favorite(_s: &mut Session, p: &Value) -> Result<Value> {
 pub(in crate::cmd) fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     let look = s.appearance_clipboard.as_ref().ok_or_else(|| bad("appearance.paste", "copy a look first"))?;
     let mut params = p.as_object().cloned().ok_or_else(|| bad("appearance.paste", "give assignment targets"))?;
-    for key in ["appearance", "name", "color", "opacity", "pbr"] {
+    for key in ["appearance", "name", "color", "opacity", "pbr", "graph", "values"] {
         params.remove(key);
     }
     for (key, value) in super::look_json(look).as_object().into_iter().flatten() {
