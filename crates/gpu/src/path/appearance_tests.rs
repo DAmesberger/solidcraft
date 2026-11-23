@@ -5,12 +5,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use solidcore_record::Vec3;
-use solidcraft_geom::Mesh;
+use solidcraft_geom::{Mesh, MeshGeom};
 use solidcraft_render::job::graphs::{GraphAppearance, GraphAppearances, GraphBinding};
 use solidcraft_render::job::{CancelToken, ImageRequest, ImageWork, JobOptions, TaskPoll};
-use solidcraft_render::{Camera, ProductMesh, ProductScene, StandardView};
+use solidcraft_render::{ProductMesh, ProductScene};
 use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant, base_response, ir::Ir, lower, validate};
 use solidcraft_viewport::surface::OpaqueSurface;
+use solidcraft_viewport::{Camera, StandardView};
 
 use super::super::{Executor, Task, admission, open_headless};
 
@@ -402,9 +403,14 @@ fn graph_probe(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let shader = format!("{}\n{entry}", super::super::graph_source(&super::source(&graphs).unwrap(), false, false));
     let context = &executor.context;
     let module = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader.into()) });
+    let pipeline_layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&context.layout)],
+        immediate_size: 0,
+    });
     let pipeline = context.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
-        layout: Some(&context.pipeline_layout),
+        layout: Some(&pipeline_layout),
         module: &module,
         entry_point: Some("graph_probe"),
         compilation_options: Default::default(),
@@ -766,7 +772,7 @@ fn a_packed_quality_map_and_a_linear_graph_image_keep_their_own_pixels() {
     let record = -records.interior(1, 0, false) as usize - 1;
     let image_slot = word(table + 4 * (record + (super::record_vec4s(&ir) - 1) as usize)) as usize;
     assert!(packed < image_slot && image_slot < table);
-    for (i, c) in rgba.chunks_exact(4).enumerate() {
+    for (i, c) in rgba.as_chunks::<4>().0.iter().enumerate() {
         for (k, x) in c.iter().copied().enumerate() {
             let expected = if k == 3 { f32::from(x) / 255.0 } else { solidcraft_viewport::surface::srgb8_to_linear(x) as f32 };
             assert_eq!(f32::from_bits(word(image_slot + 4 * i + k)), expected);

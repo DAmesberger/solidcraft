@@ -103,7 +103,7 @@ fn the_summary_reports_approximations_per_binding() {
     assert_eq!(reported.len(), 1, "only the brushed face is approximated: {value}");
     assert_eq!(reported[0]["face"], 2);
     assert!(reported[0]["inputs"].as_array().unwrap().iter().any(|i| i["input"] == "specular_roughness_anisotropy"));
-    let mut request: serde_json::Value = serde_json::json!({"camera": serde_json::to_value(crate::Camera::default()).unwrap(),
+    let mut request: serde_json::Value = serde_json::json!({"camera": serde_json::to_value(solidcraft_viewport::Camera::default()).unwrap(),
         "width": 4, "height": 4, "background": [0, 0, 0], "transparent_background": false});
     assert!(serde_json::from_value::<super::super::ImageRequest>(request.clone()).is_ok());
     request["graphs"] = value;
