@@ -436,3 +436,96 @@ fn a_heavy_graph_is_accepted_with_a_note_and_only_the_safety_bound_refuses() {
     assert_eq!(refused["ok"], false, "{refused}");
     assert!(refused["errors"].as_array().unwrap().iter().any(|e| e["code"] == "cost"), "{refused}");
 }
+
+#[test]
+fn a_starter_is_an_editable_design_graph_with_its_library_revision() {
+    let mut s = with_body();
+    let original = state(&s);
+    let list = s.execute("appearance.graph.library.list", &json!({})).unwrap();
+    unchanged(&s, &original, "browsing the built-in library");
+    assert_eq!(list["library"], "solidcraft.builtin");
+    assert_eq!(list["refused"], json!([]));
+    let rubber = list["entries"].as_array().unwrap().iter().find(|e| e["id"] == "solidcraft.builtin/graph-matte-rubber").unwrap();
+    let import = json!({"entry":rubber["id"],"revision":rubber["revision"],"id":"grip"});
+    assert!(s.execute("appearance.graph.library.import", &json!({"entry":rubber["id"],"revision":"old"})).is_err());
+    unchanged(&s, &original, "a changed library entry");
+    let result = s.execute("appearance.graph.library.import", &import).unwrap();
+    assert_eq!(result["id"], "grip");
+    assert_eq!(s.undo.len(), original.1 + 1);
+    let stored = s.execute("appearance.graph.get", &json!({"id":"grip"})).unwrap();
+    assert_eq!(stored["graph"]["name"], "Matte rubber");
+    assert_eq!(stored["graph"]["source"]["library"], list["library"]);
+    assert_eq!(stored["graph"]["source"]["entry"], "graph-matte-rubber");
+    assert_eq!(stored["graph"]["source"]["revision"], rubber["revision"]);
+    let imported = state(&s);
+    assert!(s.execute("appearance.graph.library.import", &import).is_err());
+    unchanged(&s, &imported, "an occupied design id");
+    s.execute("appearance.assign", &json!({"bodies":["Can"],"graph":"grip"})).unwrap();
+    assert_eq!(s.doc.appearances.bodies["Can"].graph.as_ref(), Some(&gid("grip")));
+    s.execute("appearance.graph.edit", &json!({"id":"grip","ops":[{"op":"set_input","node":"surface","port":"specular_roughness","value":0.4}]}))
+        .unwrap();
+    let next = s.execute("appearance.graph.library.import", &json!({"entry":rubber["id"],"revision":rubber["revision"]})).unwrap();
+    let copy = s.execute("appearance.graph.get", &json!({"id":next["id"]})).unwrap();
+    assert_eq!(copy["graph"]["nodes"][0]["inputs"]["specular_roughness"], 0.85);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.doc, *original.0);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn importing_a_folder_graph_copies_its_images_in_the_same_undo_step() {
+    use solidcraft_io::{
+        catalog::Provenance,
+        library::{self, GraphEntry},
+    };
+    let folder = solidcraft_io::vfs::temp_dir().join(format!("solidcraft-graph-library-import-{}", std::process::id()));
+    let graphs = folder.join("graphs");
+    let textures = folder.join("textures");
+    std::fs::create_dir_all(&graphs).unwrap();
+    std::fs::create_dir_all(&textures).unwrap();
+    let provenance = Provenance::default();
+    let header = json!({"format":library::FORMAT,"id":"sample","name":"Sample","provenance":provenance});
+    std::fs::write(folder.join("Sample.sclibrary.json"), serde_json::to_vec(&header).unwrap()).unwrap();
+    let key = solidcraft_doc::appearance_graph::texture_key(PNG_2X1);
+    let graph = json!({"name":"Texture sample","output":"surface","nodes":[
+        {"id":"uv","kind":"texcoord.planar"},
+        {"id":"tile","kind":"image","inputs":{"texcoord":{"from":"uv"},"file":{"texture":key}}},
+        {"id":"surface","kind":"standard_surface","inputs":{"base_color":{"from":"tile.color","fallback":[0.5,0.5,0.5]}}}
+    ]});
+    let mut entry = GraphEntry {
+        id: "sample/tile".into(),
+        revision: String::new(),
+        provenance,
+        graph: serde_json::from_value(graph).unwrap(),
+        textures: Default::default(),
+    };
+    entry.revision = entry.content_revision().unwrap();
+    std::fs::write(graphs.join("tile.json"), serde_json::to_vec(&entry).unwrap()).unwrap();
+    let image = textures.join(format!("{key}.png"));
+    std::fs::write(&image, b"incomplete").unwrap();
+    let mut s = strict();
+    let original = state(&s);
+    let import = json!({"folder":folder,"entry":entry.id,"revision":entry.revision,"id":"tile"});
+    let list = s.execute("appearance.graph.library.list", &json!({"folder":folder})).unwrap();
+    assert!(list["entries"].as_array().unwrap().is_empty());
+    assert_eq!(list["refused"].as_array().unwrap().len(), 1);
+    assert!(s.execute("appearance.graph.library.import", &import).is_err());
+    unchanged(&s, &original, "a damaged image");
+    std::fs::write(&image, PNG_2X1).unwrap();
+    s.execute("appearance.graph.library.import", &import).unwrap();
+    assert_eq!(s.undo.len(), original.1 + 1);
+    assert_eq!(s.doc.appearances.tables.textures[&key].data, png_base64());
+    s.execute("appearance.graph.library.import", &json!({"folder":folder,"entry":entry.id})).unwrap();
+    assert_eq!(s.doc.appearances.tables.textures.len(), 1);
+    let bytes = solidcraft_io::write_design_container(&s.doc).unwrap();
+    std::fs::remove_dir_all(&folder).unwrap();
+    let reopened = solidcraft_io::read_design(&bytes).unwrap();
+    assert_eq!(reopened.appearances.tables, s.doc.appearances.tables);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc.appearances.tables.textures.contains_key(&key));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.doc, *original.0);
+}

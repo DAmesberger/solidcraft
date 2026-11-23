@@ -487,3 +487,115 @@ fn links_inside_a_place_are_not_followed() {
     assert!(library.entries().iter().all(|l| l.label() != "linked.json"));
     assert!(library.entries().iter().all(|l| l.kind() == Kind::Material), "the linked appearances folder is not read");
 }
+
+#[test]
+fn built_in_graphs_round_trip_under_new_library_ids_and_file_names() {
+    let scanned = scan(&Place::BuiltIn);
+    let built_in = &scanned.libraries()[0];
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    put_json(&folder.join("Finishes.sclibrary.json"), &header(ID));
+    assert_eq!(
+        built_in.graphs().iter().map(|l| l.entry().unwrap().id.as_str()).collect::<Vec<_>>(),
+        [
+            "solidcraft.builtin/graph-anodised-aluminium",
+            "solidcraft.builtin/graph-clear-glass",
+            "solidcraft.builtin/graph-matte-rubber",
+            "solidcraft.builtin/graph-oak-wood",
+            "solidcraft.builtin/graph-orange-peel-gloss",
+            "solidcraft.builtin/graph-textured-abs",
+        ]
+    );
+    for (index, (slug, _)) in graph_entries::starters::GRAPHS.iter().enumerate() {
+        let original = built_in.graph(&format!("{BUILT_IN_ID}/graph-{slug}")).unwrap();
+        assert!(original.textures.is_empty());
+        assert_eq!(original.provenance.license, "MIT OR Apache-2.0");
+        let mut copy = original.clone();
+        copy.id = format!("{ID}/{slug}");
+        assert_eq!(copy.content_revision().unwrap(), original.revision);
+        put_json(&folder.join(format!("graphs/{index}.json")), &copy);
+    }
+    let library = library_at(folder);
+    for (slug, _) in graph_entries::starters::GRAPHS {
+        let entry = library.graph(&format!("{ID}/{slug}")).unwrap();
+        assert_eq!(entry.revision, entry.content_revision().unwrap());
+        let copied = entry.design_graph(ID);
+        let origin = copied.source.as_ref().unwrap();
+        assert_eq!((&*origin.library, &*origin.entry), (ID, *slug));
+        assert_eq!(serde_json::to_value(&origin.revision).unwrap(), json!(entry.revision));
+    }
+}
+
+#[test]
+fn a_graph_loads_its_referenced_images_and_refuses_missing_or_modified_content() {
+    use solidcraft_doc::appearance_graph::texture_key;
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    put_json(&folder.join("Finishes.sclibrary.json"), &header(ID));
+    let builtin = scan(&Place::BuiltIn);
+    let mut entry = builtin.libraries()[0].graph("solidcraft.builtin/graph-clear-glass").unwrap().clone();
+    entry.id = format!("{ID}/glass");
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 1, 1);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[128]).unwrap();
+    }
+    let key = texture_key(&png);
+    entry.graph.interface = serde_json::from_value(json!([{"name":"grain","type":"texture","default":{"texture":key}}])).unwrap();
+    entry.revision = entry.content_revision().unwrap();
+    let record = folder.join("graphs/Surface.json");
+    let texture = folder.join(format!("textures/{key}.png"));
+    put_json(&record, &entry);
+    let read = || library_at(folder);
+    assert!(read().graphs()[0].entry().is_err());
+    put(&texture, &png);
+    let loaded = read();
+    assert_eq!(loaded.graph(&entry.id).unwrap().textures[&key].bytes(&key).unwrap(), png);
+    let all = std::fs::metadata(folder.join("Finishes.sclibrary.json")).unwrap().len() + std::fs::metadata(&record).unwrap().len() + png.len() as u64;
+    assert_eq!(library_with(folder, &Limits { library_bytes: all, ..LIMITS }).status(), &Status::Available);
+    assert_eq!(
+        unavailable(library_with(folder, &Limits { library_bytes: all - 1, ..LIMITS }).status()),
+        Reason::OverLimit { cap: Cap::LibraryBytes, limit: all - 1 }
+    );
+    let mut wrong = png.clone();
+    wrong.push(0);
+    put(&texture, wrong);
+    assert!(read().graphs()[0].entry().is_err());
+    put(&texture, &png);
+    entry.provenance.license = "CC0-1.0".into();
+    put_json(&record, &entry);
+    assert!(read().graphs()[0].entry().is_err());
+    entry.revision = entry.content_revision().unwrap();
+    put_json(&record, &entry);
+    put_json(&folder.join("appearances/Glass.json"), &look(ID, "glass", "Glass"));
+    let duplicate = read();
+    assert!(duplicate.graph(&entry.id).is_none());
+    assert!(matches!(duplicate.graphs()[0].entry(), Err(Reason::DuplicateId { .. })));
+    assert!(matches!(refused(&duplicate, "Glass.json"), Reason::DuplicateId { .. }));
+}
+
+#[test]
+fn invalid_graph_records_are_refused_individually() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path();
+    let manifest = folder.join("Finishes.sclibrary.json");
+    put_json(&manifest, &header(ID));
+    let builtin = scan(&Place::BuiltIn);
+    let mut entry = builtin.libraries()[0].graph("solidcraft.builtin/graph-clear-glass").unwrap().clone();
+    put_json(&folder.join("graphs/Foreign.json"), &entry);
+    entry.id = format!("{ID}/glass");
+    put_json(&folder.join("appearances/Misplaced.json"), &entry);
+    put_json(&folder.join("graphs/Misplaced.json"), &look(ID, "blue", "Blue"));
+    entry.graph.output = "absent".into();
+    entry.revision = entry.content_revision().unwrap();
+    put_json(&folder.join("graphs/Broken.json"), &entry);
+    let library = library_at(folder);
+    assert_eq!(library.status(), &Status::Available);
+    let reason = |label: &str| library.graphs().iter().find(|r| r.label() == label).unwrap().entry().unwrap_err();
+    assert_eq!(reason("Foreign.json"), &Reason::ForeignId);
+    assert_eq!(reason("Misplaced.json"), &Reason::WrongKind);
+    assert!(matches!(reason("Broken.json"), Reason::Invalid(_)));
+    assert_eq!(refused(&library, "Misplaced.json"), &Reason::WrongKind);
+}

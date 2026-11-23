@@ -1,0 +1,34 @@
+{
+  "ar": {
+    "cmd.appearance_graph_library_import": "استيراد رسم بياني للمظهر",
+    "cmd.appearance_graph_library_list": "تصفّح مكتبة الرسوم البيانية للمظهر"
+  },
+  "de": {
+    "cmd.appearance_graph_library_import": "Erscheinungsbild-Graph importieren",
+    "cmd.appearance_graph_library_list": "Bibliothek für Erscheinungsbild-Graphen durchsuchen"
+  },
+  "en": {
+    "cmd.appearance_graph_library_import": "Import Appearance Graph",
+    "cmd.appearance_graph_library_list": "Browse Appearance Graph Library"
+  },
+  "he": {
+    "cmd.appearance_graph_library_import": "ייבוא גרף מראה",
+    "cmd.appearance_graph_library_list": "עיון בספריית גרפי המראה"
+  },
+  "ja": {
+    "cmd.appearance_graph_library_import": "外観グラフをインポート",
+    "cmd.appearance_graph_library_list": "外観グラフライブラリを参照"
+  },
+  "ko": {
+    "cmd.appearance_graph_library_import": "외관 그래프 가져오기",
+    "cmd.appearance_graph_library_list": "외관 그래프 라이브러리 찾아보기"
+  },
+  "vi": {
+    "cmd.appearance_graph_library_import": "Nhập đồ thị vẻ ngoài",
+    "cmd.appearance_graph_library_list": "Duyệt thư viện đồ thị vẻ ngoài"
+  },
+  "zh": {
+    "cmd.appearance_graph_library_import": "导入外观图",
+    "cmd.appearance_graph_library_list": "浏览外观图库"
+  }
+}
