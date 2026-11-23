@@ -64,6 +64,107 @@ impl ClearCoat {
     }
 }
 
+/// Test oracle for the viewport's coat colour (`sc_coat_layer` in the GPU crate's shading library, docs/appearance-graph.md
+/// §5.5): [`tinted_brdf`] with the default specular.
+#[cfg(any(test, feature = "test-reference"))]
+pub fn tinted_coat_brdf(surface: OpaqueSurface, coat_color: Vec3, normal: Vec3, view: Vec3, light: Vec3) -> Result<Vec3, SurfaceError> {
+    tinted_brdf(surface, 1.0, Vec3::new(1.0, 1.0, 1.0), coat_color, normal, view, light)
+}
+
+/// Test oracle for the viewport's specular tint and coat colour (`sc_layered_brdf` in
+/// the GPU crate's shading library, docs/appearance-graph.md §3.1 and §5.5): the coated BRDF of `surface` with
+/// OpenPBR's `specular_weight` and `specular_color` on the base and its coat tinted by linear
+/// `coat_color`.
+///
+/// - Specular: the dielectric's normal-incidence reflectance is scaled by the colour, the
+///   metal's grazing reflectance is the colour (its edge tint); both are scaled by the weight,
+///   and Schlick's Fresnel runs from the one to the other. The diffuse layer takes what the
+///   tinted interface passes. Weight 1 and a white colour are [`OpaqueSurface::brdf`].
+/// - Coat colour: a thin absorbing layer tints the substrate once on entry and once on exit; at
+///   coverage w each pass keeps `1 - w * (1 - coat_color)`, on top of the coat's Fresnel
+///   attenuation. The coat's own reflection is untinted. A white coat colour is the clear coat;
+///   an index-matched coat (IOR 1) only tints.
+///
+/// No CPU renderer uses this: it exists for the GPU tests (feature `test-reference`).
+#[cfg(any(test, feature = "test-reference"))]
+pub fn tinted_brdf(
+    surface: OpaqueSurface,
+    specular_weight: f64,
+    specular_color: Vec3,
+    coat_color: Vec3,
+    normal: Vec3,
+    view: Vec3,
+    light: Vec3,
+) -> Result<Vec3, SurfaceError> {
+    for c in [specular_weight, specular_color.x, specular_color.y, specular_color.z, coat_color.x, coat_color.y, coat_color.z] {
+        if !c.is_finite() || !(0.0..=1.0).contains(&c) {
+            return Err(SurfaceError::BaseColor);
+        }
+    }
+    let n = unit_direction(normal)?;
+    let v = unit_direction(view)?;
+    let l = unit_direction(light)?;
+    let nv = n.dot(v).clamp(-1.0, 1.0);
+    let nl = n.dot(l).clamp(-1.0, 1.0);
+    let base = OpaqueSurface::new(surface.base_color(), surface.metallic(), surface.roughness(), surface.dielectric_ior())?;
+    let under = if specular_weight == 1.0 && specular_color == Vec3::new(1.0, 1.0, 1.0) {
+        base.brdf(n, v, l)?
+    } else {
+        tinted_base(base, specular_weight, specular_color, n, v, l)?
+    };
+    let Some(coat) = surface.clear_coat() else { return Ok(under) };
+    if nv <= 0.0 || nl <= 0.0 {
+        return Ok(Vec3::ZERO);
+    }
+    let w = coat.weight();
+    if w == 0.0 {
+        return Ok(under);
+    }
+    let tint = |c: f64| (1.0 - w * (1.0 - c)).powi(2);
+    let tint = Vec3::new(tint(coat_color.x), tint(coat_color.y), tint(coat_color.z));
+    let h = unit_direction(v + l)?;
+    let nh = n.dot(h).clamp(0.0, 1.0);
+    let vh = v.dot(h).clamp(0.0, 1.0);
+    // The white layer, then the tint on the attenuated substrate alone.
+    let white = coat.layer(under, nv, nl, nh, vh);
+    let attenuated = if coat.ior() == 1.0 { under } else { under * ((1.0 - w * coat.energy_bound(nv)) * (1.0 - w * coat.energy_bound(nl))) };
+    let lobe = white - attenuated;
+    Ok(Vec3::new(attenuated.x * tint.x, attenuated.y * tint.y, attenuated.z * tint.z) + lobe)
+}
+
+/// The isotropic base BRDF with a specular tint ([`tinted_brdf`]).
+#[cfg(any(test, feature = "test-reference"))]
+fn tinted_base(base: OpaqueSurface, weight: f64, color: Vec3, n: Vec3, v: Vec3, l: Vec3) -> Result<Vec3, SurfaceError> {
+    let nv = n.dot(v).clamp(-1.0, 1.0);
+    let nl = n.dot(l).clamp(-1.0, 1.0);
+    if nv <= 0.0 || nl <= 0.0 {
+        return Ok(Vec3::ZERO);
+    }
+    let h = unit_direction(v + l)?;
+    let nh = n.dot(h).clamp(0.0, 1.0);
+    let vh = v.dot(h).clamp(0.0, 1.0);
+    let a2 = base.roughness().powi(4);
+    let denom = (1.0 - nh * nh) + nh * nh * a2;
+    let visibility = |c: f64| 2.0 / (c + (a2 + (1.0 - a2) * c * c).sqrt());
+    let lobe = a2 / (PI * denom * denom) * 0.25 * visibility(nv) * visibility(nl);
+    let m = base.metallic();
+    let ior = base.dielectric_ior();
+    let ratio = ((ior - 1.0) / (ior + 1.0)).powi(2);
+    let grazing = if ior == 1.0 { 0.0 } else { 1.0 };
+    let mix = |d: f64, metal: f64| (d + (metal - d) * m) * weight;
+    let b = base.base_color();
+    let f0 = Vec3::new(mix(ratio * color.x, b.x), mix(ratio * color.y, b.y), mix(ratio * color.z, b.z));
+    let f90 = Vec3::new(mix(grazing, color.x), mix(grazing, color.y), mix(grazing, color.z));
+    let fresnel = |c: f64| f0 + (f90 - f0) * (1.0 - c.clamp(0.0, 1.0)).powi(5);
+    let (f, fv, fl) = (fresnel(vh), fresnel(nv), fresnel(nl));
+    let diffuse = b * ((1.0 - m) / PI);
+    Ok(Vec3::new(
+        f.x * lobe + (1.0 - fv.x) * (1.0 - fl.x) * diffuse.x,
+        f.y * lobe + (1.0 - fv.y) * (1.0 - fl.y) * diffuse.y,
+        f.z * lobe + (1.0 - fv.z) * (1.0 - fl.z) * diffuse.z,
+    ))
+}
+
 /// Probabilities of choosing the diffuse, base specular and coat lobes for a continuation
 /// sample; they sum to one. The coat takes half its weight. Of the rest, the diffuse lobe
 /// takes 0.5 × (1 − metallic): an even split for a dielectric, nothing for a pure metal, whose
@@ -119,6 +220,58 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn a_white_coat_colour_is_the_clear_coat_and_a_tint_only_darkens_the_base() {
+        let v = Vec3::new(0.5, 0.0, 0.8);
+        let l = Vec3::new(-0.3, 0.2, 0.6);
+        for (weight, ior) in [(1.0, 1.5), (0.4, 1.5), (1.0, 1.0)] {
+            let base = OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.4, 1.5).unwrap();
+            let coated = base.with_clear_coat(ClearCoat::new(weight, 0.12, ior).unwrap());
+            let white = tinted_coat_brdf(coated, Vec3::new(1.0, 1.0, 1.0), Vec3::Z, v, l).unwrap();
+            assert!((white - coated.brdf(Vec3::Z, v, l).unwrap()).len() < 1e-15, "w={weight} ior={ior}");
+            let green = tinted_coat_brdf(coated, Vec3::new(0.1, 0.5, 0.1), Vec3::Z, v, l).unwrap();
+            assert!(green.x < white.x && green.y < white.y && green.z < white.z && green.x > 0.0);
+            // A black coat absorbs the whole substrate under it: an index-matched one leaves
+            // nothing, an interface its own reflection; a partial coat the uncoated share.
+            let black = tinted_coat_brdf(coated, Vec3::ZERO, Vec3::Z, v, l).unwrap();
+            assert!(black.x >= 0.0 && black.x < white.x, "{black:?}");
+            if weight == 1.0 && ior == 1.0 {
+                assert_eq!(black, Vec3::ZERO);
+            }
+            if weight == 1.0 && ior != 1.0 {
+                assert!((black.x - black.y).abs() < 1e-15 && (black.y - black.z).abs() < 1e-15, "only the white lobe: {black:?}");
+            }
+        }
+        // No coat: nothing to tint; out-of-range colours are refused.
+        let plain = OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), 0.0, 0.4, 1.5).unwrap();
+        assert_eq!(tinted_coat_brdf(plain, Vec3::ZERO, Vec3::Z, v, l).unwrap(), plain.brdf(Vec3::Z, v, l).unwrap());
+        assert!(tinted_coat_brdf(plain, Vec3::new(1.1, 0.0, 0.0), Vec3::Z, v, l).is_err());
+        assert!(tinted_coat_brdf(plain, Vec3::new(f64::NAN, 0.0, 0.0), Vec3::Z, v, l).is_err());
+    }
+    #[test]
+    fn the_specular_tint_reduces_to_the_opaque_surface_and_scales_its_fresnel() {
+        let v = Vec3::new(0.5, 0.0, 0.8);
+        let l = Vec3::new(-0.3, 0.2, 0.6);
+        let white = Vec3::new(1.0, 1.0, 1.0);
+        for (metallic, ior) in [(0.0, 1.5), (1.0, 1.5), (0.5, 1.0), (0.0, 2.4)] {
+            let s = OpaqueSurface::new(Vec3::new(0.8, 0.5, 0.2), metallic, 0.4, ior).unwrap();
+            let plain = s.brdf(Vec3::Z, v, l).unwrap();
+            // The tinted formula itself at the default specular is the opaque surface's.
+            let base = tinted_base(s, 1.0, white, Vec3::Z, v.normalized().unwrap(), l.normalized().unwrap()).unwrap();
+            assert!((base - plain).len() < 1e-14, "m={metallic} ior={ior}: {base:?} vs {plain:?}");
+            // Weight 0: no specular interface, the whole Lambert layer of the dielectric part.
+            let none = tinted_brdf(s, 0.0, white, white, Vec3::Z, v, l).unwrap();
+            let lambert = s.base_color() * ((1.0 - metallic) / PI);
+            assert!((none - lambert).len() < 1e-14, "{none:?}");
+            // A tint only lowers the specular part; it is reciprocal.
+            let tinted = tinted_brdf(s, 0.7, Vec3::new(1.0, 0.5, 0.2), white, Vec3::Z, v, l).unwrap();
+            let back = tinted_brdf(s, 0.7, Vec3::new(1.0, 0.5, 0.2), white, Vec3::Z, l, v).unwrap();
+            assert!((tinted - back).len() < 1e-14);
+            assert!(tinted.x.is_finite() && tinted.x >= 0.0);
+        }
+        assert!(tinted_brdf(OpaqueSurface::new(white, 0.0, 0.4, 1.5).unwrap(), 1.1, white, white, Vec3::Z, v, l).is_err());
+    }
+
     #[test]
     fn diffuse_lobe_probability_follows_metallic() {
         let surface = |metallic: f64, weight: f64| {

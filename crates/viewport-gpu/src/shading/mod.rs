@@ -21,3 +21,6 @@ pub const SOURCE: &str = library_source!();
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod bsdf_tests;

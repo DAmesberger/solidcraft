@@ -15,12 +15,12 @@
 //! Consumers retain geometric normals for ray spawning and optical boundaries.
 //! No shading-normal energy correction, multiple scattering or transmission is modeled.
 
-use solidcraft_geom::prelude::*;
+use crate::vec::Vec3Ops;
 use std::f64::consts::{PI, TAU};
 
 use solidcore_record::Vec3;
 
-use solidcraft_viewport::surface::{MIN_ROUGHNESS, OpaqueSurface, SurfaceError, unit_direction};
+use crate::surface::{MIN_ROUGHNESS, OpaqueSurface, SurfaceError, unit_direction};
 
 /// Admission or finite-arithmetic failure in the anisotropic numerical contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +148,7 @@ impl AnisotropicSurface {
     /// authored runtime finish may have roughness 0.02; independently authored
     /// anisotropic axes continue through new() with their unchanged 0.045 bound.
     #[cfg(any(feature = "raytrace-cpu", test))]
-    pub(crate) fn from_isotropic_optical(base: OpaqueSurface) -> Self {
+    pub fn from_isotropic_optical(base: OpaqueSurface) -> Self {
         Self { base, roughness_y: base.roughness() }
     }
 

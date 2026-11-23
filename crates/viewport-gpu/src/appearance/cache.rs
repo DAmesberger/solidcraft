@@ -61,12 +61,21 @@ pub(crate) fn vertex_entry(object: bool) -> &'static str {
     if object { "vs_mat_object" } else { "vs_mat" }
 }
 
-/// A triangle stream or the placements of a shared mesh.
+/// How a draw is made: over opaque faces, or blended (see-through: premultiplied over, far
+/// sides first, then near sides, as the viewport's glass is).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Variant {
     Opaque,
+    Far,
+    Near,
     /// An instanced mesh's placements, over its opaque faces.
     Placed,
+}
+
+impl Variant {
+    fn of(blended: bool) -> &'static [Variant] {
+        if blended { &[Variant::Far, Variant::Near] } else { &[Variant::Opaque] }
+    }
 }
 
 enum Pipeline {
@@ -110,6 +119,10 @@ pub(crate) struct AppearancePipelines {
     pub(crate) compiles_per_frame: usize,
     #[cfg(test)]
     pub(crate) no_time_budget: bool,
+    /// Tests of the shading itself read `pbr_shade`'s output as it is: see-through draws are made
+    /// as opaque ones, without blending.
+    #[cfg(test)]
+    pub(crate) unblended: bool,
 }
 
 impl AppearancePipelines {
@@ -167,6 +180,8 @@ impl AppearancePipelines {
             decoding: 0,
             #[cfg(test)]
             no_time_budget: false,
+            #[cfg(test)]
+            unblended: false,
         }
     }
 
@@ -222,8 +237,12 @@ impl AppearancePipelines {
         }
         self.take_finished(frame);
         // The constant-graph pipelines a draw may fall back to, made the first time one is needed.
-        let fallbacks: Vec<(bool, Variant)> =
-            scene.draws.iter().map(|d| (d.object, Variant::Opaque)).chain(scene.placed.values().map(|p| (p.object, Variant::Placed))).collect();
+        let fallbacks: Vec<(bool, Variant)> = scene
+            .draws
+            .iter()
+            .flat_map(|d| Variant::of(d.blended && !self.blends_off()).iter().map(move |v| (d.object, *v)))
+            .chain(scene.placed.values().map(|p| (p.object, Variant::Placed)))
+            .collect();
         for (object, variant) in fallbacks {
             let job = Job::Fallback(object, variant);
             if self.fallback.contains_key(&(object, variant)) || self.in_flight.contains(&job) {
@@ -249,11 +268,13 @@ impl AppearancePipelines {
             }
         }
         for draw in &scene.draws {
-            let key = (draw.shape, Variant::Opaque);
-            match self.shapes.get_mut(&key) {
-                Some(Pipeline::Ready { used, .. }) => *used = frame,
-                None if !self.failed.contains(&draw.shape) && !wanted.iter().any(|(k, _)| *k == key) => wanted.push((key, &draw.ir)),
-                None => {}
+            for variant in Variant::of(draw.blended && !self.blends_off()) {
+                let key = (draw.shape, *variant);
+                match self.shapes.get_mut(&key) {
+                    Some(Pipeline::Ready { used, .. }) => *used = frame,
+                    None if !self.failed.contains(&draw.shape) && !wanted.iter().any(|(k, _)| *k == key) => wanted.push((key, &draw.ir)),
+                    None => {}
+                }
             }
         }
         let mut pending = 0u32;
@@ -394,6 +415,13 @@ impl AppearancePipelines {
         }
     }
 
+    fn blends_off(&self) -> bool {
+        #[cfg(test)]
+        return self.unblended;
+        #[cfg(not(test))]
+        false
+    }
+
     /// Free a cache slot if one is needed, dropping the least recently drawn shape not drawn this
     /// frame; false when every kept shape is in use.
     fn make_room(&mut self, frame: u64) -> bool {
@@ -434,6 +462,8 @@ struct PageGpu {
 #[derive(Clone)]
 struct DrawGpu {
     shape: ShapeKey,
+    /// See-through: drawn blended, after the opaque draws.
+    blended: bool,
     /// What its vertices hash to: an unchanged draw keeps its buffer.
     hash: u64,
     ir: Arc<Ir>,
@@ -530,7 +560,7 @@ impl GraphBatches {
                 h.finish()
             };
             if let Some(kept) = old.remove(&(draw.shape, page, draw.textures, hash)) {
-                self.draws.push(DrawGpu { ir: ir.clone(), object: draw.object, ..kept });
+                self.draws.push(DrawGpu { ir: ir.clone(), object: draw.object, blended: draw.blended, ..kept });
                 continue;
             }
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -545,6 +575,7 @@ impl GraphBatches {
             written += bytes.len() as u64;
             self.draws.push(DrawGpu {
                 shape: draw.shape,
+                blended: draw.blended,
                 hash,
                 ir: ir.clone(),
                 object: draw.object,
@@ -561,7 +592,7 @@ impl GraphBatches {
     /// join the pipelines to make and their pages the binds. What a material needs per placement
     /// is its record, which comes back; a see-through or unknown material draws no overlay.
     pub(crate) fn place(&mut self, scene: &GraphScene, material: GraphAppearance) -> Option<u32> {
-        let m = scene.placed_appearance(material)?;
+        let m = scene.placed_appearance(material).filter(|m| !m.blended)?;
         let ir = scene.shape(&m.shape)?.clone();
         let page = usize::try_from(m.page).ok()?;
         self.placed.insert(material, PlacedGpu { shape: m.shape, ir, object: m.object, page, set: m.textures });
@@ -622,9 +653,12 @@ impl GraphBatches {
     /// Draw every material surface: one draw per (shape, page, texture set); the opaque ones,
     /// then the see-through ones' far sides, then their near sides.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'static>, pipelines: &AppearancePipelines, tally: &crate::view::Tally) {
-        for draw in &self.draws {
+        let off = pipelines.blends_off();
+        let order = [(false, Variant::Opaque), (true, Variant::Far), (true, Variant::Near)];
+        let draws = order.iter().flat_map(|(blended, v)| self.draws.iter().filter(move |d| (d.blended && !off) == *blended).map(move |d| (d, *v)));
+        for (draw, variant) in draws {
             let (Some((pipeline, fallback)), Some(bind)) =
-                (pipelines.for_draw(&draw.shape, draw.object, Variant::Opaque), self.binds.get(&(draw.page, draw.set)))
+                (pipelines.for_draw(&draw.shape, draw.object, variant), self.binds.get(&(draw.page, draw.set)))
             else {
                 continue;
             };

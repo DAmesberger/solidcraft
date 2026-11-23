@@ -24,7 +24,7 @@ pub mod textures;
 
 pub use cache::AppearanceStats;
 pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, appearance_eval, generate};
-pub use scene::{GraphAppearance, GraphDraw, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record};
+pub use scene::{GraphAppearance, GraphDraw, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record, see_through};
 pub use textures::{PreparedTexture, ResidentPolicy, TextureCaps, TextureDecoder, TextureKey, TextureStats, texture_keys};
 
 use solidcraft_viewport::appearance_graph::ir::Ir;
@@ -52,7 +52,7 @@ pub const PRELUDE: &str = include_str!("prelude.wgsl");
 
 fn module(eval: &str) -> String {
     // `pbr::SHADE` starts with the shared library.
-    format!("{}\n{}\n{STREAM}\n{PRELUDE}\n{}\n{eval}", crate::view::SHADER, crate::pbr::SOURCE, textures::sampling_source())
+    format!("{}\n{}\n{STREAM}\n{PRELUDE}\n{}\n{eval}", crate::view::SHADER, crate::pbr::SHADE, textures::sampling_source())
 }
 
 /// The WGSL module of a graph's shape: the shared library, the viewport's shading, the stream,
@@ -78,3 +78,6 @@ pub fn validate(source: &str) -> Result<(naga::Module, naga::valid::ModuleInfo),
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod shade_tests;
