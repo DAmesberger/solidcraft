@@ -182,7 +182,9 @@ fn a_first_preview_has_the_same_metal_reflection_as_after_a_model_frame() {
         }
         r.set_studio_environment(&device, &queue, &env);
         let scene = pbr_scene(Vec3::new(0.7, 0.7, 0.7), 1.0, 0.25, 1.5).unwrap();
-        let mut frame = test_frame(scene, 1.0);
+        // The preview's own scene and an empty highlight, under keys the Model frame did not use,
+        // as a view's next frame publishes them: an empty slot keeps the previous upload.
+        let mut frame = Frame { key: 2, hl_key: 2, hl_slot: Arc::new(Mutex::new(Some(GpuScene::default()))), ..test_frame(scene, 1.0) };
         frame.product = true;
         frame.product_lights = Some(Vec::new());
         frame.product_look = Some(ProductLook::product());

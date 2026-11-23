@@ -1,6 +1,5 @@
 #![allow(clippy::needless_range_loop)] // Channels compared side by side.
 
-use solidcraft_viewport::vec::Vec3Ops;
 use std::f64::consts::PI;
 
 use super::reference::{brdf, shade, unturn};

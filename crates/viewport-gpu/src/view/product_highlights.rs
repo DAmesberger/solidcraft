@@ -172,7 +172,8 @@ impl Renderer {
         if self.pic.product_highlights && can_reuse(self.pic.ss_ready && self.pic.ss.is_some(), self.pic.ss_key, key) {
             let filter = self.pic.ss_scaled && self.pic.cached.is_none();
             if filter {
-                self.cache_picture(device, encoder, frame.size_px);
+                let redither = self.redithers(frame);
+                self.cache_picture(device, encoder, frame.size_px, redither);
             }
             self.pic.ss_stats = DrawStats { draw_calls: u32::from(filter), ..DrawStats::default() };
             return;
