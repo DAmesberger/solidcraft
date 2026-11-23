@@ -8,7 +8,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+test-reference = ["dep:serde_json"]
+
 [dependencies]
+serde_json = { workspace = true, optional = true }
 image = { workspace = true }
 serde = { workspace = true }
 # An appearance graph's shape key is a truncated SHA-256 of its canonical lowered form.

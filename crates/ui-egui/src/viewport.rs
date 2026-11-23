@@ -7672,6 +7672,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         let (clip, clip_hatch) = section_clip(app);
         let frame = Frame {
             product_look: None,
+            units_per_mm: 1.0,
             product_lights: None,
             ssaa,
             ao_samples,
@@ -13405,6 +13406,7 @@ mod tests {
                 let e = proj.cam.eye().to_f32();
                 let frame = Frame {
                     product_look: None,
+                    units_per_mm: 1.0,
                     product_lights: None,
                     product: false,
                     upload_error: None,

@@ -34,3 +34,5 @@ wgpu = { workspace = true, features = ["gles"] }
 serde_json = { workspace = true }
 # The HLSL the D3D12 backend compiles (tests check it suits FXC).
 naga = { workspace = true, features = ["wgsl-in", "hlsl-out", "glsl-out"] }
+solidcraft-viewport = { workspace = true, features = ["test-reference"] }
+image = { workspace = true }

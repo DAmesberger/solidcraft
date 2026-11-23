@@ -7,6 +7,8 @@ macro_rules! library_source {
             "\n",
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/noise.wgsl")),
             "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/patterns.wgsl")),
+            "\n",
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/projection.wgsl"))
         )
     };

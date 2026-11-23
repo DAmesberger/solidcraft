@@ -18,13 +18,14 @@
 
 mod base;
 pub mod catalogue;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-reference"))]
 pub mod fixtures;
 pub mod graph;
 pub mod ir;
 mod lower;
-/// The test-only f64 reference interpreter, the oracle the GPU back ends are checked against.
-#[cfg(test)]
+/// The test-only f64 reference interpreter: `cfg(test)` or the `test-reference`
+/// feature, which only dev-dependencies may enable (`cargo xtask layers` checks).
+#[cfg(any(test, feature = "test-reference"))]
 pub mod reference;
 pub mod sample;
 mod validate;
@@ -53,12 +54,12 @@ pub mod limits {
     pub const NAME_BYTES: usize = 256;
     /// Cost units after triplanar and slope expansion (docs/appearance-graph.md §3.6) above which a
     /// graph is refused: a safety bound against pathological or hostile graphs, not a quality
-    /// limit. 100,000 units is about 25× the viewport's PBR shading per full-screen layer on a fast desktop GPU
+    /// limit. 100,000 units is about 25× today's look per full-screen layer on a fast desktop GPU
     /// (3.4 ms at 1080p on an Apple M5 Max); on a GPU twenty times slower, at 4K with a few
     /// layers of overdraw, that is about a second a frame, near the point where drivers reset
     /// the GPU (Windows' 2 s timeout) and browsers lose the WebGL context. Files are untrusted.
     pub const COST_UNITS: u32 = 100_000;
-    /// Cost units above which a graph is heavier than typical (about 2× the viewport's PBR shading): advisory,
+    /// Cost units above which a graph is heavier than typical (about 2× today's look): advisory,
     /// reported by the commands and the editor, never refused (§3.6).
     pub const COST_TYPICAL: u32 = 4000;
     /// Texture samples after expansion.
@@ -68,7 +69,7 @@ pub mod limits {
     /// Uniform floats one look occupies (64 vec4).
     pub const UNIFORM_FLOATS: usize = 256;
     /// Pixels per texture side a file may hold: a safety bound, the one the render job's texture
-    /// maps already use (`texture_input`, #813). Renderers choose the resident size.
+    /// maps already use (`texture_input`, #813). Renderers choose the resident size (§4.3).
     pub const TEXTURE_SIDE: u32 = 2048;
     /// Encoded bytes of one texture asset: the render job's texture-map bound (#813).
     pub const TEXTURE_BYTES: usize = 16 << 20;
