@@ -16,6 +16,7 @@ pub(super) struct View {
     pick_mode: usize,
     inspected: Option<LookStep>,
     all_users: bool,
+    graph_editor: crate::appearance_graph_editor::Editor,
     revision: Option<u64>,
     document: Option<Weak<Document>>,
     draft: Option<Look>,
@@ -44,6 +45,10 @@ impl Targets {
         if !self.components.is_empty() {
             // Assignment's existing target form accepts component names or string IDs.
             params["components"] = json!(self.components.iter().map(u64::to_string).collect::<Vec<_>>());
+        }
+        if let Some(graph) = &look.graph {
+            params["graph"] = json!(graph);
+            params["values"] = json!(look.values);
         }
         Some(params)
     }
@@ -154,7 +159,12 @@ pub(super) fn chains(app: &mut SolveApp, targets: &Targets) -> Result<Vec<[Optio
         .collect()
 }
 fn look_params(look: &Look) -> Value {
-    json!({"name":look.name,"color":look.color,"opacity":look.opacity,"pbr":look.pbr})
+    let mut params = json!({"name": look.name, "color": look.color, "opacity": look.opacity, "pbr": look.pbr});
+    if let Some(graph) = &look.graph {
+        params["graph"] = json!(graph);
+        params["values"] = json!(look.values);
+    }
+    params
 }
 pub(super) fn users(app: &SolveApp, look: &Look) -> usize {
     assigned_looks(app).filter(|l| *l == look).count()
@@ -449,6 +459,10 @@ fn draw(app: &mut SolveApp, ui: &mut egui::Ui, view: &mut View, selected: &Targe
     }
     if view.revision != Some(app.session.revision) || view.document.as_ref().is_none_or(|d| !Weak::ptr_eq(d, &Arc::downgrade(&app.session.doc))) {
         view.draft = Some(from.clone());
+        view.graph_editor.stale();
+        view.graph_editor.link_to(
+            from.graph.as_ref().map(|graph| crate::appearance_graph_editor::Link { graph: graph.as_str().to_owned(), values: from.values.clone() }),
+        );
         view.dirty = false;
         view.revision = Some(app.session.revision);
         view.document = Some(Arc::downgrade(&app.session.doc));
@@ -499,7 +513,14 @@ fn draw(app: &mut SolveApp, ui: &mut egui::Ui, view: &mut View, selected: &Targe
         return Ok(());
     }
     if let Some(to) = replacement.and_then(|id| id.parse::<usize>().ok()).and_then(|index| replacements.get(index)) {
-        let to = Look { name: to.name.clone(), color: to.color, opacity: to.opacity, pbr: to.pbr, graph: None, values: Default::default() };
+        let to = Look {
+            name: to.name.clone(),
+            color: to.color,
+            opacity: to.opacity,
+            pbr: to.pbr,
+            graph: to.graph.as_deref().map(solidcraft_engine::doc::appearance_graph::GraphId::new).transpose().map_err(|e| e.to_string())?,
+            values: to.values.clone(),
+        };
         let step = view.inspected.filter(|step| *step != LookStep::Material).unwrap_or(mode_step(view.mode));
         let replace_targets = targets(app, step);
         assign(app, &replace_targets, from, &to, view.all_users)?;
@@ -608,8 +629,40 @@ fn draw(app: &mut SolveApp, ui: &mut egui::Ui, view: &mut View, selected: &Targe
     });
     commit |= view.dirty && !ui.input(|i| i.pointer.any_down()) && !ui.ctx().egui_wants_keyboard_input();
     if commit && view.dirty && (draft != *from || is_mixed) {
+        // Editing scalar properties replaces the graph look with the chosen finish.
+        draft.graph = None;
+        draft.values.clear();
         assign(app, &edit_targets, from, &draft, view.all_users)?;
         view.revision = None;
+    }
+    // The Appearance dialog owns the graph controls and the swatch while it is open.
+    let dialog_open = app.dialog.as_ref().is_some_and(|dialog| matches!(dialog.kind, crate::dialogs::Kind::Appearance(_)));
+    if !view.dirty && !is_mixed && step != LookStep::Material && !dialog_open {
+        use crate::appearance_graph_editor::{LookContext, Outcome};
+        let bodies: Vec<_> = edit_targets
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Sel::Body { name } => Some(name),
+                _ => None,
+            })
+            .collect();
+        let context = LookContext {
+            look: look_params(from),
+            scope: (!view.all_users).then(|| json!({"bodies": bodies, "components": edit_targets.components})),
+            surface: from.opaque_surface().ok().flatten().or_else(|| from.pbr.unwrap_or_default().surface(from.color).ok()),
+        };
+        let outcome = crate::appearance_graph_editor::section(app, ui, &mut view.graph_editor, &context, |app| {
+            Some(&mut app.render_workspace.view.inspector.selection_appearance.graph_editor)
+        });
+        if outcome == Some(Outcome::Apply)
+            && let Some(link) = &view.graph_editor.link
+        {
+            let graph = solidcraft_engine::doc::appearance_graph::GraphId::new(&link.graph).map_err(|e| e.to_string())?;
+            let to = Look { pbr: None, graph: Some(graph), values: link.values.clone(), ..draft.clone() };
+            assign(app, &edit_targets, from, &to, view.all_users)?;
+            view.revision = None;
+        }
     }
     view.draft = Some(draft);
     Ok(())

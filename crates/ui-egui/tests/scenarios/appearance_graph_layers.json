@@ -1,0 +1,17 @@
+[
+  {"note": "Give a body a paint appearance, add a layer in the Appearance dialog and undo the edit."},
+  {"call": "ui.resize", "params": {"width": 1100, "height": 1500}},
+  {"call": "engine.execute", "params": {"command": "solid.box", "params": {"body_name": "Shell", "length": 30, "width": 20, "height": 10}}},
+  {"call": "engine.execute", "params": {"command": "appearance.graph.create", "params": {"id": "paint", "name": "Paint"}}},
+  {"call": "engine.execute", "params": {"command": "appearance.assign", "params": {"bodies": ["Shell"], "graph": "paint"}}},
+  {"call": "engine.execute", "params": {"command": "select.set", "params": {"items": [{"type": "body", "name": "Shell"}]}}},
+  {"start": "appearance.assign"},
+  {"frames": 8},
+  {"expect": {"dialog": "Appearance", "shown": "Appearance graph"}},
+  {"click": {"handle": "appearance:graph_add_layer"}},
+  {"frames": 4},
+  {"expect": {"query": {"command": "appearance.graph.get", "params": {"id": "paint"}, "path": ["graph", "nodes", 2, "kind"], "value": "surface.mix"}}},
+  {"widget": "Cancel"},
+  {"call": "engine.execute", "params": {"command": "edit.undo", "params": {}}},
+  {"expect": {"query": {"command": "appearance.graph.get", "params": {"id": "paint"}, "path": ["graph", "nodes", 1], "value": null}}}
+]

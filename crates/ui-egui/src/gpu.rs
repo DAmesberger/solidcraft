@@ -225,6 +225,7 @@ mod test_support {
             app.viewport.gpu = Some(installed);
             app.viewport.draw_stats = Some(view.stats());
             renderer.write().callback_resources.insert(view);
+            renderer.write().callback_resources.insert(crate::appearance_graph_editor::SwatchTargets { scene: installed, window });
             app.render_workspace.host = Some(
                 crate::render_workspace::host_executor(device.limits().max_texture_dimension_2d, installed.depth.is_some(), installed.samples.max(1))
                     .unwrap(),
@@ -1256,6 +1257,7 @@ mod tests {
             app.viewport.gpu = Some(view.target());
             app.viewport.draw_stats = Some(view.stats());
             renderer.write().callback_resources.insert(view);
+            renderer.write().callback_resources.insert(crate::appearance_graph_editor::SwatchTargets { scene: installed, window });
             app.blur = crate::blur::fixture_state(&adapter, &device, &queue, &renderer, format, policy);
             assert_eq!(
                 app.blur.software_adapter(),
