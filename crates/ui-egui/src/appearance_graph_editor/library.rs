@@ -179,7 +179,7 @@ pub(super) fn begin(app: &mut SolveApp, ed: &mut Editor, ctx: egui::Context, com
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn library_error(ed: &mut Editor, command: &str, error: String) {
+fn library_error(ed: &mut Editor, command: FolderCommand, error: String) {
     if command == FolderCommand::List {
         ed.library.listing = Some(Err(error));
     } else {
