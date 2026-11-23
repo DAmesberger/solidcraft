@@ -1,5 +1,5 @@
 //! The CPU side of appearance-graph drawing (docs/appearance-graph.md §5.2): uniform pages, each
-//! material's record in one, and the vertices of every (shape, page), which one draw
+//! material's record in one, and the vertices of every (shape, page, texture set), which one draw
 //! covers. Data preparation only.
 
 use std::collections::HashMap;
@@ -8,10 +8,17 @@ use std::sync::Arc;
 use solidcraft_viewport::appearance_graph::ir::{Ir, ShapeKey};
 use solidcraft_viewport::appearance_graph::{SurfaceSample, limits};
 
+use super::textures::TextureKey;
 use super::{BASE_VEC4, OBJECT_VERTEX_SIZE, PAGE_VEC4, VERTEX_SIZE};
 
 /// Pages one scene may hold: 16 MiB of uniforms, far above a design's 4096 graphs.
 pub const MAX_PAGES: usize = 1024;
+/// Texture bindings of one material (group 3, textures 4–7).
+pub const TEXTURE_SLOTS: usize = limits::TEXTURES_PER_GRAPH;
+
+/// The textures one draw binds, by the IR's binding index.
+pub type TextureSet = [Option<TextureKey>; TEXTURE_SLOTS];
+
 /// A material in a [`GraphScene`]: where its record is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GraphAppearance(u32);
@@ -21,6 +28,7 @@ pub struct GraphAppearance(u32);
 pub(crate) struct PlacedAppearance {
     pub shape: ShapeKey,
     pub page: u32,
+    pub textures: u32,
     pub object: bool,
     pub record: u32,
 }
@@ -42,11 +50,13 @@ pub struct Page {
     used: u32,
 }
 
-/// The vertices one draw covers: every material of one shape on one page.
+/// The vertices one draw covers: every material of one shape on one page with one texture set.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphDraw {
     pub shape: ShapeKey,
     pub page: u32,
+    /// The texture set ([`GraphScene::texture_set`]; 0: none).
+    pub textures: u32,
     /// [`OBJECT_VERTEX_SIZE`] vertices (the shape reads object space), else [`VERTEX_SIZE`].
     pub object: bool,
     pub vertices: Vec<u8>,
@@ -65,10 +75,15 @@ pub struct GraphScene {
     shapes: HashMap<ShapeKey, Arc<Ir>>,
     pages: Vec<Page>,
     draws: Vec<GraphDraw>,
-    draw_index: HashMap<(ShapeKey, u32), usize>,
+    draw_index: HashMap<(ShapeKey, u32, u32), usize>,
     materials: Vec<Entry>,
-    /// Identical records (same shape and words) share one.
-    dedup: HashMap<(ShapeKey, Vec<u32>), GraphAppearance>,
+    /// Identical records (same shape, texture set and words) share one.
+    dedup: HashMap<(ShapeKey, u32, Vec<u32>), GraphAppearance>,
+    /// Texture sets after the first (set 0 binds none).
+    sets: Vec<TextureSet>,
+    /// The encoded bytes of the textures the materials read (by key), for the renderer's decoder.
+    sources: HashMap<TextureKey, Arc<Vec<u8>>>,
+    set_index: HashMap<TextureSet, u32>,
 }
 
 /// The base response as the head of a record ([`BASE_VEC4`] vec4s, `mat_base_response`):
@@ -121,6 +136,19 @@ impl GraphScene {
     /// Add a material of graph `ir` with its uniform `words` (`uniform_words`) and base response
     /// `base` (`base_sample`). Equal materials share a record.
     pub fn appearance(&mut self, ir: &Arc<Ir>, words: &[u32], base: &SurfaceSample) -> Result<GraphAppearance, GraphSceneError> {
+        self.textured_appearance(ir, words, base, &TextureSet::default())
+    }
+
+    /// [`Self::appearance`] reading `textures` (by the IR's binding index; `textures::texture_keys`).
+    /// Materials with other texture sets draw separately.
+    pub fn textured_appearance(
+        &mut self,
+        ir: &Arc<Ir>,
+        words: &[u32],
+        base: &SurfaceSample,
+        textures: &TextureSet,
+    ) -> Result<GraphAppearance, GraphSceneError> {
+        let set = self.set_of(textures);
         let expected = usize::try_from(ir.uniform_floats).unwrap_or(usize::MAX).min(limits::UNIFORM_FLOATS);
         if words.len() != expected {
             return Err(GraphSceneError::Words { given: words.len(), expected });
@@ -128,11 +156,11 @@ impl GraphScene {
         let mut record: Vec<u32> = base_record(base).iter().map(|x| x.to_bits()).collect();
         record.extend_from_slice(words);
         record.resize(record.len().div_ceil(4) * 4, 0);
-        let key = (ir.shape, record);
+        let key = (ir.shape, set, record);
         if let Some(m) = self.dedup.get(&key) {
             return Ok(*m);
         }
-        let record = key.1.clone();
+        let record = key.2.clone();
         let vec4s = u32::try_from(record.len() / 4).unwrap_or(u32::MAX);
         let page = match self.pages.iter().position(|p| p.used + vec4s <= PAGE_VEC4) {
             Some(p) => p,
@@ -154,8 +182,8 @@ impl GraphScene {
         p.used += vec4s;
         self.shapes.entry(ir.shape).or_insert_with(|| ir.clone());
         let page = u32::try_from(page).unwrap_or(u32::MAX);
-        let draw = *self.draw_index.entry((ir.shape, page)).or_insert_with(|| {
-            self.draws.push(GraphDraw { shape: ir.shape, page, object: ir.object_space, vertices: Vec::new() });
+        let draw = *self.draw_index.entry((ir.shape, page, set)).or_insert_with(|| {
+            self.draws.push(GraphDraw { shape: ir.shape, page, textures: set, object: ir.object_space, vertices: Vec::new() });
             self.draws.len() - 1
         });
         let m = GraphAppearance(u32::try_from(self.materials.len()).unwrap_or(u32::MAX));
@@ -187,7 +215,44 @@ impl GraphScene {
     pub(crate) fn placed_appearance(&self, m: GraphAppearance) -> Option<PlacedAppearance> {
         let entry = usize::try_from(m.0).ok().and_then(|i| self.materials.get(i))?;
         let draw = self.draws.get(entry.draw)?;
-        Some(PlacedAppearance { shape: draw.shape, page: draw.page, object: draw.object, record: entry.record })
+        Some(PlacedAppearance { shape: draw.shape, page: draw.page, textures: draw.textures, object: draw.object, record: entry.record })
+    }
+
+    fn set_of(&mut self, textures: &TextureSet) -> u32 {
+        if textures.iter().all(Option::is_none) {
+            return 0;
+        }
+        if let Some(i) = self.set_index.get(textures) {
+            return *i;
+        }
+        self.sets.push(textures.clone());
+        let i = u32::try_from(self.sets.len()).unwrap_or(u32::MAX);
+        self.set_index.insert(textures.clone(), i);
+        i
+    }
+
+    /// Texture set `i` of the draws (0 and unknown sets: none).
+    pub fn texture_set(&self, i: u32) -> TextureSet {
+        i.checked_sub(1).and_then(|i| usize::try_from(i).ok()).and_then(|i| self.sets.get(i)).cloned().unwrap_or_default()
+    }
+
+    /// Give the encoded bytes (PNG or JPEG) of texture `key`, which the renderer decodes on its
+    /// worker and makes resident the first time a draw reads it.
+    pub fn texture_source(&mut self, key: TextureKey, bytes: Arc<Vec<u8>>) {
+        self.sources.insert(key, bytes);
+    }
+
+    /// The textures given bytes by [`Self::texture_source`].
+    pub fn texture_sources(&self) -> &HashMap<TextureKey, Arc<Vec<u8>>> {
+        &self.sources
+    }
+
+    /// Every texture the scene's materials read, once: what a decoder is asked for.
+    pub fn textures(&self) -> Vec<TextureKey> {
+        let mut keys: Vec<TextureKey> = self.sets.iter().flatten().flatten().cloned().collect();
+        keys.sort();
+        keys.dedup();
+        keys
     }
 
     pub fn is_empty(&self) -> bool {

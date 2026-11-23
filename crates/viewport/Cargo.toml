@@ -11,10 +11,13 @@ workspace = true
 [features]
 default = []
 test-reference = ["dep:serde_json"]
+raytrace-cpu = []
 
 [dependencies]
 serde_json = { workspace = true, optional = true }
-image = { workspace = true }
+moxcms = { workspace = true }
+png = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
 serde = { workspace = true }
 # An appearance graph's shape key is a truncated SHA-256 of its canonical lowered form.
 sha2 = { workspace = true }
@@ -23,4 +26,5 @@ solidcore-tess = { workspace = true }
 solidcraft-color = { workspace = true }
 
 [dev-dependencies]
+flate2 = "1"
 serde_json = { workspace = true }

@@ -210,7 +210,8 @@ fn budgets_dimensions_metadata_and_truncation_refuse_without_silent_repair() {
         NormalizationSource::new(bytes.clone(), MapRole::Roughness, NormalizationOptions { max_working_bytes: 1, ..Default::default() }).is_err()
     );
     assert!(NormalizationSource::new(bytes[..bytes.len() - 1].to_vec(), MapRole::Roughness, Default::default()).is_err());
-    let oversized = png(info(2049, 1, png::ColorType::Grayscale, png::BitDepth::Eight), &vec![0; 2049]);
+    let edge = crate::texture_input::MAX_TEXTURE_EDGE + 1;
+    let oversized = png(info(edge, 1, png::ColorType::Grayscale, png::BitDepth::Eight), &vec![0; edge as usize]);
     assert!(NormalizationSource::new(oversized, MapRole::Roughness, Default::default()).unwrap().decode(|| false).is_err());
     let mut metadata = info(1, 1, png::ColorType::Rgb, png::BitDepth::Eight);
     metadata.exif_metadata = Some(Cow::Owned(vec![0, 1, 2]));

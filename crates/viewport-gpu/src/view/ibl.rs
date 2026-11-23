@@ -528,7 +528,7 @@ fn upload(
         .bind(device, layout, sampler, dfg)
 }
 
-/// Appearance graphs share the studio group and add a uniform page.
+/// Appearance graphs share the studio group and add a page, four textures and three wrap modes.
 pub(crate) fn appearance_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let visibility = wgpu::ShaderStages::FRAGMENT;
     let mut entries = studio_layout(visibility).to_vec();
@@ -542,6 +542,8 @@ pub(crate) fn appearance_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
         },
         count: None,
     });
+    entries.extend((4..8).map(|binding| texture_entry(binding, visibility)));
+    entries.extend((8..11).map(|binding| sampler_entry(binding, visibility)));
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("sc_studio_material"), entries: &entries })
 }
 
@@ -598,20 +600,38 @@ impl Studios {
     }
 
     /// An appearance-graph group 3 ([`appearance_layout`]): the frame's studio (as [`Studios::bind`]
-    /// picks it), and a uniform `page`.
+    /// picks it), a uniform `page`, the material `textures` and their `samplers`.
     pub(crate) fn appearance_bind(
         &self,
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         preset: Option<StudioPreset>,
         page: &wgpu::Buffer,
+        textures: [&wgpu::TextureView; 4],
+        samplers: [&wgpu::Sampler; 3],
     ) -> wgpu::BindGroup {
         let env = preset.and_then(|preset| self.baked.iter().find(|(p, _)| *p == preset)).map_or(&self.placeholder, |(_, gpu)| gpu);
+        let [t0, t1, t2, t3] = textures;
+        let [s0, s1, s2] = samplers;
         let [specular, studio_sampler, rig, diffuse, dfg] = env.resources.entries(&self.sampler, &self.dfg);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sc_studio_material"),
             layout,
-            entries: &[specular, studio_sampler, rig, diffuse, dfg, wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() }],
+            entries: &[
+                specular,
+                studio_sampler,
+                rig,
+                diffuse,
+                dfg,
+                wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(t0) },
+                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(t1) },
+                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(t2) },
+                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::TextureView(t3) },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(s0) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(s1) },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(s2) },
+            ],
         })
     }
 
