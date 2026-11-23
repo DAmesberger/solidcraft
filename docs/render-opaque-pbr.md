@@ -203,3 +203,18 @@ refusal without changing history, density-only edits and all six scene responses
 A clicked editor regression checks one transaction and reopening
 the same selected body. Native media and exact current-head gate results belong
 in the PR. wasm compilation and actual browser interaction are separate evidence.
+
+## Choosing a studio in a viewport host
+
+A host can resolve Product, Soft or Contrast in the built-in studio catalog and register
+its rig with `StudioPreset::register`. Bake it off the painting thread with
+`StudioEnvironment::bake`, or use `StudioBake::step` to work across frames.
+`Renderer::set_studio_environment` installs the result. Set the frame’s
+`ProductLook` to the returned preset and set its rotation and exposure. A model
+frame with no explicit lights keeps its ordinary shading while the bake completes.
+
+The neutral room and the chosen studio share the equirectangular GGX prefilter, diffuse
+irradiance convolution and specular BRDF lookup table. A studio bake defaults to a
+0.1-roughness base. Use `StudioBaseLevel::Mirror` to compare it with an unfiltered base.
+A room fitted with `StudioRoom::around` projects reflections against its bounds and
+darkens reflections of the floor directly beneath the subject.

@@ -1,6 +1,6 @@
 //! The studio the modeling viewport lights finished faces with: model-viewer's default
 //! "neutral" environment (google/model-viewer `EnvironmentScene.ts`, Apache-2.0, the same room as
-//! three.js `RoomEnvironment`), drawn once on the CPU ([`room`]) and prefiltered for image-based
+//! three.js `RoomEnvironment`), drawn once on the CPU ([`room_maps`]) and prefiltered for image-based
 //! lighting (split-sum): a specular map whose mip `k` is the room seen through a GGX lobe of
 //! perceptual roughness `k / (SPECULAR_LEVELS - 1)`, and a small diffuse irradiance map
 //! (cosine-weighted), plus the GGX environment-BRDF table (`dfg`) the shader weights them with.
@@ -9,21 +9,22 @@
 //! Both maps are equirectangular in the shader's frame, the view's (x right, y up, z toward the
 //! eye): a direction `(x, y, z)` sits at `u = 0.5 + atan2(x, -z) / 2π`, `v = acos(y) / π`. The
 //! room's frame is model-viewer's default view (camera on +z looking down -z), so it maps 1:1.
+//! Studio rigs use world Z-up coordinates: map (x, y, z) corresponds to world (x, -z, y).
 
 use std::f32::consts::PI;
 
-/// The room's map width, sampled 2 × 2 per texel: twice the specular map's, as `prefilter` reads.
+/// The room's map width, sampled 2 × 2 per texel: twice the specular map's.
 const ROOM_WIDTH: usize = 2 * SPECULAR_WIDTH;
 
 /// The environment-BRDF table: `DFG_SIZE` × `DFG_SIZE` over (n·v, perceptual roughness), at
 /// texel centres as the Khronos glTF-IBL-Sampler writes its `LUT`; the size is Filament's (`FILAMENT_DFG_LUT_SIZE`).
-const DFG_SIZE: usize = 128;
+pub(crate) const DFG_SIZE: usize = 128;
 /// Hammersley samples per table texel: the fewest (of 512, 1024, 2048) within 0.01 of Khronos's table.
-const DFG_SAMPLES: u32 = 1024;
+pub(crate) const DFG_SAMPLES: u32 = 1024;
 
 /// Mips of the specular map: 256 × 128 (a mirror) down to 8 × 4 (roughness 1).
 pub const SPECULAR_LEVELS: u32 = 6;
-const SPECULAR_WIDTH: usize = 256;
+pub(crate) const SPECULAR_WIDTH: usize = 256;
 const IRRADIANCE_WIDTH: usize = 32;
 /// GGX samples per texel of each rough level.
 const SAMPLES: u32 = 128;
@@ -36,7 +37,11 @@ pub(crate) struct Equirect {
 }
 
 impl Equirect {
-    fn height(&self) -> usize {
+    fn empty(width: usize) -> Self {
+        Self { width, rgb: Vec::with_capacity(width * width / 2) }
+    }
+
+    pub(crate) fn height(&self) -> usize {
         self.width / 2
     }
 
@@ -44,17 +49,25 @@ impl Equirect {
         self.rgb.get(y.min(self.height() - 1) * self.width + x % self.width).copied().unwrap_or([0.0; 3])
     }
 
-    /// Half the size, each texel the mean of four.
-    fn halved(&self) -> Equirect {
-        let width = (self.width / 2).max(2);
-        let mut rgb = Vec::with_capacity(width * width / 2);
-        for y in 0..width / 2 {
-            for x in 0..width {
-                let q = [self.at(2 * x, 2 * y), self.at(2 * x + 1, 2 * y), self.at(2 * x, 2 * y + 1), self.at(2 * x + 1, 2 * y + 1)];
-                rgb.push(std::array::from_fn(|c| q.iter().map(|t| t[c]).sum::<f32>() / 4.0));
-            }
+    /// Append one row sampled at 2 × 2 directions per texel.
+    fn radiance_row(&mut self, y: usize, radiance: &impl Fn([f32; 3]) -> [f32; 3]) {
+        for x in 0..self.width {
+            let samples = [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(i, j)| radiance(direction(2 * x + i, 2 * y + j, 2 * self.width)));
+            self.rgb.push(std::array::from_fn(|c| samples.iter().map(|p| p[c]).sum::<f32>() / 4.0));
         }
-        Equirect { width, rgb }
+    }
+
+    /// Each texel in the next smaller map is the mean of four.
+    fn halved_row(&mut self, y: usize, source: &Self) {
+        for x in 0..self.width {
+            let q = [source.at(2 * x, 2 * y), source.at(2 * x + 1, 2 * y), source.at(2 * x, 2 * y + 1), source.at(2 * x + 1, 2 * y + 1)];
+            self.rgb.push(std::array::from_fn(|c| q.iter().map(|t| t[c]).sum::<f32>() / 4.0));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sample_world(&self, [x, y, z]: [f32; 3]) -> [f32; 3] {
+        self.sample([x, z, -y])
     }
 
     /// Bilinear radiance along the unit direction `d`.
@@ -101,76 +114,77 @@ fn hammersley(i: u32, n: u32) -> (f32, f32) {
     (i as f32 / n as f32, i.reverse_bits() as f32 * (1.0 / 4_294_967_296.0))
 }
 
-/// The environment `source` seen through a GGX lobe of roughness `rough` about each texel's
-/// direction (the split-sum's prefiltered radiance, with n = v = r), at `width`.
-fn prefiltered(source: &Equirect, rough: f32, width: usize) -> Equirect {
+/// Average radiance over the solid angle of one importance sample. A texel subtends
+/// less solid angle near a pole, so use its latitude to choose the two source mips.
+fn sample_solid_angle(levels: &[Equirect], d: [f32; 3], angle: f32) -> [f32; 3] {
+    let texel = (2.0 * PI * PI) / (ROOM_WIDTH * (ROOM_WIDTH / 2)) as f32 * (1.0 - d[1] * d[1]).max(1e-8).sqrt();
+    let lod = (0.5 * (angle / texel).log2()).clamp(0.0, (levels.len() - 1) as f32);
+    let fine = levels[lod.floor() as usize].sample(d);
+    let coarse = levels[lod.ceil() as usize].sample(d);
+    std::array::from_fn(|i| fine[i] + lod.fract() * (coarse[i] - fine[i]))
+}
+
+/// Radiance through a GGX lobe of roughness `rough` around the reflection direction `n` (n = v = r).
+fn prefiltered(source: &Equirect, pyramid: Option<&[Equirect]>, rough: f32, n: [f32; 3]) -> [f32; 3] {
     let a = (rough * rough).max(1e-4);
-    let mut rgb = Vec::with_capacity(width * width / 2);
-    for y in 0..width / 2 {
-        for x in 0..width {
-            let n = direction(x, y, width);
-            let helper = if n[1].abs() < 0.999 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
-            let t = normalized(cross(helper, n));
-            let b = cross(n, t);
-            let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
-            for i in 0..SAMPLES {
-                let (e1, e2) = hammersley(i, SAMPLES);
-                let phi = 2.0 * PI * e1;
-                let cos = ((1.0 - e2) / (1.0 + (a * a - 1.0) * e2)).sqrt();
-                let sin = (1.0 - cos * cos).max(0.0).sqrt();
-                let h: [f32; 3] = std::array::from_fn(|c| t[c] * sin * phi.cos() + b[c] * sin * phi.sin() + n[c] * cos);
-                let nh = dot(n, h);
-                let l: [f32; 3] = std::array::from_fn(|c| 2.0 * nh * h[c] - n[c]);
-                let nl = dot(n, l);
-                if nl > 0.0 {
-                    let s = source.sample(l);
-                    for c in 0..3 {
-                        sum[c] += s[c] * nl;
-                    }
-                    weight += nl;
-                }
+    let helper = if n[1].abs() < 0.999 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let t = normalized(cross(helper, n));
+    let b = cross(n, t);
+    let (mut sum, mut weight) = ([0.0f32; 3], 0.0f32);
+    for i in 0..SAMPLES {
+        let (e1, e2) = hammersley(i, SAMPLES);
+        let phi = 2.0 * PI * e1;
+        let cos = ((1.0 - e2) / (1.0 + (a * a - 1.0) * e2)).sqrt();
+        let sin = (1.0 - cos * cos).max(0.0).sqrt();
+        let h: [f32; 3] = std::array::from_fn(|c| t[c] * sin * phi.cos() + b[c] * sin * phi.sin() + n[c] * cos);
+        let nh = dot(n, h);
+        let l: [f32; 3] = std::array::from_fn(|c| 2.0 * nh * h[c] - n[c]);
+        let nl = dot(n, l);
+        if nl > 0.0 {
+            let s = if let Some(levels) = pyramid {
+                let denom = (1.0 - cos * cos) + cos * cos * a * a;
+                let pdf = a * a / (4.0 * PI * denom * denom);
+                sample_solid_angle(levels, l, 1.0 / (SAMPLES as f32 * pdf))
+            } else {
+                source.sample(l)
+            };
+            for c in 0..3 {
+                sum[c] += s[c] * nl;
             }
-            rgb.push(sum.map(|s| s / weight.max(1e-6)));
+            weight += nl;
         }
     }
-    Equirect { width, rgb }
+    sum.map(|s| s / weight.max(1e-6))
 }
 
-/// `source` read (bilinear) at each texel's direction of a `width` map: a mirror's view.
-fn resampled(source: &Equirect, width: usize) -> Equirect {
-    let rgb = (0..width / 2).flat_map(|y| (0..width).map(move |x| (x, y))).map(|(x, y)| source.sample(direction(x, y, width))).collect();
-    Equirect { width, rgb }
-}
-
-/// Cosine-weighted irradiance over π (so a Lambertian face's radiance is albedo × this) at
-/// each texel's direction, from `source` (summed over its texels with their solid angles).
-fn irradiance(source: &Equirect, width: usize) -> Equirect {
-    let sw = source.width;
-    let texels: Vec<([f32; 3], f32)> = (0..sw / 2)
+/// Unit directions and solid angles of the diffuse source.
+fn solid_angles() -> Vec<([f32; 3], f32)> {
+    let sw = IRRADIANCE_WIDTH;
+    (0..sw / 2)
         .flat_map(|y| (0..sw).map(move |x| (x, y)))
         .map(|(x, y)| {
             let theta = (y as f32 + 0.5) / (sw / 2) as f32 * PI;
             (direction(x, y, sw), (2.0 * PI / sw as f32) * (PI / (sw / 2) as f32) * theta.sin())
         })
-        .collect();
-    let mut rgb = Vec::with_capacity(width * width / 2);
-    for y in 0..width / 2 {
-        for x in 0..width {
-            let n = direction(x, y, width);
-            let mut sum = [0.0f32; 3];
-            for (k, (d, omega)) in texels.iter().enumerate() {
-                let c = dot(n, *d);
-                if c > 0.0 {
-                    let l = source.at(k % sw, k / sw);
-                    for i in 0..3 {
-                        sum[i] += l[i] * c * omega;
-                    }
-                }
+        .collect()
+}
+
+/// Cosine-weighted irradiance over π. For a calibrated studio, divide by the sampled
+/// hemisphere's cosine integral to keep a constant ambient field at its exact brightness.
+/// The neutral room retains its original quadrature and divisor.
+fn irradiance(source: &Equirect, angles: &[([f32; 3], f32)], n: [f32; 3], calibrated: bool) -> [f32; 3] {
+    let (mut sum, mut weight) = ([0.0f32; 3], 0.0);
+    for (&l, &(d, omega)) in source.rgb.iter().zip(angles) {
+        let c = dot(n, d);
+        if c > 0.0 {
+            weight += c * omega;
+            for i in 0..3 {
+                sum[i] += l[i] * c * omega;
             }
-            rgb.push(sum.map(|s| s / PI));
         }
     }
-    Equirect { width, rgb }
+    let divisor = if calibrated { weight.max(1e-6) } else { PI };
+    sum.map(|s| s / divisor)
 }
 
 /// A box of model-viewer's room: centre, size, turn about +y (radians, as three.js
@@ -275,58 +289,163 @@ fn room_radiance(blocks: &[Block], d: [f32; 3]) -> f32 {
     ROOM_LIGHT.1 * attenuation(distance) * cos / PI
 }
 
-/// model-viewer's neutral room as an equirectangular map in the view's frame (see the module).
-fn room() -> Equirect {
+/// The neutral room uses a mirror at mip zero. A studio can instead put a narrow GGX
+/// lobe there to smooth high-contrast reflections on a finely textured coat.
+#[derive(Clone, Copy)]
+pub enum BaseLevel {
+    /// Sample the studio as a mirror at the sharpest level.
+    Mirror,
+    /// Prefilter the sharpest level at perceptual roughness 0.1.
+    Preblurred,
+}
+
+impl BaseLevel {
+    pub(crate) fn roughness(self) -> f32 {
+        match self {
+            Self::Mirror => 0.0,
+            Self::Preblurred => 0.1,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Stage {
+    Source(usize),
+    Specular(usize),
+    Ambient,
+    Diffuse,
+    Done,
+}
+
+/// Shared CPU bake of the equirectangular specular and irradiance maps. Each stage
+/// produces one row at a time, including the source pyramid. Only complete maps can
+/// be taken for upload.
+pub(crate) struct MapBake {
+    base: BaseLevel,
+    stage: Stage,
+    row: usize,
+    sources: Vec<Equirect>,
+    levels: Vec<Equirect>,
+    ambient: Equirect,
+    diffuse: Equirect,
+    angles: Vec<([f32; 3], f32)>,
+}
+
+impl MapBake {
+    pub(crate) fn new(base: BaseLevel) -> Self {
+        let sources = std::iter::successors(Some(ROOM_WIDTH), |w| (w / 2 >= IRRADIANCE_WIDTH).then_some(w / 2)).map(Equirect::empty).collect();
+        let levels = (0..SPECULAR_LEVELS).map(|k| Equirect::empty(SPECULAR_WIDTH >> k)).collect();
+        Self {
+            base,
+            stage: Stage::Source(0),
+            row: 0,
+            sources,
+            levels,
+            ambient: Equirect::empty(IRRADIANCE_WIDTH),
+            diffuse: Equirect::empty(IRRADIANCE_WIDTH),
+            angles: solid_angles(),
+        }
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        matches!(self.stage, Stage::Done)
+    }
+
+    /// Evaluate at least one row until approximately `work` samples have been taken.
+    /// The rig evaluates reflections and ambient light separately, both in world Z-up.
+    pub(crate) fn step(&mut self, work: usize, radiance: impl Fn([f32; 3]) -> [f32; 3], ambient: impl Fn([f32; 3]) -> [f32; 3]) -> bool {
+        let to_world = |[x, y, z]: [f32; 3]| [x, -z, y];
+        self.advance(work, &|d| radiance(to_world(d)), Some(&|d| ambient(to_world(d))))
+    }
+
+    pub(crate) fn finish(self) -> Option<(Vec<Equirect>, Equirect)> {
+        self.is_done().then_some((self.levels, self.diffuse))
+    }
+
+    pub(crate) fn bake(mut self, radiance: impl Fn([f32; 3]) -> [f32; 3], ambient: impl Fn([f32; 3]) -> [f32; 3]) -> (Vec<Equirect>, Equirect) {
+        self.step(usize::MAX, radiance, ambient);
+        (self.levels, self.diffuse)
+    }
+
+    fn advance(&mut self, work: usize, radiance: &impl Fn([f32; 3]) -> [f32; 3], ambient: Option<&dyn Fn([f32; 3]) -> [f32; 3]>) -> bool {
+        let mut samples = 0;
+        while !self.is_done() {
+            let (cost, height, next) = match self.stage {
+                Stage::Source(k) => {
+                    let (finer, pending) = self.sources.split_at_mut(k);
+                    let map = &mut pending[0];
+                    if let Some(parent) = finer.last() {
+                        map.halved_row(self.row, parent);
+                    } else {
+                        map.radiance_row(self.row, radiance);
+                    }
+                    let next = if pending.len() > 1 { Stage::Source(k + 1) } else { Stage::Specular(0) };
+                    (4 * pending[0].width, pending[0].height(), next)
+                }
+                Stage::Specular(k) => {
+                    let level = &mut self.levels[k];
+                    // Prefer a source twice this level's width, or the coarsest available.
+                    let source = &self.sources[k.min(self.sources.len() - 1)];
+                    // The high-contrast rig samples the source mip covered by each ray.
+                    let pyramid = ambient.map(|_| self.sources.as_slice());
+                    let rough = if k == 0 { self.base.roughness() } else { k as f32 / (SPECULAR_LEVELS - 1) as f32 };
+                    for x in 0..level.width {
+                        let n = direction(x, self.row, level.width);
+                        level.rgb.push(if rough == 0.0 { source.sample(n) } else { prefiltered(source, pyramid, rough, n) });
+                    }
+                    let samples = if rough == 0.0 { 1 } else { SAMPLES as usize };
+                    let next = if k + 1 < SPECULAR_LEVELS as usize {
+                        Stage::Specular(k + 1)
+                    } else if ambient.is_some() {
+                        Stage::Ambient
+                    } else {
+                        Stage::Diffuse
+                    };
+                    (samples * level.width, level.height(), next)
+                }
+                Stage::Ambient => {
+                    if let Some(ambient) = ambient {
+                        self.ambient.radiance_row(self.row, &ambient);
+                    }
+                    (4 * IRRADIANCE_WIDTH, self.ambient.height(), Stage::Diffuse)
+                }
+                Stage::Diffuse => {
+                    let source = if ambient.is_some() { &self.ambient } else { &self.sources[self.sources.len() - 1] };
+                    for x in 0..IRRADIANCE_WIDTH {
+                        self.diffuse.rgb.push(irradiance(source, &self.angles, direction(x, self.row, IRRADIANCE_WIDTH), ambient.is_some()));
+                    }
+                    (IRRADIANCE_WIDTH * self.angles.len(), self.diffuse.height(), Stage::Done)
+                }
+                Stage::Done => break,
+            };
+            self.row += 1;
+            if self.row == height {
+                self.row = 0;
+                self.stage = next;
+            }
+            samples += cost;
+            if samples >= work {
+                break;
+            }
+        }
+        self.is_done()
+    }
+}
+
+/// model-viewer's neutral room uses the view frame and the same source for both lobes.
+fn room_maps() -> (Vec<Equirect>, Equirect) {
     let mut blocks = vec![Block { centre: dropped(ROOM.0), size: ROOM.1, turn: 0.0, glow: None }];
     blocks.extend(ROOM_BOXES.iter().map(|&(p, turn, size)| Block { centre: dropped(p), size, turn, glow: None }));
     blocks.extend(ROOM_PANELS.iter().map(|&(glow, p, size)| Block { centre: dropped(p), size, turn: 0.0, glow: Some(glow) }));
-    let fine = 2 * ROOM_WIDTH;
-    let mut rgb = Vec::with_capacity(ROOM_WIDTH * ROOM_WIDTH / 2);
-    for y in 0..ROOM_WIDTH / 2 {
-        for x in 0..ROOM_WIDTH {
-            let l = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|(i, j)| room_radiance(&blocks, direction(2 * x + i, 2 * y + j, fine))).sum::<f32>()
-                / 4.0;
-            rgb.push([l; 3]);
-        }
-    }
-    Equirect { width: ROOM_WIDTH, rgb }
-}
-
-/// The specular mips (`SPECULAR_LEVELS`, mip 0 at `SPECULAR_WIDTH`) and the irradiance map of
-/// `studio`.
-pub(crate) fn prefilter(studio: Equirect) -> (Vec<Equirect>, Equirect) {
-    let mut pyramid = vec![studio];
-    while pyramid.last().is_some_and(|e| e.width > IRRADIANCE_WIDTH) {
-        if let Some(next) = pyramid.last().map(Equirect::halved) {
-            pyramid.push(next);
-        }
-    }
-    // The source a level reads: twice its width where there is one, so a lobe narrower than
-    // a texel of the level still averages several.
-    let source = |width: usize| {
-        pyramid
-            .iter()
-            .rev()
-            .find(|e| e.width >= 2 * width)
-            .or(pyramid.first())
-            .cloned()
-            .unwrap_or_else(|| Equirect { width: 4, rgb: vec![[0.0; 3]; 8] })
-    };
-    let mut levels = Vec::new();
-    for k in 0..SPECULAR_LEVELS {
-        let width = (SPECULAR_WIDTH >> k).max(4);
-        let level =
-            if k == 0 { resampled(&source(width), width) } else { prefiltered(&source(width), k as f32 / (SPECULAR_LEVELS - 1) as f32, width) };
-        levels.push(level);
-    }
-    let diffuse = irradiance(&source(IRRADIANCE_WIDTH / 2), IRRADIANCE_WIDTH);
-    (levels, diffuse)
+    let mut bake = MapBake::new(BaseLevel::Mirror);
+    bake.advance(usize::MAX, &|d| [room_radiance(&blocks, d); 3], None);
+    (bake.levels, bake.diffuse)
 }
 
 /// The split-sum environment BRDF at (`nv`, perceptual `roughness`): the scale A and bias B on
 /// F0 (Khronos glTF-IBL-Sampler `LUT`, GGX with height-correlated Smith visibility), `samples`
 /// Hammersley GGX half vectors.
-fn dfg_at(nv: f32, roughness: f32, samples: u32) -> [f32; 2] {
+pub(crate) fn dfg_at(nv: f32, roughness: f32, samples: u32) -> [f32; 2] {
     let v = [(1.0 - nv * nv).max(0.0).sqrt(), 0.0, nv];
     let alpha = roughness * roughness;
     let a2 = alpha * alpha;
@@ -386,8 +505,34 @@ pub(crate) struct Tables {
 /// Draw and prefilter the room and build the environment-BRDF table: about 0.23 s of CPU (M-series,
 /// release), so the renderer builds them beside its pipelines ([`Environment::set`]).
 pub(crate) fn tables() -> Tables {
-    let (levels, diffuse) = prefilter(room());
+    let (levels, diffuse) = room_maps();
     Tables { levels, diffuse, dfg: dfg() }
+}
+
+pub(crate) fn map_texture(device: &wgpu::Device, label: &str, width: usize, height: usize, mips: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+        mip_level_count: mips,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+pub(crate) fn write_map(queue: &wgpu::Queue, texture: &wgpu::Texture, mip: u32, map: &Equirect) {
+    write_rgb(queue, texture, mip, map.width, map.height(), &map.rgb);
+}
+
+fn write_rgb(queue: &wgpu::Queue, t: &wgpu::Texture, mip: u32, width: usize, height: usize, rgb: &[[f32; 3]]) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: t, mip_level: mip, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        &half_bytes(rgb),
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8 * width as u32), rows_per_image: Some(height as u32) },
+        wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+    );
 }
 
 /// The prefiltered studio and the environment-BRDF table on the GPU, with the sampler that
@@ -408,21 +553,9 @@ pub(crate) struct Environment {
 
 impl Environment {
     pub fn new(device: &wgpu::Device) -> Environment {
-        let texture = |label, width: usize, height: usize, mips: u32| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
-                mip_level_count: mips,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            })
-        };
-        let specular_t = texture("sc_studio_specular", SPECULAR_WIDTH, SPECULAR_WIDTH / 2, SPECULAR_LEVELS);
-        let diffuse_t = texture("sc_studio_diffuse", IRRADIANCE_WIDTH, IRRADIANCE_WIDTH / 2, 1);
-        let dfg_t = texture("sc_studio_dfg", DFG_SIZE, DFG_SIZE, 1);
+        let specular_t = map_texture(device, "sc_studio_specular", SPECULAR_WIDTH, SPECULAR_WIDTH / 2, SPECULAR_LEVELS);
+        let diffuse_t = map_texture(device, "sc_studio_diffuse", IRRADIANCE_WIDTH, IRRADIANCE_WIDTH / 2, 1);
+        let dfg_t = map_texture(device, "sc_studio_dfg", DFG_SIZE, DFG_SIZE, 1);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sc_studio"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -459,19 +592,11 @@ impl Environment {
             return;
         }
         let Tables { levels, diffuse, dfg } = self.ready.lock().ok().and_then(|mut r| r.take()).unwrap_or_else(tables);
-        let write = |t: &wgpu::Texture, mip: u32, width: usize, height: usize, rgb: &[[f32; 3]]| {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: t, mip_level: mip, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                &half_bytes(rgb),
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8 * width as u32), rows_per_image: Some(height as u32) },
-                wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
-            );
-        };
         for (k, level) in levels.iter().enumerate() {
-            write(&self.specular_t, k as u32, level.width, level.height(), &level.rgb);
+            write_map(queue, &self.specular_t, k as u32, level);
         }
-        write(&self.diffuse_t, 0, diffuse.width, diffuse.height(), &diffuse.rgb);
-        write(&self.dfg_t, 0, DFG_SIZE, DFG_SIZE, &dfg);
+        write_map(queue, &self.diffuse_t, 0, &diffuse);
+        write_rgb(queue, &self.dfg_t, 0, DFG_SIZE, DFG_SIZE, &dfg);
     }
 
     /// The group-0 layout entries for the studio (bindings 3 to 6).
@@ -546,12 +671,47 @@ mod tests {
 
     #[test]
     fn a_furnace_comes_back_white_at_every_mip_and_in_the_irradiance() {
-        let (levels, diffuse) = prefilter(Equirect { width: 64, rgb: vec![[1.0; 3]; 64 * 32] });
+        let (levels, diffuse) = MapBake::new(BaseLevel::Mirror).bake(|_| [1.0; 3], |_| [1.0; 3]);
         assert_eq!(levels.len(), SPECULAR_LEVELS as usize);
         for (k, e) in levels.iter().chain([&diffuse]).enumerate() {
             for p in &e.rgb {
                 assert!(p.iter().all(|c| (c - 1.0).abs() < 0.01), "map {k}: {p:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_studio_uses_world_z_up_and_separate_ambient_light() {
+        let mut bake = MapBake::new(BaseLevel::Mirror);
+        let radiance = |[x, y, z]: [f32; 3]| [x + 1.0, y + 1.0, z + 1.0];
+        let ambient = |_| [0.25, 0.5, 1.0];
+        assert!(!bake.step(1, radiance, ambient));
+        assert_eq!(bake.sources[0].rgb.len(), 2 * SPECULAR_WIDTH, "one source row");
+        while !bake.step(16_384, radiance, ambient) {}
+        let (levels, diffuse) = bake.finish().expect("completed bake");
+        // Positive world Y belongs in the middle of the map, positive Z at the top.
+        let mirror = &levels[0];
+        let middle = mirror.at(mirror.width / 2, mirror.height() / 2);
+        assert!(middle[1] > 1.99 && (middle[0] - 1.0).abs() < 0.025 && (middle[2] - 1.0).abs() < 0.025, "{middle:?}");
+        assert!(mirror.at(0, 0)[2] > 1.99);
+        assert!(diffuse.rgb.iter().all(|p| p.iter().zip([0.25, 0.5, 1.0]).all(|(got, want)| (got - want).abs() < 1e-5)));
+    }
+
+    #[test]
+    fn preblurring_softens_a_reflection_edge_only_at_the_base_level() {
+        let radiance = |[x, _, _]: [f32; 3]| [if x > 0.0 { 1.0 } else { 0.0 }; 3];
+        let ambient = |_| [0.25; 3];
+        let (sharp, _) = MapBake::new(BaseLevel::Mirror).bake(radiance, ambient);
+        let (blurred, _) = MapBake::new(BaseLevel::Preblurred).bake(radiance, ambient);
+        // Two adjacent texels on the equator straddle the edge of a light.
+        let contrast = |map: &Equirect| {
+            let (x, y) = (map.width / 2, map.height() / 2);
+            map.at(x, y)[0] - map.at(x - 1, y)[0]
+        };
+        assert!(contrast(&sharp[0]) > 0.99);
+        assert!(contrast(&blurred[0]) < 0.90);
+        for (a, b) in sharp[1..].iter().zip(&blurred[1..]) {
+            assert_eq!(a.rgb, b.rgb);
         }
     }
 
@@ -585,7 +745,7 @@ mod tests {
     fn the_rooms_light_reaches_what_an_upright_mirror_face_sees() {
         // In the iso view an upright mirror face reflects about 35° below the horizon; the
         // product-photo studio gave it 0.026 of a white face's light there, black on screen.
-        let (levels, diffuse) = prefilter(room());
+        let (levels, diffuse) = room_maps();
         let up = diffuse.sample([0.0, 1.0, 0.0])[0];
         let e = (-35f32).to_radians();
         let seen: f32 =
@@ -624,7 +784,7 @@ mod tests {
 
     #[test]
     fn the_studio_prefilters_to_finite_levels() {
-        let (levels, diffuse) = prefilter(room());
+        let (levels, diffuse) = room_maps();
         assert_eq!(levels.first().map(|l| l.width), Some(SPECULAR_WIDTH));
         assert!(levels.iter().chain([&diffuse]).all(|l| l.rgb.iter().flatten().all(|c| c.is_finite() && *c >= 0.0)));
     }

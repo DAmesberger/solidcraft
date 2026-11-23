@@ -95,6 +95,7 @@ impl Renderer {
         }
         let slot = |scene| Arc::new(Mutex::new(scene));
         let frame = Frame {
+            product_look: None,
             product_lights: None,
             product: false,
             upload_error: None,

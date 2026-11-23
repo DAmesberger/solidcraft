@@ -203,6 +203,7 @@ fn bounds_in_frame(bounds: &[Aabb3], cam: &Camera) -> Aabb3 {
 fn comparison_frame(scene: GpuScene, cam: &Camera, width: u32, height: u32, key: u64) -> Frame {
     let empty = || Arc::new(std::sync::Mutex::new(None));
     Frame {
+        product_look: None,
         product_lights: None,
         upload_error: None,
         product: false,
