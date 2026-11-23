@@ -2319,8 +2319,10 @@ impl Instances {
                     c.insert(key, (mesh.clone(), e));
                 }
                 let edges = if shared_edges_too { self.edges.as_ref().map(|cache| shared_edges(cache, &mesh)) } else { None };
-                self.meshes
-                    .push((mesh.clone(), crate::gpu::InstancedMesh { key: key as u64, tris, instances: Vec::new(), look, levels, closed, edges }));
+                self.meshes.push((
+                    mesh.clone(),
+                    crate::gpu::InstancedMesh { graph: None, key: key as u64, tris, instances: Vec::new(), look, levels, closed, edges },
+                ));
                 self.by_mesh.insert((key, look), self.meshes.len() - 1);
                 self.meshes.len() - 1
             }
@@ -6232,6 +6234,7 @@ impl HighlightInstances {
                     .or_else(|| taken_shared_tris(&mesh));
                 let Some(tris) = tris else { return false };
                 self.meshes.push(crate::gpu::InstancedMesh {
+                    graph: None,
                     key: key as u64,
                     tris,
                     instances: Vec::new(),
@@ -6283,6 +6286,7 @@ impl EdgeHighlights {
             Some(i) => *i,
             None => {
                 self.meshes.push(crate::gpu::InstancedMesh {
+                    graph: None,
                     key: key as u64,
                     tris: std::sync::Arc::new(crate::gpu::SharedTris::default()),
                     instances: Vec::new(),

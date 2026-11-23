@@ -19,6 +19,7 @@ use solidcore_tess::Mesh;
 use solidcore_tess::TessPlan;
 use solidcore_tess::{EvalCurve, EvalSurface};
 
+pub mod appearance;
 pub mod capture;
 pub mod concurrent;
 mod environment;
