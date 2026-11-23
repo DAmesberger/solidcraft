@@ -114,8 +114,7 @@ fn texture_sample(descriptor:u32,size:vec2<u32>,uv:vec2<f32>,gradients:TextureGr
     return vec4<f32>(rgb,variance);
 }
 fn texture_uv(record:u32,position:vec3<f32>)->vec2<f32> {
-    let delta=position-texture_vector(record);
-    let uv=vec2<f32>(dot(delta,texture_vector(record+4u)),dot(delta,texture_vector(record+8u)));
+    let uv = sc_planar_uv(position, texture_vector(record), texture_vector(record + 4u), texture_vector(record + 8u));
     return vec2<f32>(uv.x,select(uv.y,-uv.y,(texture_words[record+19u]&1u)!=0u));
 }
 fn texture_plane_differential(normal:vec3<f32>,direction:vec3<f32>,delta:vec3<f32>)->vec3<f32> {
@@ -125,7 +124,7 @@ fn texture_camera_direction_delta(direction:vec3<f32>,delta:vec3<f32>)->vec3<f32
     // Fixed-lens focus_scale/length(q) equals forward cosine / camera distance.
     // Divide the pixel delta first to avoid a large intermediate reciprocal.
     let scaled=delta/u.back.w;
-    return (scaled-direction*dot(direction,scaled))*dot(direction,-unit(u.back.xyz));
+    return (scaled-direction*dot(direction,scaled))*dot(direction,-sc_unit(u.back.xyz));
 }
 fn texture_world_gradients(record:u32,dx:vec3<f32>,dy:vec3<f32>)->TextureGradients {
     let inverse_u=texture_vector(record+4u);let inverse_v=texture_vector(record+8u);
@@ -154,7 +153,7 @@ fn texture_gradients(record:u32,normal:vec3<f32>,direction:vec3<f32>,distance:f3
     let distance_scale=select(1.0,path_length/max(u.back.w,1e-6),u.eye.w>0.5);
     if texture_words[1]!=0u && abs(dot(normal,direction))>1e-6 {
         let axis=select(vec3<f32>(1.0,0.0,0.0),vec3<f32>(0.0,0.0,1.0),abs(direction.z)<0.9);
-        let tangent=unit(cross(direction,axis));
+        let tangent=sc_unit(cross(direction,axis));
         let diameter=min(pixel_span*distance_scale,1e20);
         let dx=texture_plane_differential(normal,direction,tangent*diameter);
         let dy=texture_plane_differential(normal,direction,cross(direction,tangent)*diameter);
@@ -162,7 +161,7 @@ fn texture_gradients(record:u32,normal:vec3<f32>,direction:vec3<f32>,distance:f3
     }
     let span=min(pixel_span*distance_scale/max(abs(dot(normal,direction)),1e-6),1e20);
     let axis=select(vec3<f32>(1.0,0.0,0.0),vec3<f32>(0.0,0.0,1.0),abs(normal.z)<0.9);
-    let tangent=unit(cross(normal,axis));
+    let tangent=sc_unit(cross(normal,axis));
     return texture_world_gradients(record,tangent*span,cross(normal,tangent)*span);
 }
 // Sampling changes RGB, metallic and roughness only. Transmission, IOR and
@@ -217,15 +216,15 @@ fn texture_surface(record:u32,color:vec3<f32>,metallic:f32,roughness:f32,positio
 fn texture_normal(record:u32,sampled:vec4<f32>,n:vec3<f32>,geometric:vec3<f32>)->vec3<f32> {
     if record==0u || sampled.w==0.0 {return n;}
     let rgb=sampled.xyz;
-    let u=unit(texture_vector(record+4u));
+    let u=sc_unit(texture_vector(record+4u));
     let tangent=u-n*dot(n,u);
     if dot(tangent,tangent)<1e-12 {return n;}
-    let tangent_unit=unit(tangent);
+    let tangent_unit=sc_unit(tangent);
     let handedness=select(1.0,-1.0,dot(n,cross(texture_vector(record+4u),texture_vector(record+8u)))<0.0);
     let strength=bitcast<f32>(texture_words[record+15u]);
     let local=vec3<f32>((2.0*rgb.xy-vec2<f32>(1.0))*strength,2.0*rgb.z-1.0);
     if dot(local,local)<1e-12 || local.z<=0.0 {return n;}
-    let mapped=unit(tangent_unit*local.x+cross(n,tangent_unit)*(handedness*local.y)+n*local.z);
+    let mapped=sc_unit(tangent_unit*local.x+cross(n,tangent_unit)*(handedness*local.y)+n*local.z);
     return select(mapped,n,dot(mapped,geometric)<=0.0);
 }
 @compute @workgroup_size(1)

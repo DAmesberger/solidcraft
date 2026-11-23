@@ -48,7 +48,7 @@ fn glass_evaluate_cosine(model:vec4<f32>,incident:vec3<f32>,outgoing:vec3<f32>,n
     var sum=view+outgoing;
     if cl<0.0 {sum=view*ni+outgoing*nt;}
     if dot(sum,sum)==0.0 {return vec3<f32>(0.0);}
-    var facet=unit(sum);if dot(facet,normal)<0.0 {facet=-facet;}
+    var facet=sc_unit(sum);if dot(facet,normal)<0.0 {facet=-facet;}
     let vm=dot(view,facet);let lm=dot(outgoing,facet);
     if vm<=0.0 || (cl>0.0 && lm<=0.0) || (cl<0.0 && lm>=0.0) {return vec3<f32>(0.0);}
     let alpha=model.x*model.x;let a2=alpha*alpha;
@@ -135,7 +135,7 @@ fn glass_resolve_light(lights:ptr<function,array<vec4<u32>,6>>,count:u32,wavelen
         next=current;
     } else {
         source_triangle=point.w;let t=triangle(min(source_triangle,max(geometry[0],1u)-1u));model=t.glass;
-        let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+        let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
         let entering=dot(outward,-incident.xyz)>=0.0;
         geometric=select(-outward,outward,entering);normal=geometric;
         if mode==0u || mode==4u {
@@ -203,7 +203,7 @@ struct GlassRadiantSheet {walk:GlassSheetWalk,direct:vec3<f32>,continuous:bool};
 fn glass_camera_sheet(t:Triangle,point:PrecisePoint,source_triangle:u32,incident:vec3<f32>,normal:vec3<f32>,geometric:vec3<f32>,outside:f32,inside:f32,wavelength:f32,remaining:u32,stratum:u32,strata:u32,prior_continuous:bool,prefix:vec3<f32>,lights:ptr<function,array<vec4<u32>,6>>,light_count:ptr<function,u32>,selection_rng:ptr<function,u32>,rng:ptr<function,u32>)->GlassRadiantSheet {
     var direction=incident;var weight=vec3<f32>(1.0);var internal=false;
     var direct=vec3<f32>(0.0);var continuous=prior_continuous;
-    let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     for(var event=0u;event<remaining;event+=1u) {
         let macro_normal=select(-normal,normal,dot(direction,normal)<0.0);
         let ni=select(outside,inside,internal);let nt=select(inside,outside,internal);

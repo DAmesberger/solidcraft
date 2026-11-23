@@ -145,10 +145,11 @@ fn opaque_aging_changes_transport_but_disabled_layers_and_passive_stage_are_exac
 
 #[test]
 fn weathering_layer_order_and_upward_deposition_are_executed_in_the_shader() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = executor.context;
     let shader = format!(
-        "{SHADER}\n{}",
+        "{path_source}\n{}",
         r#"
 @compute @workgroup_size(64)
 fn weathering_reference(@builtin(global_invocation_id) gid:vec3<u32>){
@@ -354,6 +355,7 @@ fn saved_aging_identity_reaches_real_gpu_after_cold_reopen() {
 
 #[test]
 fn scratch_world_point_is_invariant_when_only_camera_target_crosses_a_noise_period() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = executor.context;
     let mut stack = AgingStack::default();
@@ -385,7 +387,7 @@ fn scratch_world_reference(@builtin(global_invocation_id) gid:vec3<u32>){{
 }}
 "#
         );
-        let shader = format!("{SHADER}\n{reference}");
+        let shader = format!("{path_source}\n{reference}");
         let module =
             context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(shader.into()) });
         let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -423,6 +425,7 @@ fn scratch_world_reference(@builtin(global_invocation_id) gid:vec3<u32>){{
 
 #[test]
 fn scratch_integer_band_matches_independent_f64_boundaries_and_signed_large_cells() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = executor.context;
     let mut cases = Vec::new();
@@ -467,7 +470,7 @@ fn scratch_integer_band_matches_independent_f64_boundaries_and_signed_large_cell
         usage: wgpu::BufferUsages::STORAGE,
     });
     let source = format!(
-        "{SHADER}\n{}",
+        "{path_source}\n{}",
         r#"
 @compute @workgroup_size(32)
 fn scratch_band_reference(@builtin(global_invocation_id) gid:vec3<u32>){
@@ -520,12 +523,13 @@ fn scratch_band_reference(@builtin(global_invocation_id) gid:vec3<u32>){
 
 #[test]
 fn scratch_analytic_triangle_hits_keep_world_phase_for_signed_camera_and_world_origins() {
+    let path_source = scene_shader(false);
     use solidcraft_geom::Mesh;
     use solidcraft_render::ProductMesh;
     let Some(executor) = executor() else { return };
     let context = executor.context;
     let source = format!(
-        "{SHADER}\n{}",
+        "{path_source}\n{}",
         r#"
 @compute @workgroup_size(32)
 fn scratch_geometry_reference(@builtin(global_invocation_id) gid:vec3<u32>){

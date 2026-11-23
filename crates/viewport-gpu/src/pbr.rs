@@ -3,7 +3,10 @@
 
 pub const VERTEX_SIZE: usize = 48;
 
-pub const SOURCE: &str = r#"
+pub const SOURCE: &str = concat!(
+    crate::shading::library_source!(),
+    "\n",
+    r#"
 struct PbrOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) n: vec3<f32>,
@@ -36,31 +39,10 @@ fn vs_pbr(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) bas
     return o;
 }
 
-fn pbr_fresnel(f0: vec3<f32>, cosine: f32, metallic: f32, ior: f32) -> vec3<f32> {
-    let t = 1.0 - cosine;
-    // Match the shared surface: an index-matched dielectric has no interface.
-    let grazing = select(1.0, metallic, ior == 1.0);
-    return f0 + (vec3<f32>(grazing) - f0) * (t * t * t * t * t);
-}
-
 fn pbr_brdf(base: vec3<f32>, parameters: vec3<f32>, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>) -> vec3<f32> {
-    let nv = clamp(dot(n, v), -1.0, 1.0);
-    let nl = clamp(dot(n, l), -1.0, 1.0);
-    if (nv <= 0.0 || nl <= 0.0) { return vec3<f32>(0.0); }
-    let h = pbr_unit(v + l);
-    let nh = clamp(dot(n, h), 0.0, 1.0);
-    let vh = clamp(dot(v, h), 0.0, 1.0);
-    let alpha = parameters.y * parameters.y;
-    let a2 = alpha * alpha;
-    let denominator = (1.0 - nh * nh) + nh * nh * a2;
-    let distribution = a2 / (3.141592653589793 * denominator * denominator);
-    let gv = 2.0 / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
-    let gl = 2.0 / (nl + sqrt(a2 + (1.0 - a2) * nl * nl));
-    let ratio = (parameters.z - 1.0) / (parameters.z + 1.0);
-    let f0 = mix(vec3<f32>(ratio * ratio), base, parameters.x);
-    let specular = pbr_fresnel(f0, vh, parameters.x, parameters.z) * (distribution * 0.25 * gv * gl);
-    let diffuse = base * ((1.0 - parameters.x) / 3.141592653589793);
-    return specular + (vec3<f32>(1.0) - pbr_fresnel(f0, nv, parameters.x, parameters.z)) * (vec3<f32>(1.0) - pbr_fresnel(f0, nl, parameters.x, parameters.z)) * diffuse;
+    let angles = sc_brdf_angles(n, v, l, pbr_unit(v + l));
+    if (angles.nv <= 0.0 || angles.nl <= 0.0) { return vec3<f32>(0.0); }
+    return sc_base_at(base, parameters, angles);
 }
 
 // `pbr_materials`, the palette's PBR materials, is declared in viewport.wgsl.
@@ -143,4 +125,5 @@ fn fs_pbr(i: PbrOut) -> @location(0) vec4<f32> {
     if (u.back.w > 0.5) { return vec4<f32>(mapped, 1.0); }
     return vec4<f32>(pbr_encode(mapped), 1.0);
 }
-"#;
+"#
+);

@@ -246,7 +246,7 @@ fn gpu_origin_query_uses_only_closed_boundaries_and_refuses_surface_and_silhouet
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = [
-        SHADER,
+        scene_shader(false),
         r#"
 // Independent oracle for the production query's reuse of its root entry.
 fn origin_vacuum(o:vec3<f32>,d:vec3<f32>)->bool {
