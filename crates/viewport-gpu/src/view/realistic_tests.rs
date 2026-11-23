@@ -175,6 +175,7 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
     for entry in ["fs_solid", "fs_solid_open", "fs_solid_flat", "fs_solid_open_flat"] {
         let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
+        let (module, info) = crate::test_env::without_overrides(&module, &info);
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
             .and_then(|mut w| w.write().map(|_| ()));
         assert!(written.is_ok(), "{entry}: {written:?}");

@@ -478,6 +478,7 @@ fn glsl(source: &str, entries: &[(naga::ShaderStage, &str)]) -> Vec<String> {
         .map(|(stage, entry)| {
             let mut out = String::new();
             let pipeline = glsl::PipelineOptions { shader_stage: *stage, entry_point: (*entry).into(), multiview: None };
+            let (module, info) = crate::test_env::without_overrides(&module, &info);
             glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
                 .and_then(|mut w| w.write())
                 .unwrap_or_else(|e| panic!("{entry}: {e}"));

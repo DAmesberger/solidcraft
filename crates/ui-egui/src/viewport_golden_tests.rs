@@ -301,6 +301,9 @@ fn frame(
         sky: [0.0; 4],
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],
+        edge_px: solidcraft_viewport_gpu::view::EDGE_PX,
+        motions: Default::default(),
+        ground: None,
     }
 }
 

@@ -727,6 +727,7 @@ fn the_product_look_shaders_translate_for_webgl2() {
     {
         let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
+        let (module, info) = crate::test_env::without_overrides(&module, &info);
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
             .and_then(|mut w| w.write().map(|_| ()));
         assert!(written.is_ok(), "{entry}: {written:?}");

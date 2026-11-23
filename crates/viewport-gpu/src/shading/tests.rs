@@ -35,6 +35,7 @@ fn the_library_joins_the_viewport_and_translates_for_webgl2() {
     for (stage, entry) in [(naga::ShaderStage::Vertex, "vs_pbr"), (naga::ShaderStage::Fragment, "fs_pbr")] {
         let pipeline = glsl::PipelineOptions { shader_stage: stage, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
+        let (module, info) = crate::test_env::without_overrides(&module, &info);
         let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
             .and_then(|mut w| w.write().map(|_| ()));
         assert!(written.is_ok(), "{entry}: {written:?}");
@@ -84,6 +85,7 @@ fn probe_all(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
     let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: "probe_all".into(), multiview: None };
     let mut out = String::new();
+    let (module, info) = crate::test_env::without_overrides(&module, &info);
     let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
         .and_then(|mut w| w.write().map(|_| ()));
     assert!(written.is_ok(), "{written:?}");

@@ -448,6 +448,7 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
     let options = glsl::Options { version: glsl::Version::Embedded { version: 300, is_webgl: true }, ..Default::default() };
     let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: "probe_c2".into(), multiview: None };
     let mut out = String::new();
+    let (module, info) = crate::test_env::without_overrides(&module, &info);
     let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
         .and_then(|mut w| w.write().map(|_| ()));
     assert!(written.is_ok(), "{written:?}");
