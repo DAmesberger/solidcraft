@@ -1,0 +1,69 @@
+{
+  "ar": {
+    "appearance.graph.library.add": "إضافة من مكتبة المخططات",
+    "appearance.graph.library.empty": "لا توجد مخططات مظهر في هذه المكتبة.",
+    "appearance.graph.library.folder": "اختر مجلد مكتبة…",
+    "appearance.graph.library.provenance": "الترخيص: {license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "المخططات المضمّنة"
+  },
+  "de": {
+    "appearance.graph.library.add": "Aus Graphbibliothek hinzufügen",
+    "appearance.graph.library.empty": "Diese Bibliothek enthält keine Darstellungsgraphen.",
+    "appearance.graph.library.folder": "Bibliotheksordner wählen…",
+    "appearance.graph.library.provenance": "Lizenz: {license}",
+    "appearance.graph.library.refusal": "{label} – {reason}",
+    "appearance.graph.library.starters": "Mitgelieferte Graphen"
+  },
+  "en": {
+    "appearance.graph.library.add": "Add from graph library",
+    "appearance.graph.library.empty": "This library has no appearance graphs.",
+    "appearance.graph.library.folder": "Choose library folder…",
+    "appearance.graph.library.provenance": "License: {license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "Built-in graphs"
+  },
+  "en-GB": {
+    "appearance.graph.library.provenance": "Licence: {license}"
+  },
+  "he": {
+    "appearance.graph.library.add": "הוספה מספריית גרפים",
+    "appearance.graph.library.empty": "אין גרפי מראה בספרייה זו.",
+    "appearance.graph.library.folder": "בחירת תיקיית ספרייה…",
+    "appearance.graph.library.provenance": "רישיון: {license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "גרפים מובנים"
+  },
+  "ja": {
+    "appearance.graph.library.add": "グラフライブラリから追加",
+    "appearance.graph.library.empty": "このライブラリに外観グラフはありません。",
+    "appearance.graph.library.folder": "ライブラリフォルダーを選択…",
+    "appearance.graph.library.provenance": "ライセンス：{license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "組み込みグラフ"
+  },
+  "ko": {
+    "appearance.graph.library.add": "그래프 라이브러리에서 추가",
+    "appearance.graph.library.empty": "이 라이브러리에는 외관 그래프가 없습니다.",
+    "appearance.graph.library.folder": "라이브러리 폴더 선택…",
+    "appearance.graph.library.provenance": "라이선스: {license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "내장 그래프"
+  },
+  "vi": {
+    "appearance.graph.library.add": "Thêm từ thư viện đồ thị",
+    "appearance.graph.library.empty": "Thư viện này không có đồ thị diện mạo.",
+    "appearance.graph.library.folder": "Chọn thư mục thư viện…",
+    "appearance.graph.library.provenance": "Giấy phép: {license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "Đồ thị tích hợp"
+  },
+  "zh": {
+    "appearance.graph.library.add": "从图形库添加",
+    "appearance.graph.library.empty": "此库中没有外观图。",
+    "appearance.graph.library.folder": "选择库文件夹…",
+    "appearance.graph.library.provenance": "许可证：{license}",
+    "appearance.graph.library.refusal": "{label} — {reason}",
+    "appearance.graph.library.starters": "内置外观图"
+  }
+}

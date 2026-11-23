@@ -460,9 +460,13 @@ fn draw(app: &mut SolveApp, ui: &mut egui::Ui, view: &mut View, selected: &Targe
     if view.revision != Some(app.session.revision) || view.document.as_ref().is_none_or(|d| !Weak::ptr_eq(d, &Arc::downgrade(&app.session.doc))) {
         view.draft = Some(from.clone());
         view.graph_editor.stale();
-        view.graph_editor.link_to(
-            from.graph.as_ref().map(|graph| crate::appearance_graph_editor::Link { graph: graph.as_str().to_owned(), values: from.values.clone() }),
-        );
+        let link =
+            from.graph.as_ref().map(|graph| crate::appearance_graph_editor::Link { graph: graph.as_str().to_owned(), values: from.values.clone() });
+        // Import adds a design graph before it changes the selected look. Keep the new
+        // graph in the editor when the inspector refreshes the same target and look.
+        if view.revision.is_none() || view.graph_editor.link != link {
+            view.graph_editor.link_to(link);
+        }
         view.dirty = false;
         view.revision = Some(app.session.revision);
         view.document = Some(Arc::downgrade(&app.session.doc));
