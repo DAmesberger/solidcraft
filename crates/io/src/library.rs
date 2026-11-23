@@ -4,11 +4,15 @@
 //! A library folder holds `<Library name>.sclibrary.json` (the library's id, name and provenance)
 //! and one JSON file per entry in `materials/` and `appearances/`, each in the catalog's entry
 //! shape ([`Entry`]). A file's name is only a label: an entry is known by the id inside it.
-//! `textures/` is not read yet.
+//! Graph descriptors in `graphs/` name images in `textures/` by their SHA-256.
 //!
 //! Nothing is dropped quietly. A place that can't be read stays listed with its reason, a library
 //! that can't be used stays listed as unavailable with its reason, and an entry that can't be used
 //! stays in its library's list as refused with its reason.
+#[path = "library_graphs.rs"]
+mod graph_entries;
+pub use graph_entries::GraphEntry;
+
 use crate::catalog::{Definition, Entry, LibraryLook, LibraryMaterial, Provenance, identifier, text};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -28,9 +32,9 @@ pub const BUILT_IN_ID: &str = "solidcraft.builtin";
 pub struct Limits {
     pub manifest_bytes: u64,
     pub entry_bytes: u64,
-    /// Entry files in `materials/`, and again in `appearances/`.
+    /// The file count in each entry subfolder or the textures subfolder.
     pub entries_per_kind: usize,
-    /// The manifest and every entry file together.
+    /// The manifest, all entry files and their retained image copies together.
     pub library_bytes: u64,
     /// Files directly in a library folder, its manifest included, and again its subfolders.
     pub files_beside_manifest: usize,
@@ -75,6 +79,7 @@ pub enum Cap {
     ManifestBytes,
     EntryBytes,
     EntriesPerKind(Kind),
+    TextureFiles,
     LibraryBytes,
     FilesBesideManifest,
     LibrariesPerFolder,
@@ -102,7 +107,7 @@ pub enum Reason {
     },
     /// The entry's id belongs to another library.
     ForeignId,
-    /// A material in `appearances/`, or an appearance in `materials/`.
+    /// An entry filed under a different kind.
     WrongKind,
     Unsupported(String),
 }
@@ -119,6 +124,7 @@ impl std::fmt::Display for Reason {
                 Cap::ManifestBytes => write!(f, "the manifest is larger than {limit} bytes"),
                 Cap::EntryBytes => write!(f, "the entry file is larger than {limit} bytes"),
                 Cap::EntriesPerKind(kind) => write!(f, "more than {limit} files in {}/", kind.folder()),
+                Cap::TextureFiles => write!(f, "more than {limit} files in textures/"),
                 Cap::LibraryBytes => write!(f, "the library is larger than {limit} bytes"),
                 Cap::FilesBesideManifest => write!(f, "more than {limit} files or folders beside the manifest"),
                 Cap::LibrariesPerFolder => write!(f, "more than {limit} folders"),
@@ -142,12 +148,14 @@ pub enum Status {
 pub enum Kind {
     Material,
     Appearance,
+    Graph,
 }
 impl Kind {
     fn folder(self) -> &'static str {
         match self {
             Self::Material => "materials",
             Self::Appearance => "appearances",
+            Self::Graph => "graphs",
         }
     }
     fn of(definition: &Definition) -> Self {
@@ -160,12 +168,12 @@ impl Kind {
 
 /// One entry as listed: its label (file name, or the built-in name) and the entry or why not.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Listed {
+pub struct Listed<T = Entry> {
     label: String,
     kind: Kind,
-    state: Result<Entry, Reason>,
+    state: Result<T, Reason>,
 }
-impl Listed {
+impl<T> Listed<T> {
     pub fn label(&self) -> &str {
         &self.label
     }
@@ -173,7 +181,7 @@ impl Listed {
         self.kind
     }
     /// The entry, or why it can't be used.
-    pub fn entry(&self) -> Result<&Entry, &Reason> {
+    pub fn entry(&self) -> Result<&T, &Reason> {
         self.state.as_ref()
     }
 }
@@ -186,10 +194,18 @@ pub struct Library {
     status: Status,
     read_only: Option<Reason>,
     entries: Vec<Listed>,
+    graphs: Vec<Listed<GraphEntry>>,
 }
 impl Library {
     fn unavailable(folder: &str, reason: Reason) -> Self {
-        Self { folder: Some(folder.to_string()), header: None, status: Status::Unavailable(reason), read_only: None, entries: Vec::new() }
+        Self {
+            folder: Some(folder.to_string()),
+            header: None,
+            status: Status::Unavailable(reason),
+            read_only: None,
+            entries: Vec::new(),
+            graphs: Vec::new(),
+        }
     }
     /// The library's own folder; `None` for the built-in library.
     pub fn folder(&self) -> Option<&str> {
@@ -215,6 +231,14 @@ impl Library {
     }
     pub fn entries(&self) -> &[Listed] {
         &self.entries
+    }
+    /// The graph files in this library, including the reason for each refusal.
+    pub fn graphs(&self) -> &[Listed<GraphEntry>] {
+        &self.graphs
+    }
+    /// A usable graph by its qualified entry id.
+    pub fn graph(&self, id: &str) -> Option<&GraphEntry> {
+        self.graphs.iter().find_map(|listed| listed.entry().ok().filter(|e| e.id == id))
     }
     /// Where the library is, for messages: its folder, or "the built-in library".
     pub fn shown_at(&self) -> &str {
@@ -338,8 +362,18 @@ fn read_header(bytes: &[u8]) -> Result<Header, Reason> {
     Ok(header)
 }
 
+/// The folder reader recognizes both descriptor families, while the single-file catalog
+/// continues to recognize only its own. Distinguish a known entry in the wrong folder from
+/// an entry written by a future version.
+fn decode_entry<T: serde::de::DeserializeOwned, Other: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, Reason> {
+    match decode(bytes) {
+        Err(Reason::NewerFormat) if decode::<Other>(bytes).is_ok() => Err(Reason::WrongKind),
+        result => result,
+    }
+}
+
 fn read_entry(bytes: &[u8], kind: Kind, library_id: &str) -> Result<Entry, Reason> {
-    let entry: Entry = decode(bytes)?;
+    let entry = decode_entry::<Entry, GraphEntry>(bytes)?;
     if Kind::of(&entry.definition) != kind {
         return Err(Reason::WrongKind);
     }
@@ -367,26 +401,39 @@ fn read_library(dir: &str, listing: Listing, limits: &Limits) -> Library {
         Err(reason) => return unavailable(reason),
     };
     let mut entries = Vec::new();
-    for kind in [Kind::Material, Kind::Appearance] {
-        // Only a real folder: a link named `materials` is not one, so a library can't reach outside.
+    let mut graphs = Vec::new();
+    for kind in [Kind::Material, Kind::Appearance, Kind::Graph] {
+        // A symlink named after a subfolder is not a directory in the listing.
         let Some(sub) = listing.folders.iter().find(|f| file_label(f) == kind.folder()) else { continue };
         let files = match crate::vfs::files_in(sub, limits.entries_per_kind) {
             Ok(files) => files,
             Err(e) => return unavailable(listing_reason(&e, Cap::EntriesPerKind(kind), limits.entries_per_kind)),
         };
+        let mut textures = None;
         for path in files.iter().filter(|p| ends_with(p, ".json")) {
-            let state = read_capped(path, Cap::EntryBytes, limits.entry_bytes).and_then(|bytes| {
+            let bytes = read_capped(path, Cap::EntryBytes, limits.entry_bytes);
+            if let Ok(bytes) = &bytes {
                 used = used.saturating_add(bytes.len() as u64);
-                read_entry(&bytes, kind, &header.id)
-            });
+            }
             if used > limits.library_bytes {
                 return unavailable(Reason::OverLimit { cap: Cap::LibraryBytes, limit: limits.library_bytes });
             }
-            entries.push(Listed { label: file_label(path), kind, state });
+            let label = file_label(path);
+            if kind == Kind::Graph {
+                let files = textures.get_or_insert_with(|| graph_entries::texture_files(&listing.folders, limits));
+                let state = bytes.and_then(|b| graph_entries::read(&b, &header.id, files, &mut used, limits));
+                if let Err(reason @ Reason::OverLimit { cap: Cap::LibraryBytes, .. }) = &state {
+                    return unavailable(reason.clone());
+                }
+                graphs.push(Listed { label, kind, state });
+            } else {
+                let state = bytes.and_then(|b| read_entry(&b, kind, &header.id));
+                entries.push(Listed { label, kind, state });
+            }
         }
     }
-    refuse_duplicate_entries(&mut entries);
-    Library { folder: Some(dir.to_string()), header: Some(header), status: Status::Available, read_only: None, entries }
+    refuse_duplicate_entries(&mut entries, &mut graphs);
+    Library { folder: Some(dir.to_string()), header: Some(header), status: Status::Available, read_only: None, entries, graphs }
 }
 
 fn read_capped(path: &str, cap: Cap, limit: u64) -> Result<Vec<u8>, Reason> {
@@ -404,22 +451,26 @@ fn read_capped(path: &str, cap: Cap, limit: u64) -> Result<Vec<u8>, Reason> {
 
 /// Two files with one entry id: neither is used, and each names the others by kind folder and file name
 /// (`materials/Common.json` and `appearances/Common.json` share a file name).
-fn refuse_duplicate_entries(entries: &mut [Listed]) {
-    let mut seen: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, listed) in entries.iter().enumerate() {
-        if let Ok(entry) = &listed.state {
-            seen.entry(entry.id.clone()).or_default().push(i);
-        }
+fn refuse_duplicate_entries(entries: &mut [Listed], graphs: &mut [Listed<GraphEntry>]) {
+    let mut seen: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (id, kind, label) in entries
+        .iter()
+        .filter_map(|l| Some((&l.entry().ok()?.id, l.kind, &l.label)))
+        .chain(graphs.iter().filter_map(|l| Some((&l.entry().ok()?.id, l.kind, &l.label))))
+    {
+        seen.entry(id.clone()).or_default().push(format!("{}/{label}", kind.folder()));
     }
-    for indices in seen.values().filter(|v| v.len() > 1) {
-        let names: Vec<(usize, String)> =
-            indices.iter().filter_map(|&i| entries.get(i).map(|l| (i, format!("{}/{}", l.kind.folder(), l.label)))).collect();
-        for &(i, _) in &names {
-            let others = names.iter().filter(|(j, _)| *j != i).map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
-            if let Some(listed) = entries.get_mut(i) {
-                listed.state = Err(Reason::DuplicateId { other: others });
-            }
-        }
+    fn refuse<T>(listed: &mut Listed<T>, id: impl Fn(&T) -> &String, seen: &BTreeMap<String, Vec<String>>) {
+        let Some(names) = listed.entry().ok().and_then(|entry| seen.get(id(entry))).filter(|v| v.len() > 1) else { return };
+        let own = format!("{}/{}", listed.kind.folder(), listed.label);
+        let others = names.iter().filter(|name| **name != own).map(String::as_str).collect::<Vec<_>>().join(", ");
+        listed.state = Err(Reason::DuplicateId { other: others });
+    }
+    for listed in entries {
+        refuse(listed, |e| &e.id, &seen);
+    }
+    for listed in graphs {
+        refuse(listed, |e| &e.id, &seen);
     }
 }
 
@@ -458,11 +509,15 @@ impl Set {
     pub fn libraries(&self) -> impl Iterator<Item = (&Library, &Status)> {
         self.places.iter().flat_map(|p| &p.libraries).zip(&self.statuses)
     }
-    /// Every listed entry of every library this set uses, refused ones included, with its library.
+    /// Scalar entries in every available library, refused entries included.
     pub fn entries(&self) -> impl Iterator<Item = (&Library, &Listed)> {
         self.libraries().filter(|(_, s)| **s == Status::Available).flat_map(|(l, _)| l.entries.iter().map(move |e| (l, e)))
     }
-    /// A usable entry by its id (`<library id>/<entry id>`).
+    /// Graph entries in every available library, refused entries included.
+    pub fn graphs(&self) -> impl Iterator<Item = (&Library, &Listed<GraphEntry>)> {
+        self.libraries().filter(|(_, s)| **s == Status::Available).flat_map(|(l, _)| l.graphs.iter().map(move |e| (l, e)))
+    }
+    /// A usable scalar entry by its id (`<library id>/<entry id>`).
     pub fn get(&self, id: &str) -> Option<&Entry> {
         self.entries().find_map(|(_, listed)| listed.state.as_ref().ok().filter(|e| e.id == id))
     }
@@ -510,7 +565,8 @@ fn built_in() -> Library {
         }
         Err(e) => Listed { label: preset.name.to_string(), kind: Kind::Appearance, state: Err(Reason::Unsupported(e.to_string())) },
     }));
-    refuse_duplicate_entries(&mut entries);
+    let mut graphs = graph_entries::built_in(from);
+    refuse_duplicate_entries(&mut entries, &mut graphs);
     let provenance = Provenance { license: LICENSE.into(), author: Some(AUTHOR.into()), source_url: None };
     Library {
         folder: None,
@@ -518,6 +574,7 @@ fn built_in() -> Library {
         status: Status::Available,
         read_only: Some(Reason::BuiltIn),
         entries,
+        graphs,
     }
 }
 

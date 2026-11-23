@@ -287,9 +287,12 @@ A graph is JSON (`appearance_graph::AppearanceGraph`):
 - `nodes` hold `id`, `kind`, `params` and `inputs`. An input is a constant, a connection
   (`{"from": "node"}` or `{"from": "node.output"}`, with an optional `fallback`) or an interface
   reference (`{"interface": "name"}`).
-- Optional: `interface`, `source` (generic provenance: library id, entry id, revision) and
+- Optional: `interface`, `source` (library id, local entry id and revision) and
   `layout` (editor-only canvas positions, which nothing in this model reads).
 - Unknown fields, kinds, params and inputs are refused rather than dropped.
+
+A folder entry’s revision is a lowercase SHA-256 digest. Earlier numeric revisions keep their
+saved form. Provenance describes the copy in the design and does not affect shading.
 
 Reading a graph only parses it; validation checks it.
 
@@ -333,6 +336,24 @@ assets live beside them.
 - The change is one pending format file, `appearance-graphs.rs`. It has no step: older designs
   are not rewritten. The last release warns about the newer format number, shows each look's
   `color`, and keeps the tables it cannot read when it saves.
+
+### 4.3 In a library folder
+
+Beside the library’s `*.sclibrary.json` manifest, put one entry descriptor in `graphs/` for
+each finish. Use an id such as `studio/oak`, where `studio` is the manifest’s id. The file
+name may change without changing the entry id. The descriptor holds four fields:
+
+| Field | Contents |
+|---|---|
+| `id` | Qualified library and entry id |
+| `provenance` | Licence and optional author and source URL, as for other folder entries |
+| `definition` | `{"kind":"graph","value": …}`, with the graph from §4.1 as the value |
+| `revision` | Lowercase SHA-256 of the compact serialized pair `[provenance, definition]`. Rust authors can use `solidcraft_io::library::GraphEntry::content_revision`. |
+
+Put the original encoded bytes for each referenced image in `textures/<sha256>.png` or
+`textures/<sha256>.jpeg`. The digest is over those file bytes. A missing image, a mismatched
+digest or an invalid graph is reported alongside the entry when browsing. Import copies the
+graph and its images into the design. Later folder edits do not change the imported finish.
 
 ## 5. What the GPU back ends read
 
@@ -388,6 +409,8 @@ whole change, checks it, and leaves the design as it was when anything is refuse
 | `appearance.graph.set` | `{id, graph}` (a whole replacement) | `{id, cost}` |
 | `appearance.graph.edit` | `{id, ops: [add_node \| remove_node \| connect \| disconnect \| set_input \| set_param \| set_interface]}`, all applied or none | `{id, cost}` |
 | `appearance.graph.get` / `.list` (read-only) | `{id}` / `{}` | the graph with its cost and uses / `[{id, name, uses, source?}]` |
+| `appearance.graph.library.list` (read-only) | `{folder?}` | The library id, its graph entries and any refused entries with reasons |
+| `appearance.graph.library.import` | `{folder?, entry, revision?, id?}` | The design graph id and cost. The graph and its referenced images are copied in one undo step. |
 | `appearance.graph.duplicate` | `{id, new_id?, name?}` | `{id, cost}` |
 | `appearance.graph.delete` | `{id, replace_with?}`; refused while looks use the graph, unless `replace_with` is given | `{replaced}` |
 | `appearance.texture.add` | `{path \| data_base64, name?}` (PNG or JPEG) | `{texture, width, height}` |

@@ -273,6 +273,59 @@ pub struct GraphListResult {
     pub param_warnings: Vec<String>,
 }
 
+/// Browse the built-in appearance graphs or a library folder.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GraphLibraryListParams {
+    /// Path to one library folder. Omit for the built-in library.
+    pub folder: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GraphLibraryImportParams {
+    /// Path to one library folder. Omit for the built-in library.
+    pub folder: Option<String>,
+    /// The qualified entry id returned by appearance.graph.library.list.
+    pub entry: String,
+    /// When supplied, refuse if the entry has changed since browsing.
+    pub revision: Option<String>,
+    /// The design graph id. Omit to allocate one from the graph's name.
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GraphLibraryListResult {
+    pub library: String,
+    pub entries: Vec<GraphLibraryItem>,
+    pub refused: Vec<GraphLibraryRefusal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GraphLibraryItem {
+    pub id: String,
+    pub name: String,
+    pub revision: String,
+    pub provenance: GraphLibraryProvenance,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GraphLibraryProvenance {
+    pub license: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GraphLibraryRefusal {
+    pub label: String,
+    pub reason: String,
+}
+
 /// Copy a graph under a new id.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

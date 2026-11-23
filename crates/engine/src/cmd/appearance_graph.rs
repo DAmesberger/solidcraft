@@ -6,6 +6,8 @@
 //! A look that names a graph shows its graph's base response in the standard view, so its
 //! `color` is computed here ([`settle_look`]), and every command that changes a graph recomputes
 //! the colour of the looks that use it ([`settle`]).
+mod library;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::CommandSpec;
@@ -97,6 +99,19 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&LIST)
         .output(output_schema_for::<GraphListResult>)
         .params("no parameters → {graphs: [{id, name, uses, source?}]}; read-only"),
+    CommandSpec::new("appearance.graph.library.list", "Browse Appearance Graph Library", crate::checked!("appearance.graph.library.list", library::list))
+        .icon("list")
+        .noundo()
+        .doc_only()
+        .contract(&library::LIST)
+        .output(output_schema_for::<crate::schema::appearance_graph::GraphLibraryListResult>)
+        .params("folder? → {library, entries: [{id, name, revision, provenance}], refused: [{label, reason}]}. Omit folder for the built-in library."),
+    CommandSpec::new("appearance.graph.library.import", "Import Appearance Graph", crate::checked!("appearance.graph.library.import", library::import))
+        .icon("appearance")
+        .doc_only()
+        .contract(&library::IMPORT)
+        .output(output_schema_for::<GraphChanged>)
+        .params("entry, folder?, revision?, id? → {id, cost}. Copy the graph and its images into this design in one undo step."),
     CommandSpec::new("appearance.graph.duplicate", "Duplicate Appearance Graph", crate::checked!("appearance.graph.duplicate", duplicate))
         .icon("copy")
         .contract(&DUPLICATE)
