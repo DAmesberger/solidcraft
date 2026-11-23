@@ -27,6 +27,11 @@ pub(crate) struct PipelineSpec {
 impl PipelineSpec {
     /// The pipeline of `source` for vertices with (`object`) or without the object position.
     pub(crate) fn build(&self, label: &str, source: String, object: bool, variant: Variant) -> wgpu::RenderPipeline {
+        let (cull, blend) = match variant {
+            Variant::Opaque | Variant::Placed => (None, None),
+            Variant::Far => (Some(wgpu::Face::Front), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
+            Variant::Near => (Some(wgpu::Face::Back), Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
+        };
         let device = &self.device;
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()) });
@@ -38,13 +43,13 @@ impl PipelineSpec {
             label: Some(label),
             layout: Some(&self.layout),
             vertex: wgpu::VertexState { module: &module, entry_point: Some(entry), buffers, compilation_options: Default::default() },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, cull_mode: cull, ..Default::default() },
             depth_stencil: self.depth.clone(),
             multisample: wgpu::MultisampleState { count: self.samples.max(1), mask: !0, alpha_to_coverage_enabled: false },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_mat"),
-                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState { format: self.format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 compilation_options: Default::default(),
             }),
             multiview_mask: None,

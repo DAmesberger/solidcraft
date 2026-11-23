@@ -4,7 +4,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-pub mod anisotropic_surface;
+pub use solidcraft_viewport::anisotropic_surface;
 mod backend;
 mod curve_display;
 pub mod film;

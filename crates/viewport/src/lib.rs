@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod analysis;
+pub mod anisotropic_surface;
 pub mod appearance_graph;
 mod camera;
 pub mod clear_coat;
