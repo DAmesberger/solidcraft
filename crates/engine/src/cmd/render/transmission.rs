@@ -13,6 +13,10 @@ pub(super) struct Raytrace {
     pub dielectrics: Vec<Override>,
     pub clear_coats: Vec<super::clear_coat::Override>,
     pub textures: Vec<super::textures::Override>,
+    /// Job-only replacements for graph interface values, by graph or exact body binding.
+    pub graph_values: Vec<super::graphs::Override>,
+    /// Encoded PNG or JPEG data referenced by an interface texture value.
+    pub graph_textures: Vec<String>,
 }
 fn bounded_dielectrics<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<Override>, D::Error> {
     struct Inputs;

@@ -188,7 +188,9 @@ pub(crate) fn form_refusal(params: &Value, progressive: bool) -> Option<&'static
     let raytrace = params.get("raytrace").and_then(Value::as_object);
     let environment = params.get("environment");
     if progressive {
-        let cpu_raytrace = raytrace.is_some_and(|o| o.keys().any(|key| !matches!(key.as_str(), "dielectrics" | "clear_coats" | "textures")));
+        let cpu_raytrace = raytrace.is_some_and(|o| {
+            o.keys().any(|key| !matches!(key.as_str(), "dielectrics" | "clear_coats" | "textures" | "graph_values" | "graph_textures"))
+        });
         let refused = params.get("integrator").is_some_and(|v| v.as_str() != Some("raster"))
             || cpu_raytrace
             || params.get("led_strip").is_some()
@@ -196,7 +198,7 @@ pub(crate) fn form_refusal(params: &Value, progressive: bool) -> Option<&'static
             || environment.is_some_and(|e| e.is_object() && e.get("kind").is_none());
         return refused.then_some("progressive rendering does not accept CPU raytrace, environment or LED options");
     }
-    let refused = raytrace.is_some_and(|o| ["clear_coats", "textures"].iter().any(|key| o.contains_key(*key)))
+    let refused = raytrace.is_some_and(|o| ["clear_coats", "textures", "graph_values", "graph_textures"].iter().any(|key| o.contains_key(*key)))
         || environment.is_some_and(|e| e.get("kind").is_some())
         || ["lens", "lighting", "studio", "tone_map", "supersampling", "denoise_settings", "denoise_diagnostics"]
             .iter()
@@ -614,6 +616,7 @@ pub(crate) fn prepare_with_metadata(
     let request = ImageRequest {
         studio_weights: validate_studio_weights(input.studio_weights, command)?,
         environment: None,
+        graphs: None,
         textures,
         integrator: input.integrator,
         raytrace: input.raytrace.take(),
@@ -676,6 +679,7 @@ pub(crate) fn prepare_with_metadata(
         host: retyped(command, &host.kind())?,
         stage_panels: settings.stage.len(),
         environment: environment_info.as_ref().map(|info| retyped(command, info)).transpose()?,
+        graphs: request.graphs.as_ref().map(|g| retyped(command, &g.summary())).transpose()?,
         textures: request.textures.as_ref().map(|maps| retyped(command, &maps.summary())).transpose()?,
         transparency,
         refraction,
@@ -738,6 +742,8 @@ fn prepare_progressive(
         && (!input.raytrace.dielectrics.is_empty()
             || !input.raytrace.clear_coats.is_empty()
             || !input.raytrace.textures.is_empty()
+            || !input.raytrace.graph_values.is_empty()
+            || !input.raytrace.graph_textures.is_empty()
             || input.lens.is_some()
             || input.lighting.is_some()
             || input.tone_map.is_some()
@@ -766,8 +772,13 @@ fn prepare_progressive(
         return Err(bad(command, "stable clear coats cannot combine with runtime clear-coat overrides"));
     }
     super::transmission::apply(&mut scene, &input.raytrace.dielectrics, command)?;
-    super::coat_bindings::apply(s, &mut scene, &coats, None, command)?;
-    super::clear_coat::apply(&mut scene, &input.raytrace.clear_coats, command)?;
+    let mut shot_coats = super::coat_bindings::apply(s, &mut scene, &coats, None, command)?;
+    shot_coats.extend(super::clear_coat::apply(&mut scene, &input.raytrace.clear_coats, command)?);
+    let captured = super::graphs::capture(s, &scene, &input.raytrace.graph_values, &input.raytrace.graph_textures, command)?;
+    let graphs = captured.map(|g| g.to_job(&shot_coats)).transpose().map_err(job_error)?.map(std::sync::Arc::new);
+    if let Some(graphs) = graphs.as_deref() {
+        super::graphs::CapturedGraphs::give_glass(graphs, &mut scene);
+    }
     let settings = if let Some(name) = &input.setup {
         s.doc.render.setups.get(name).cloned().ok_or_else(|| bad(command, "no saved render setup with that name"))?
     } else if let Some(settings) = &input.settings {
@@ -912,6 +923,7 @@ fn prepare_progressive(
         height: settings.height,
         background: settings.background,
         transparent_background: input.transparent_background,
+        graphs,
         textures: super::textures::capture_with_resources_and_filtering(
             &scene,
             &input.raytrace.textures,
@@ -950,6 +962,7 @@ fn prepare_progressive(
         host: retyped(command, &host.kind())?,
         stage_panels: settings.stage.len(),
         environment: request.environment.as_ref().map(|source| retyped(command, source.info())).transpose()?,
+        graphs: request.graphs.as_ref().map(|g| retyped(command, &g.summary())).transpose()?,
         textures: request.textures.as_ref().map(|resources| retyped(command, &resources.summary())).transpose()?,
         transparency,
         refraction,

@@ -19,6 +19,8 @@ pub(super) struct Triangle {
     pub transmission: Option<Transmission>,
     pub medium: u32,
     pub scalar_face: bool,
+    /// Negative record index for a graph-shaded triangle, zero otherwise.
+    pub graph: f32,
 }
 type MediumEdge = (usize, usize, i32);
 // The material header word reserves the high two bits for model lanes and wavelength sampling.
@@ -88,7 +90,18 @@ pub(super) fn reserved<T>(count: usize) -> Result<Vec<T>> {
 pub(super) fn flatten(scene: &ProductScene, origin: Vec3, cancel: &CancelToken) -> Result<Upload> {
     flatten_with_media(scene, origin, cancel, false)
 }
+#[cfg(test)]
 pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &CancelToken, nested: bool) -> Result<Upload> {
+    flatten_with_graphs(scene, origin, cancel, nested, &Default::default())
+}
+
+pub(super) fn flatten_with_graphs(
+    scene: &ProductScene,
+    origin: Vec3,
+    cancel: &CancelToken,
+    nested: bool,
+    graphs: &super::appearance::Records,
+) -> Result<Upload> {
     let model_bytes = model_bytes_per_triangle(scene) as usize;
     let material_bytes = 80 + model_bytes;
     let mut material_flags = if model_bytes > 0 { 0x80000000 } else { 0 };
@@ -208,6 +221,7 @@ pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &Ca
                 transmission,
                 medium: body_index as u32 + 1,
                 scalar_face: look.is_some(),
+                graph: graphs.interior(body_index, face, look.is_some()),
             });
         }
         if authored_optical && !triangles[body_start..].iter().any(|t| t.transmission.is_some()) {
@@ -311,8 +325,12 @@ pub(super) fn flatten_with_media(scene: &ProductScene, origin: Vec3, cancel: &Ca
             Vec3::new(
                 scatter.map_or(0.0, |s| s.scattering_per_mm),
                 scatter.map_or(0.0, |s| s.anisotropy),
-                (u32::from(scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/")))
-                    | (u32::from(t.scalar_face) << 1)) as f64,
+                if t.graph != 0.0 {
+                    f64::from(t.graph)
+                } else {
+                    (u32::from(scene.meshes.get(t.medium.saturating_sub(1) as usize).is_some_and(|body| body.name.starts_with("__render_stage__/")))
+                        | (u32::from(t.scalar_face) << 1)) as f64
+                },
             ),
             parent_triangle as f32,
         );

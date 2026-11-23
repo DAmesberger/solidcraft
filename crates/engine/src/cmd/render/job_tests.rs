@@ -117,7 +117,7 @@ fn saved_gpu_job_routes_before_dispatch_and_reaches_preflight_and_start_without_
             options: JobOptions,
         ) -> solidcraft_render::job::Result<Admission> {
             options.validate()?;
-            solidcraft_render::job::admit(scene, &ImageRequest { environment: None, textures: None, ..request.clone() })
+            solidcraft_render::job::admit(scene, &ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() })
         }
         fn begin(
             &self,
@@ -126,7 +126,7 @@ fn saved_gpu_job_routes_before_dispatch_and_reaches_preflight_and_start_without_
             _: JobOptions,
             cancel: CancelToken,
         ) -> solidcraft_render::job::Result<Box<dyn ImageWork>> {
-            Ok(Box::new(ImageTask::new(scene, ImageRequest { environment: None, textures: None, ..request }, cancel)?))
+            Ok(Box::new(ImageTask::new(scene, ImageRequest { environment: None, graphs: None, textures: None, ..request }, cancel)?))
         }
     }
     let mut s = Session::default();
@@ -409,7 +409,7 @@ fn additional_executor_routes_by_capability_and_survives_document_adoption() {
             // admit_geometry counts source geometry only; this executor renders through the
             // CPU task, which ignores the environment and textures, so budget its pixels and
             // PNG with the CPU estimate for the same frame.
-            solidcraft_render::job::admit(scene, &ImageRequest { environment: None, textures: None, ..request.clone() })
+            solidcraft_render::job::admit(scene, &ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() })
         }
         fn begin(
             &self,
@@ -3083,6 +3083,7 @@ mod bounded_render_preparation {
                                 raytrace: None,
                                 studio_weights: None,
                                 environment: None,
+                                graphs: None,
                                 textures: None,
                                 background: [255; 3],
                                 transparent_background: false,

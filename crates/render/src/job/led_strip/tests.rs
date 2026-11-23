@@ -195,6 +195,7 @@ mod consumer {
         ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raytrace,
             raytrace: Some(options),

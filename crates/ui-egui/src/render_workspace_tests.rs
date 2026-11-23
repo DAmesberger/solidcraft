@@ -1341,6 +1341,7 @@ fn opaque_pbr_product_gpu_and_cpu_share_color_and_material_semantics() {
             ImageRequest {
                 studio_weights: None,
                 environment: None,
+                graphs: None,
                 textures: None,
                 camera,
                 width: SIZE,
@@ -4838,6 +4839,7 @@ fn large_image_display_uses_captured_profile_and_keeps_export_pixels_unchanged()
         background: [0; 3],
         transparent_background: false,
         environment: None,
+        graphs: None,
         textures: None,
     };
     let limits = captured_image_limits(&request);

@@ -316,7 +316,7 @@ impl solidcraft_render::job::ImageExecutor for NumericalGpu {
         options: JobOptions,
     ) -> solidcraft_render::job::Result<Admission> {
         options.validate()?;
-        solidcraft_render::job::admit(scene, &ImageRequest { environment: None, textures: None, ..request.clone() })
+        solidcraft_render::job::admit(scene, &ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() })
     }
     fn begin(
         &self,
@@ -325,7 +325,7 @@ impl solidcraft_render::job::ImageExecutor for NumericalGpu {
         _: JobOptions,
         cancel: CancelToken,
     ) -> solidcraft_render::job::Result<Box<dyn ImageWork>> {
-        Ok(Box::new(ImageTask::new(scene, ImageRequest { environment: None, textures: None, ..request }, cancel)?))
+        Ok(Box::new(ImageTask::new(scene, ImageRequest { environment: None, graphs: None, textures: None, ..request }, cancel)?))
     }
 }
 

@@ -243,6 +243,7 @@ fn request(size: u32) -> ImageRequest {
         background: [0; 3],
         transparent_background: false,
         environment: None,
+        graphs: None,
         textures: None,
     }
 }

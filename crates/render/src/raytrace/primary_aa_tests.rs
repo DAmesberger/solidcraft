@@ -274,6 +274,7 @@ fn progressive_area_fixture(samples: u32, led: bool) -> ImageTask {
     let request = ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options.clone()),
@@ -408,6 +409,7 @@ fn fixture(samples: u8, r: u8, left: Option<bool>) -> ImageTask {
     let request = ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options.clone()),
@@ -2683,7 +2685,7 @@ fn cpu_map_active_producer_refuses_legacy_selected_optics_without_erasing_any_in
     assert!(request.textures.is_some());
     let mut legacy = options.clone();
     legacy.reflections = None;
-    let plain = ImageRequest { raytrace: Some(legacy.clone()), textures: None, ..request };
+    let plain = ImageRequest { raytrace: Some(legacy.clone()), graphs: None, textures: None, ..request };
     assert!(admit(&original.scene, &plain, &legacy).is_ok());
 }
 #[test]
@@ -2929,7 +2931,7 @@ fn composed_cpu_map_and_aging_reservations_add_and_cancel_before_the_first_aging
     let task = composed_map_aging_fixture(4, false, false, false, false);
     let mut bare_options = task.options.clone();
     bare_options.aging = None;
-    let bare_request = ImageRequest { textures: None, raytrace: Some(bare_options.clone()), ..task.request.clone() };
+    let bare_request = ImageRequest { graphs: None, textures: None, raytrace: Some(bare_options.clone()), ..task.request.clone() };
     let bare = admit(&task.scene, &bare_request, &bare_options).unwrap();
     let map_bytes =
         job::textures::cpu_cache::CpuTextureCache::required_bytes(task.request.textures.as_ref().unwrap(), &task.scene, &task.options).unwrap();
@@ -7761,6 +7763,7 @@ fn workstation_admits_combined_maximum_quality_and_optional_pilots_photons_witho
                     camera: Default::default(),
                     studio_weights: None,
                     environment: None,
+                    graphs: None,
                     textures: None,
                     background: [0; 3],
                     transparent_background: false,

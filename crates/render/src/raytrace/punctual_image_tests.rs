@@ -48,6 +48,7 @@ fn task(blocker: Option<(f64, f64)>, shadows: bool) -> ImageTask {
     let request = ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options.clone()),

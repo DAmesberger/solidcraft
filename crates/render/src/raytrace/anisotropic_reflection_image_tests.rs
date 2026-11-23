@@ -68,6 +68,7 @@ fn request(orientation: AnisotropicOrientation, reflect: bool) -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options),

@@ -48,6 +48,7 @@ pub(in crate::raytrace) fn request(options: RaytraceOptions) -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: Integrator::Raytrace,
         raytrace: Some(options),

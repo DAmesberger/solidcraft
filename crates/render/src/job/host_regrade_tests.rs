@@ -55,6 +55,7 @@ fn fixture(raw: bool) -> (ImageHost, JobHandle, Arc<AtomicUsize>, Presentation) 
         camera: Default::default(),
         integrator: Default::default(),
         raytrace: None,
+        graphs: None,
         textures: None,
         environment: None,
     };

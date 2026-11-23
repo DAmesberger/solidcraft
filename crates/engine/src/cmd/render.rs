@@ -21,6 +21,7 @@ mod clear_coat;
 mod coat_bindings;
 mod effects;
 mod environment;
+mod graphs;
 mod jobs;
 pub(crate) use jobs::{
     Prepared as PreparedCapture, cancel_params as render_cancel_params, form_refusal as render_form_refusal,

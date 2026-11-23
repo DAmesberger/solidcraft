@@ -36,6 +36,7 @@ fn request(width: u32, height: u32, budget: CpuBudget) -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: Integrator::Raytrace,
         raytrace: Some(RaytraceOptions {

@@ -116,7 +116,39 @@ fn pixels(
     shared.insert(map.identity(), record);
     Ok(record)
 }
+#[cfg(test)]
 pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, origin: Vec3, cancel: &CancelToken) -> Result<Vec<u8>> {
+    runtime_maps(resources, body_count, origin, cancel, &mut Default::default())
+}
+
+pub(super) fn flatten_with_graphs(
+    resources: Option<&RuntimeTextures>,
+    graphs: Option<&solidcraft_render::job::graphs::GraphAppearances>,
+    body_count: usize,
+    origin: Vec3,
+    cancel: &CancelToken,
+    policy: &solidcraft_viewport_gpu::appearance::ResidentPolicy,
+) -> Result<(Vec<u8>, super::appearance::Records)> {
+    let mut shared = std::collections::BTreeMap::new();
+    let mut bytes = runtime_maps(resources, body_count, origin, cancel, &mut shared)?;
+    if resources.is_some_and(RuntimeTextures::filtering) {
+        // Quality maps pack their top level. Graph images read four linear f32 channels.
+        shared.clear();
+    }
+    let records = match graphs {
+        Some(graphs) => super::appearance::append(&mut bytes, graphs, origin, cancel, &shared, policy)?,
+        None => Default::default(),
+    };
+    Ok((bytes, records))
+}
+
+fn runtime_maps(
+    resources: Option<&RuntimeTextures>,
+    body_count: usize,
+    origin: Vec3,
+    cancel: &CancelToken,
+    shared: &mut std::collections::BTreeMap<([u8; 32], u8), (u32, [u32; 2])>,
+) -> Result<Vec<u8>> {
     let Some(resources) = resources else {
         return Ok(vec![0; 16]);
     };
@@ -128,7 +160,6 @@ pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, or
     bytes.resize((header + record_words) * 4, 0);
     write_word(&mut bytes, 0, (body_count + 1) as u32)?;
     write_word(&mut bytes, 1, u32::from(resources.filtering()))?;
-    let mut shared = std::collections::BTreeMap::new();
     for (index, binding) in resources.bindings().iter().enumerate() {
         cancel.check()?;
         let record = header + index * 24;
@@ -144,10 +175,10 @@ pub(super) fn flatten(resources: Option<&RuntimeTextures>, body_count: usize, or
                 write_word(&mut bytes, record + offset + k, (c as f32).to_bits())?;
             }
         }
-        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, resources.filtering(), &mut shared)?;
-        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, resources.filtering(), &mut shared)?;
-        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, resources.filtering(), &mut shared)?;
-        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, resources.filtering(), &mut shared)?;
+        let (base, base_size) = pixels(&mut bytes, binding.base_color.as_ref(), cancel, resources.filtering(), shared)?;
+        let (normal, normal_size) = pixels(&mut bytes, binding.normal.as_ref(), cancel, resources.filtering(), shared)?;
+        let (roughness, roughness_size) = pixels(&mut bytes, binding.roughness.as_ref(), cancel, resources.filtering(), shared)?;
+        let (metallic, metallic_size) = pixels(&mut bytes, binding.metallic.as_ref(), cancel, resources.filtering(), shared)?;
         let roles = if metallic != 0 {
             4
         } else if roughness != 0 {

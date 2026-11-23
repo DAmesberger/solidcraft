@@ -26,6 +26,32 @@ use solidcraft_render::job::presentation::Presentation;
 use super::check::whole;
 use crate::render_jobs::RenderQueueState;
 
+/// What the GPU path tracer can represent for one appearance graph input.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GraphInputApproximation {
+    pub input: String,
+    pub treatment: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GraphBindingApproximations {
+    pub body_index: usize,
+    pub body_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face: Option<u32>,
+    pub inputs: Vec<GraphInputApproximation>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GraphSummary {
+    pub drawn_as: String,
+    pub appearances: usize,
+    pub shapes: usize,
+    pub bindings: usize,
+    pub linear_pixel_bytes: u64,
+    pub approximations: Vec<GraphBindingApproximations>,
+}
+
 /// The value as a `T`, with serde's message passed on whole: the handler parses the same type
 /// from the same JSON and gives that message after its prefix, so strict gives it too.
 fn as_handler<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<T, D::Error> {
@@ -309,6 +335,8 @@ pub struct JobState {
     pub options: Map<String, Value>,
     /// The textures it uploaded, or `null`.
     pub textures: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<GraphSummary>,
     /// Preview passes left out because both preview images were still in use. The final image
     /// is complete all the same.
     pub preview_retention_skips: u32,

@@ -67,6 +67,7 @@ fn task(samples: u8, selected: bool, face_override: bool, shadows: bool) -> Imag
     let request = ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options.clone()),
@@ -233,6 +234,7 @@ fn spatial_reuse_fixture(s: u8, r: u8, selected: bool, face_override: bool, shad
     let request = ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(options.clone()),

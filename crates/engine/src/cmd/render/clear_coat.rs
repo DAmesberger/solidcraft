@@ -17,23 +17,24 @@ pub(super) struct Override {
     roughness: f64,
     ior: f64,
 }
-pub(super) fn apply(scene: &mut ProductScene, overrides: &[Override], command: &str) -> Result<()> {
+pub(super) fn apply(scene: &mut ProductScene, overrides: &[Override], command: &str) -> Result<std::collections::BTreeMap<usize, ClearCoat>> {
     if overrides.len() > solidcraft_doc::render_coat::MAX_COAT_BINDINGS {
         return Err(bad(command, "at most 64 runtime clear-coat overrides are supported"));
     }
-    let mut ordinals = std::collections::BTreeSet::new();
+    let mut coats = std::collections::BTreeMap::new();
     for input in overrides {
         if input.body_name.is_empty()
             || input.body_name.len() > 1024
             || input.body_name.chars().any(char::is_control)
-            || !ordinals.insert(input.body_index)
+            || coats.contains_key(&input.body_index)
         {
             return Err(bad(command, "clear coats require bounded names and distinct captured body ordinals"));
         }
         let coat = ClearCoat::new(input.weight, input.roughness, input.ior).map_err(|e| bad(command, e.to_string()))?;
+        coats.insert(input.body_index, coat);
         apply_one(scene, input.body_index, &input.body_name, coat, command)?;
     }
-    Ok(())
+    Ok(coats)
 }
 
 pub(super) fn apply_one(scene: &mut ProductScene, body_index: usize, body_name: &str, coat: ClearCoat, command: &str) -> Result<()> {

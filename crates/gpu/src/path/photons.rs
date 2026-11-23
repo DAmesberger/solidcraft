@@ -280,7 +280,11 @@ impl Pipelines {
     }
 }
 pub(super) fn shader_source() -> Result<String> {
-    let base = scene_shader(false).strip_suffix(DISABLED).ok_or_else(|| gpu("legacy path shader has no photon-disabled suffix"))?;
+    with_transport(scene_shader(false))
+}
+
+pub(super) fn with_transport(transport: &str) -> Result<String> {
+    let base = transport.strip_suffix(DISABLED).ok_or_else(|| gpu("legacy path shader has no photon-disabled suffix"))?;
     let mut source = String::new();
     source
         .try_reserve_exact(base.len() + PHOTONS.len())
@@ -304,6 +308,10 @@ pub(super) struct Resources {
     budget: dispatch::Budget,
 }
 impl Resources {
+    pub(super) fn set_graph_emit(&mut self, pipeline: wgpu::ComputePipeline) {
+        self.emit = pipeline;
+    }
+
     pub(super) fn new(
         context: &Context,
         options: CausticOptions,

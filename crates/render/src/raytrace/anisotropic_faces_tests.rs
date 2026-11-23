@@ -149,6 +149,7 @@ fn decoded_cpu_png_rotates_only_the_two_explicit_planar_targets() {
         let request = ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raytrace,
             raytrace: Some(options.clone()),
