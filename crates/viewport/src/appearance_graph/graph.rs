@@ -46,7 +46,15 @@ pub struct InterfaceInput {
 pub struct GraphSource {
     pub library: String,
     pub entry: String,
-    pub revision: u64,
+    pub revision: GraphRevision,
+}
+
+/// Folder entries use a SHA-256 content revision. Previously saved graphs can carry a number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum GraphRevision {
+    Number(u64),
+    Digest(String),
 }
 
 /// One node: a catalogue kind, its compile-time params and its inputs.

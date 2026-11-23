@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use solidcraft_viewport::appearance_graph::InputValue;
 use solidcraft_viewport::appearance_graph::graph::TextureRef;
 pub use solidcraft_viewport::appearance_graph::limits;
-pub use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant};
+pub use solidcraft_viewport::appearance_graph::{AppearanceGraph, Constant, GraphRevision, GraphSource};
 
 use crate::appearance::Look;
 use crate::{DocError, Document, Result};

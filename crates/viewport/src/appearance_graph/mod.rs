@@ -31,7 +31,7 @@ pub mod sample;
 mod validate;
 
 pub use catalogue::{CATALOGUE, CATALOGUE_VERSION, InputDefault, InputSpec, NodeSpec, OutputSpec, ParamKind, ParamSpec, PortType, node_spec};
-pub use graph::{AppearanceGraph, Connection, Constant, GraphSource, InputValue, InterfaceInput, InterfaceRef, Node, ParamValue};
+pub use graph::{AppearanceGraph, Connection, Constant, GraphRevision, GraphSource, InputValue, InterfaceInput, InterfaceRef, Node, ParamValue};
 pub use ir::{
     GraphError, GraphIssue, Ir, ShapeKey, UniformSlot, Validated, base_response, base_sample, look_base_sample, lower, uniform_words, validate,
 };

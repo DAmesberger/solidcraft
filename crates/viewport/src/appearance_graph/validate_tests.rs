@@ -162,6 +162,22 @@ fn base_responses_read_constants_fallbacks_and_the_bg_surface() {
 }
 
 #[test]
+fn library_revisions_round_trip_and_do_not_change_shading() {
+    let graph = fixture("brushed-stainless");
+    let shape = ir_of(&graph).shape;
+    for revision in [json!(3), json!("a1".repeat(32))] {
+        let mut saved = serde_json::to_value(&graph).unwrap();
+        saved["source"] = json!({"library": "studio", "entry": "brushed", "revision": revision});
+        let copy = from_json(saved.clone());
+        assert_eq!(serde_json::to_value(&copy).unwrap(), saved);
+        assert_eq!(ir_of(&copy).shape, shape);
+    }
+    let mut saved = serde_json::to_value(&graph).unwrap();
+    saved["source"] = json!({"library": "studio", "entry": "brushed", "revision": "unknown"});
+    assert!(codes(&from_json(saved)).contains(&"source"));
+}
+
+#[test]
 fn the_shape_ignores_values_layout_ids_and_order() {
     let key = |g: &AppearanceGraph| ir_of(g).shape;
     let original = fixture("brushed-stainless");

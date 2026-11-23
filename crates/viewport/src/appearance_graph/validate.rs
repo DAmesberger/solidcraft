@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::catalogue::{InputDefault, InputSpec, NodeSpec, ParamKind, PortType, node_spec};
-use super::graph::{AppearanceGraph, Constant, InputValue, ParamValue};
+use super::graph::{AppearanceGraph, Constant, GraphRevision, InputValue, ParamValue};
 use super::ir::{GraphIssue, Validated};
 use super::limits;
 use crate::surface::srgb8_to_linear;
@@ -337,10 +337,15 @@ pub(super) fn analyse(graph: &AppearanceGraph) -> Result<Analysis, Vec<GraphIssu
     } else if graph.layout.values().any(|p| p.iter().any(|c| !c.is_finite() || c.abs() > limits::LAYOUT_COORD)) {
         issues.push(None, None, "layout", format!("layout positions are finite and within ±{}", limits::LAYOUT_COORD));
     }
-    if let Some(source) = &graph.source
-        && (!valid_name(&source.library, limits::NAME_BYTES) || !valid_name(&source.entry, limits::NAME_BYTES))
-    {
-        issues.push(None, None, "source", "a graph's source names a library and an entry".to_owned());
+    if let Some(source) = &graph.source {
+        if !valid_name(&source.library, limits::NAME_BYTES) || !valid_name(&source.entry, limits::NAME_BYTES) {
+            issues.push(None, None, "source", "a graph's source names a library and an entry".to_owned());
+        }
+        if let GraphRevision::Digest(digest) = &source.revision
+            && !valid_sha256(digest)
+        {
+            issues.push(None, None, "source", "a library content revision must be a lowercase SHA-256 digest".to_owned());
+        }
     }
 
     // Interface.
