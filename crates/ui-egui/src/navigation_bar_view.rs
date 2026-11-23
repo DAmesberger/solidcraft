@@ -216,7 +216,9 @@ fn slot_view(app: &SolveApp, bar: &BarLayout, slot: &'static Slot, index: usize,
         rect,
         // The View menu's slot, by the name older scenarios use.
         alias: (slot.id == "display").then_some("nav:view"),
-        dot: slot.id == SELECTION_MODE && editing.is_none() && crate::selection_mode::filters_off(app) > 0,
+        dot: editing.is_none()
+            && ((slot.id == SELECTION_MODE && crate::selection_mode::filters_off(app) > 0)
+                || (slot.id == "display" && crate::realistic_view::enabled(app))),
     }
 }
 
@@ -498,7 +500,24 @@ fn display_menu(app: &SolveApp) -> Menu {
         .into_iter()
         .map(|(id, label)| MenuEntry::Row(row(id, app.tr(label), "", &format!("view:graphics_preset:{id}"), current == id)))
         .collect();
-    entries.extend([MenuEntry::Row(preset), MenuEntry::Separator, MenuEntry::Heading(app.tr("navbar.show").to_owned())]);
+    entries.push(MenuEntry::Row(preset));
+    if !crate::render_workspace::active(app) {
+        let mut finish = MenuRow::new("material_finish", app.tr("cmd.view_material_finish"), "style", "view:material_finish");
+        finish.enabled = crate::realistic_view::available(app);
+        finish.check = Some(finish.enabled && crate::safe_graphics::material_finish(app) && !app.ui.realistic);
+        if !finish.enabled {
+            finish.tip = Some(app.tr("view.studio.full_graphics").to_owned());
+        }
+        entries.push(MenuEntry::Row(finish));
+    }
+    let mut realistic = MenuRow::new("realistic", app.tr("navbar.realistic"), "render_scene", "view:realistic");
+    realistic.check = Some(crate::realistic_view::enabled(app));
+    realistic.enabled = crate::realistic_view::available(app);
+    if !realistic.enabled {
+        realistic.tip = Some(app.tr("view.studio.full_graphics").to_owned());
+    }
+    entries.push(MenuEntry::Row(realistic));
+    entries.extend([MenuEntry::Separator, MenuEntry::Heading(app.tr("navbar.show").to_owned())]);
     for id in ["grid", "ground_shadow", "ambient_occlusion"] {
         let Some(slot) = navigation_bar::find(id) else { continue };
         entries.push(MenuEntry::Row(row(
@@ -552,6 +571,12 @@ fn display_menu(app: &SolveApp) -> Menu {
 /// A View menu pick.
 fn display_pick(app: &mut SolveApp, item: &str) {
     match item {
+        "realistic" => {
+            let _ = app.run("view.realistic", json!({}));
+        }
+        "material_finish" => {
+            let _ = app.run("view.material_finish", json!({}));
+        }
         "performance" | "quality" => {
             let _ = app.run("view.graphics_preset", json!({"preset":item}));
         }
@@ -612,6 +637,26 @@ mod tests {
         let caps = canvas_caps(&app);
         assert!(find("visual_style").unwrap().available(caps.orbit, caps.pick), "the previous bar kept style available in a sketch");
         assert!(!shows(find("selection_mode").unwrap(), caps, own_pick(&app)), "a sketch picks its own geometry");
+    }
+
+    #[test]
+    fn realistic_and_material_finish_are_adjacent_in_display() {
+        let app = crate::SolveApp::new(Default::default(), Default::default());
+        let menu = display_menu(&app);
+        let rows: Vec<_> = menu
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MenuEntry::Row(row) => Some(row),
+                _ => None,
+            })
+            .collect();
+        let finish = rows.iter().position(|row| row.id == "material_finish").unwrap();
+        let realistic = rows[finish + 1];
+        assert_eq!(realistic.id, "realistic");
+        assert_eq!(realistic.check, Some(false));
+        assert!(!realistic.enabled);
+        assert!(realistic.tip.is_some());
     }
 
     /// The bar editor's Render preview dims the selection mode and says why, as Render's own bar

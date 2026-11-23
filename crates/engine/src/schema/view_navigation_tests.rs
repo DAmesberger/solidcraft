@@ -338,6 +338,27 @@ fn next_and_previous_tab_echo_their_step_without_editing_the_design() {
 }
 
 #[test]
+fn studio_display_options_use_the_view_toggle_contract() {
+    let schema = output_schema_for::<super::DisplayToggleResult>();
+    let schema = schema.as_value();
+    let mut s = Session { param_check: ParamCheck::Strict, ..Session::default() };
+    let before = (s.doc.to_json(), s.undo.len());
+    for id in ["view.material_finish", "view.realistic"] {
+        let spec = crate::find_command(id).unwrap();
+        assert_eq!(spec.shortcut, None);
+        for params in [json!({}), json!({"on":true}), json!({"on":false})] {
+            let reply = s.execute(id, &params).unwrap();
+            assert_eq!(reply, params);
+            assert!(conforms(schema, schema, &reply));
+        }
+        for invalid in [json!({"on": 1}), json!({"view":"model"})] {
+            assert!(s.execute(id, &invalid).is_err());
+        }
+    }
+    assert_eq!((s.doc.to_json(), s.undo.len()), before);
+}
+
+#[test]
 fn navigator_checks_and_echoes_its_settings_and_refuses_a_missing_body() {
     assert_keys(input_schema_for::<super::NavigatorParams>(), &["arrows", "body", "home", "style", "texture"]);
     let schema = output_schema_for::<super::NavigatorParams>();

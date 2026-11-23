@@ -24,7 +24,7 @@ pub(crate) fn dark_parts_shading(app: &SolveApp) -> bool {
 
 /// The studio material finish is drawn: on in the settings and not in safe graphics mode.
 pub(crate) fn material_finish(app: &SolveApp) -> bool {
-    app.preferences.viewport_material_finish && !app.safe_graphics
+    app.ui.material_finish.unwrap_or(app.preferences.viewport_material_finish) && !app.safe_graphics
 }
 
 /// Blur behind panels gets the device ([`SolveApp::adopt_wgpu`]): not in safe graphics mode.

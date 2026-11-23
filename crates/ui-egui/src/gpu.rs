@@ -10,8 +10,9 @@ use egui_wgpu::wgpu;
 pub use solidcraft_viewport_gpu::view::{
     AccessMap, BlockBuilder, BlockBytes, BlockTris, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuScene, GpuTarget, INSTANCE_SIZE, InstanceLook,
     InstancedMesh, LINE_SIZE, LOD_PX, LitEdges, MAX_MOTIONS, MAX_PALETTE, Material, MotionRows, Motions, MovingLayer, PBR_SIZE, Palette,
-    PaletteIndex, PlannedBody, Renderer, SHARED_SIZE, SceneBlock, SceneSlot, SharedEdges, SharedTris, TRI_SIZE, TriClass, UNMOVED_SLOT, UploadError,
-    extend_runs, level_for, lifted_width, lit_line_style, placement_scale, runs_within, supersampled_size,
+    PaletteIndex, PlannedBody, ProductLook, Renderer, SHARED_SIZE, SceneBlock, SceneSlot, SharedEdges, SharedTris, StudioBake, StudioEnvironment,
+    StudioPreset, TRI_SIZE, TriClass, UNMOVED_SLOT, UploadError, extend_runs, level_for, lifted_width, lit_line_style, placement_scale, runs_within,
+    supersampled_size,
 };
 
 /// The part of a picture (as texture coordinates) that `rect` shows in a window `window`: the
@@ -521,6 +522,7 @@ pub(crate) fn render_offscreen(
         eye,
         size,
         Offscreen {
+            look: None,
             tess,
             product_lights: None,
             product: false,
@@ -555,6 +557,7 @@ pub(crate) fn render_product_offscreen(
         eye,
         size,
         Offscreen {
+            look: None,
             tess: None,
             product_lights,
             product: true,
@@ -572,6 +575,7 @@ pub(crate) fn render_product_offscreen(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 struct Offscreen<'a> {
+    look: Option<ProductLook>,
     tess: Option<&'a str>,
     /// The Render workspace's analytic preview lights (`Frame::product_lights`); `None` draws the
     /// product without them.
@@ -610,6 +614,7 @@ pub(crate) fn render_offscreen_preview(
         eye,
         size,
         Offscreen {
+            look: None,
             tess: None,
             product_lights: None,
             product: false,
@@ -643,6 +648,7 @@ pub(crate) fn render_ao_offscreen(
         eye,
         size,
         Offscreen {
+            look: None,
             tess,
             product_lights: None,
             product: false,
@@ -676,6 +682,7 @@ pub(crate) fn render_offscreen_ssaa(
         eye,
         size,
         Offscreen {
+            look: None,
             tess: None,
             product_lights: None,
             product: false,
@@ -711,6 +718,7 @@ pub(crate) fn render_offscreen_ao(
         eye,
         size,
         Offscreen {
+            look: None,
             tess: None,
             product_lights: None,
             product: false,
@@ -736,7 +744,7 @@ fn offscreen(
     size: u32,
     options: Offscreen<'_>,
 ) -> Option<Vec<u8>> {
-    let Offscreen { tess, product_lights, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples, preview, moving } = options;
+    let Offscreen { look, tess, product_lights, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples, preview, moving } = options;
     let (adapter, device, queue) = offscreen_device()?;
     eprintln!("offscreen adapter: {:?}", adapter.get_info().backend);
     let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
@@ -746,12 +754,16 @@ fn offscreen(
     });
     let target = GpuTarget { format, depth: Some(depth), samples: 1, tess: compute.is_some(), oit: false, edges: false };
     let mut resources = egui_wgpu::CallbackResources::default();
-    resources.insert(Renderer::new(&device, target, compute));
+    let mut renderer = Renderer::new(&device, target, compute);
+    if let Some(lighting) = look {
+        renderer.set_studio_environment(&device, &queue, &StudioEnvironment::bake(lighting.studio));
+    }
+    resources.insert(renderer);
     let none = || Arc::new(Mutex::new(None));
     let cb = solidcraft_viewport_egui::ViewportCallback(Frame {
-        product_look: None,
-        units_per_mm: 1.0,
         product_lights,
+        product_look: look,
+        units_per_mm: 1.0,
         product,
         upload_error: None,
         key: 1,
@@ -804,8 +816,25 @@ fn offscreen(
     let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
     let depth_tex = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
     let (color_view, depth_view) = (color.create_view(&Default::default()), depth_tex.create_view(&Default::default()));
-    let mut encoder = device.create_command_encoder(&Default::default());
     let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
+    // Preparation submits shader and texture work in the background. Let subsequent frames
+    // install completed resources before reading the test picture.
+    if look.is_some() {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let extra = egui_wgpu::CallbackTrait::prepare(&cb, &device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(extra.into_iter().chain([encoder.finish()]));
+            let renderer = resources.get::<Renderer>()?;
+            if !renderer.wants_redraw() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "studio appearance did not finish compiling");
+            renderer.wait_for_appearances(std::time::Duration::from_millis(50));
+            std::thread::yield_now();
+        }
+    }
+    let mut encoder = device.create_command_encoder(&Default::default());
     let extra = egui_wgpu::CallbackTrait::prepare(&cb, &device, &queue, &screen, &mut encoder, &mut resources);
     {
         let mut pass = encoder
@@ -819,7 +848,14 @@ fn offscreen(
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(if look.is_some() && solidcraft_viewport_gpu::view::reversed_depth(Some(depth)) {
+                            0.0
+                        } else {
+                            1.0
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    }),
                     stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
                 }),
                 timestamp_writes: None,
@@ -851,6 +887,42 @@ fn offscreen(
     device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
     let bytes = slice.get_mapped_range().ok()?.to_vec();
     Some(bytes)
+}
+
+/// Draw a studio-lit model or Render preview through the real callback.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn render_look_offscreen(
+    scene: GpuScene,
+    view_proj: [[f32; 4]; 4],
+    back: [f32; 3],
+    eye: [f32; 4],
+    size: u32,
+    look: Option<ProductLook>,
+    product_lights: Option<Vec<[f32; 16]>>,
+) -> Option<Vec<u8>> {
+    let product = product_lights.is_some();
+    offscreen(
+        scene,
+        None,
+        view_proj,
+        back,
+        eye,
+        size,
+        Offscreen {
+            tess: None,
+            look,
+            product_lights,
+            product,
+            srgb: true,
+            analysis: [0.0; 8],
+            analysis_colors: [0.0; 36],
+            ssaa: 1.0,
+            ao_radius: if product { 0.0 } else { 30.0 },
+            ao_samples: solidcraft_viewport_gpu::view::AO_SAMPLES,
+            preview: None,
+            moving: None,
+        },
+    )
 }
 
 /// A viewport renderer kept on an offscreen device of its own, for timing frames (prepare, paint,
@@ -982,6 +1054,7 @@ impl OffscreenFrames {
 
 #[cfg(test)]
 mod tests {
+
     /// The web app drew its scene at 1x whatever Graphics said (#11622). It now takes its sample
     /// count by the desktop's rule: the saved choice where the browser's device draws it, else
     /// the default it supports, and 1x on WebGL, where Graphics offers 1x alone.

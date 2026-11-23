@@ -274,9 +274,11 @@ pub(crate) mod quick_measure;
 #[cfg(test)]
 mod quick_measure_tests;
 pub(crate) mod quick_menu;
+pub(crate) mod realistic_view;
 pub mod recovery_ui;
 pub mod ref_images;
 pub(crate) mod refused_part;
+pub(crate) mod render_preview_graphs;
 mod render_ui;
 pub mod render_workspace;
 pub mod resume_ui;
@@ -403,6 +405,7 @@ pub mod view_windows;
 mod view_windows_tests;
 pub mod viewport;
 mod viewport_details;
+pub(crate) mod viewport_graphs;
 mod viewport_layout;
 mod viewport_status;
 mod viewport_status_fixture;
@@ -473,6 +476,10 @@ pub struct UiState {
     pub pick_mode: solidcraft_engine::PickMode,
     /// 0: shaded with edges, 1: shaded, 2: wireframe, 3: shaded with hidden edges.
     pub visual_style: u8,
+    /// Studio lighting and appearance graphs in the view being drawn.
+    pub realistic: bool,
+    /// Per-view override of the modeling viewport's neutral studio preference.
+    pub material_finish: Option<bool>,
     /// A soft shadow on the ground under the model (seen from above).
     pub ground_shadow: bool,
     /// The world's up axis (Z or Y; #3): the camera, axis view, home view and ground follow it.
@@ -510,6 +517,8 @@ impl Default for UiState {
             lasso_select: false,
             pick_mode: Default::default(),
             visual_style: 0,
+            realistic: false,
+            material_finish: None,
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
@@ -1761,6 +1770,30 @@ impl SolveApp {
             Some("component.edit_in_place") => r.and_then(|v| edit_in_place::command_ran(self, &v).map(|queued| with_queued(v, queued))),
             Some("component.finish_edit") => r.and_then(|v| edit_in_place::finish_command(self).map(|queued| with_queued(v, queued))),
             Some(layout) if layout.starts_with("tab.layout.") => r.and_then(|v| view_setups::command(self, layout, v)),
+            Some("view.realistic") => r.and_then(|mut v| {
+                let on = v["on"].as_bool().unwrap_or(!self.ui.realistic);
+                if on && !realistic_view::available(self) {
+                    return Err(self.tr("view.studio.full_graphics").to_owned());
+                }
+                self.ui.realistic = on;
+                v["on"] = json!(on);
+                Ok(v)
+            }),
+            Some("view.material_finish") => r.and_then(|mut v| {
+                if render_workspace::active(self) {
+                    return Err(self.tr("view.material_finish.model_only").to_owned());
+                }
+                let on = v["on"].as_bool().unwrap_or(self.ui.realistic || !safe_graphics::material_finish(self));
+                if on && !realistic_view::available(self) {
+                    return Err(self.tr("view.studio.full_graphics").to_owned());
+                }
+                self.ui.material_finish = Some(on);
+                if on {
+                    self.ui.realistic = false;
+                }
+                v["on"] = json!(on);
+                Ok(v)
+            }),
             Some("view.set_compass") => r.and_then(|v| documents::set_compass(self, v)),
             Some(view) if view.starts_with("tab.view.") => r.and_then(|v| documents::view_command(self, view, v)),
             Some(window) if window.starts_with("tab.window.") || window == "window.options.use_as_default" => {
@@ -2506,6 +2539,12 @@ impl SolveApp {
                 | "tab.view.reopen"
         ) {
             let _ = self.run(id, json!({}));
+            return;
+        }
+        if matches!(id, "view.realistic" | "view.material_finish") {
+            if let Err(why) = self.run(id, json!({})) {
+                self.set_status(why, true);
+            }
             return;
         }
         // A display choice opens its choices, as the navigation bar's menus do: run with no
