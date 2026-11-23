@@ -280,6 +280,7 @@ mod light_union_lease_tests {
         Ok(ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raytrace,
             raytrace: Some(options),
@@ -574,6 +575,8 @@ pub struct JobStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<PreviewInfo>,
     pub textures: Option<super::textures::TextureSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<super::graphs::GraphSummary>,
     pub options: JobOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<JobEnvironmentInfo>,
@@ -603,6 +606,7 @@ struct Record {
     started: web_time::Instant,
     presentation: Option<Arc<RetainedPresentation>>,
     textures: Option<super::textures::TextureSummary>,
+    graphs: Option<super::graphs::GraphSummary>,
     options: Option<RetainedOptions>,
     environment: Option<JobEnvironmentInfo>,
     id: JobId,
@@ -675,6 +679,7 @@ impl JobHandle {
             linear_master: data.frame.as_ref().and_then(|frame| frame.linear_master_info().cloned()),
             preview: data.preview.as_ref().map(|preview| preview.info.clone()),
             textures: self.0.textures.clone(),
+            graphs: self.0.graphs.clone(),
             options: self.0.options()?,
             environment: self.0.environment.clone(),
             job: self.0.id,
@@ -894,6 +899,7 @@ pub struct PreparedSubmission {
     environment: Option<crate::lighting::environment_input::EnvironmentInput>,
     environment_info: Option<JobEnvironmentInfo>,
     textures: Option<super::textures::TextureSummary>,
+    graphs: Option<super::graphs::GraphSummary>,
     resolved: crate::ResolvedRequest,
     execution_descriptor: [u8; 32],
     admission: Admission,
@@ -2292,6 +2298,7 @@ impl ImageHost {
             .map(|e| JobEnvironmentInfo::Cpu(e.metadata()))
             .or_else(|| request.environment.as_ref().map(|source| JobEnvironmentInfo::Gpu(source.info().clone())));
         let textures = request.textures.as_ref().map(|source| source.summary());
+        let graphs = request.graphs.as_ref().map(|source| source.summary());
         let metadata_bytes =
             if environment.is_some() { std::mem::size_of::<crate::lighting::environment_input::EnvironmentInfo>() as u64 } else { 0 }
                 + request.retained_resource_metadata_bytes();
@@ -2400,8 +2407,8 @@ impl ImageHost {
         // Preserve the original CPU option capacities in the retained request and its lease.
         // Registered executors and textured CPU jobs move resource Arcs into work
         // and keep a small public copy under the retained metadata lease.
-        let (public_request, work_request) = if self.0.executor.is_some() || request.textures.is_some() {
-            (ImageRequest { environment: None, textures: None, ..request.clone() }, Some(request))
+        let (public_request, work_request) = if self.0.executor.is_some() || request.textures.is_some() || request.graphs.is_some() {
+            (ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() }, Some(request))
         } else {
             (request, None)
         };
@@ -2416,6 +2423,7 @@ impl ImageHost {
             environment,
             environment_info,
             textures,
+            graphs,
             resolved,
             execution_descriptor,
             admission,
@@ -2506,6 +2514,7 @@ impl ImageHost {
             environment,
             environment_info,
             textures,
+            graphs,
             resolved,
             execution_descriptor: _,
             admission,
@@ -2522,6 +2531,7 @@ impl ImageHost {
             started: web_time::Instant::now(),
             presentation: None,
             textures,
+            graphs,
             options: retained_options,
             environment: environment_info,
             _request_reservation: request_reservation,
@@ -2636,6 +2646,7 @@ impl ImageHost {
             background: presentation.background,
             transparent_background: presentation.transparent_background,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raster,
             raytrace: None,
@@ -2662,6 +2673,7 @@ impl ImageHost {
             started: web_time::Instant::now(),
             presentation: Some(origin),
             textures: None,
+            graphs: None,
             options: if options.is_structural_default() { None } else { Some(RetainedOptions::new(options)?) },
             environment: None,
             _request_reservation: option_reservation,
@@ -3120,6 +3132,7 @@ mod retained_request_tests {
             raytrace: Some(options),
             environment: None,
             studio_weights: None,
+            graphs: None,
             textures: if mapped {
                 Some(Arc::new(
                     RuntimeTextures::new(vec![TextureBinding {
@@ -3261,6 +3274,7 @@ mod retained_request_tests {
         ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raytrace,
             raytrace: Some(super::super::RaytraceOptions { lights: Some(lights), ..Default::default() }),
@@ -3331,6 +3345,7 @@ mod environment_metadata_lease_tests {
         let request = ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Integrator::Raytrace,
             raytrace: None,
@@ -3443,6 +3458,7 @@ mod surface_request_metadata_tests {
         ImageRequest {
             studio_weights: None,
             environment: None,
+            graphs: None,
             textures: None,
             integrator: Default::default(),
             raytrace: None,

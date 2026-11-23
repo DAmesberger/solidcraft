@@ -34,6 +34,7 @@ wgpu = { workspace = true, features = ["metal", "vulkan", "dx12"] }
 wgpu = { workspace = true, features = ["gles"] }
 
 [dev-dependencies]
+solidcraft-viewport = { workspace = true, features = ["test-reference"] }
 image = { workspace = true }
 solidcraft-kernel = { workspace = true }
 # Headless pictures of real designs (capture tests), built by the real kernel, solidcore, as in the

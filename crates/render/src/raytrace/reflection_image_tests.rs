@@ -185,6 +185,7 @@ fn request(reflections: Option<ReflectionOptions>) -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(RaytraceOptions {

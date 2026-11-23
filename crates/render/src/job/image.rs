@@ -111,7 +111,8 @@ pub(crate) fn admit_layout(scene: &ProductScene, request: &ImageRequest) -> Resu
 fn admit_inner(scene: &ProductScene, request: &ImageRequest, certify: bool) -> Result<Admission> {
     #[cfg(not(feature = "raytrace-cpu"))]
     let _ = certify;
-    if request.environment.is_some() || (request.textures.is_some() && request.integrator != super::Integrator::Raytrace) {
+    if request.graphs.is_some() || request.environment.is_some() || (request.textures.is_some() && request.integrator != super::Integrator::Raytrace)
+    {
         return Err(JobError::new(ErrorCode::InvalidRequest, "captured GPU environments and raster textures require a registered image executor"));
     }
     match request.integrator {

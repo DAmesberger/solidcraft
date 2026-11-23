@@ -12,9 +12,15 @@ use std::{collections::BTreeMap, sync::Arc};
 
 /// No bindings is the original zero-allocation capture path. Even zero-weight
 /// authored bindings require a current opaque target; they cannot mask Glass.
-pub(super) fn apply(s: &Session, scene: &mut ProductScene, bindings: &CoatBindings, cpu: Option<&RaytraceOptions>, command: &str) -> Result<()> {
+pub(super) fn apply(
+    s: &Session,
+    scene: &mut ProductScene,
+    bindings: &CoatBindings,
+    cpu: Option<&RaytraceOptions>,
+    command: &str,
+) -> Result<BTreeMap<usize, solidcraft_viewport::clear_coat::ClearCoat>> {
     if bindings.is_empty() {
-        return Ok(());
+        return Ok(BTreeMap::new());
     }
     bindings.validate().map_err(|e| bad(command, e.to_string()))?;
     let identities = super::surface_bindings::targets(s, command)?;
@@ -56,10 +62,12 @@ pub(super) fn apply(s: &Session, scene: &mut ProductScene, bindings: &CoatBindin
         resolved.push((index, name.as_str(), binding.coat.to_runtime().map_err(|e| bad(command, e.to_string()))?));
     }
     drop(visible);
+    let mut assigned = BTreeMap::new();
     for (index, name, coat) in resolved {
+        assigned.insert(index, coat);
         super::clear_coat::apply_one(scene, index, name, coat, command)?;
     }
-    Ok(())
+    Ok(assigned)
 }
 
 pub(super) fn bind(s: &mut Session, params: &Value) -> Result<Value> {

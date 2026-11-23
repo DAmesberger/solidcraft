@@ -8,6 +8,7 @@ fn request(integrator: Integrator) -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator,
         raytrace: None,

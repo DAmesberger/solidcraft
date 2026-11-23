@@ -995,3 +995,282 @@ pub fn hsv_adjust(c: [f64; 3], hue: f64, saturation: f64, value: f64) -> [f64; 3
     };
     [k(5.0), k(3.0), k(1.0)]
 }
+
+/// every node kind, both spaces, slopes and triplanar expansion, surface mixes.
+pub struct Fuzz(pub u64);
+
+impl Fuzz {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items.get(self.below(items.len())).copied().unwrap_or("")
+    }
+    fn unit(&mut self) -> f64 {
+        (self.next() % 1000) as f64 / 1000.0
+    }
+
+    pub fn graph(&mut self) -> serde_json::Value {
+        let mut nodes = Vec::new();
+        let mut tcs: Vec<String> = Vec::new();
+        let mut floats: Vec<String> = Vec::new();
+        let mut colors: Vec<String> = Vec::new();
+        let mut normals: Vec<String> = Vec::new();
+        let mut tangents: Vec<String> = Vec::new();
+        let space = |f: &mut Fuzz| if f.below(2) == 0 { "object" } else { "world" };
+        let mut id = 0;
+        let mut fresh = || {
+            id += 1;
+            format!("n{id}")
+        };
+        let planar = fresh();
+        nodes.push(serde_json::json!({"id": planar, "kind": "texcoord.planar", "params": {"space": space(self)}, "inputs": {"u": [0.5, 0, 0], "v": [0, 2, 0]}}));
+        tcs.push(planar.clone());
+        tangents.push(format!("{planar}.tangent"));
+        match self.below(3) {
+            0 => {
+                let t = fresh();
+                nodes.push(
+                    serde_json::json!({"id": t, "kind": "texcoord.triplanar", "params": {"space": space(self)}, "inputs": {"scale_mm": [1, 2, 0.5]}}),
+                );
+                tcs.push(t);
+            }
+            1 => {
+                let t = fresh();
+                let unwrap = self.pick(&["arc_length", "angle"]);
+                nodes.push(
+                    serde_json::json!({"id": t, "kind": "texcoord.cylindrical", "params": {"space": space(self), "unwrap": unwrap}, "inputs": {"radius_mm": 3}}),
+                );
+                tangents.push(format!("{t}.tangent"));
+                tcs.push(t);
+            }
+            _ => {
+                let t = fresh();
+                nodes.push(serde_json::json!({"id": t, "kind": "texcoord.transform", "inputs": {"texcoord": {"from": planar}, "offset": [1, 2], "scale": [2, 0.5], "rotation": 0.3}}));
+                tcs.push(t);
+            }
+        }
+        let image = self.below(3) == 0;
+        for _ in 0..2 + self.below(6) {
+            let tc = tcs.get(self.below(tcs.len())).cloned().unwrap_or_default();
+            let n = fresh();
+            match self.below(9) {
+                0 => {
+                    let kind = self.pick(&["value", "gradient", "cellular"]);
+                    let octaves = 1 + self.below(3);
+                    nodes.push(serde_json::json!({"id": n, "kind": "pattern.noise", "params": {"kind": kind, "dimensions": 2, "octaves": octaves},
+                        "inputs": {"texcoord": {"from": tc}, "scale_mm": 0.5, "seed": self.below(1000)}}));
+                    floats.push(n);
+                }
+                1 => {
+                    let p = fresh();
+                    nodes.push(serde_json::json!({"id": p, "kind": "geometry.position", "params": {"space": space(self)}}));
+                    nodes.push(
+                        serde_json::json!({"id": n, "kind": "pattern.noise", "params": {"kind": self.pick(&["value", "cellular"]), "dimensions": 3, "octaves": 1},
+                        "inputs": {"position": {"from": p}, "scale_mm": 0.2, "seed": 5}}),
+                    );
+                    floats.push(n);
+                }
+                2 => {
+                    nodes.push(serde_json::json!({"id": n, "kind": "pattern.brushed", "inputs": {"texcoord": {"from": tc}, "density_per_mm": 30, "streak_mm": 3, "contrast": 0.5, "jitter": 0.4, "seed": 7}}));
+                    tangents.push(format!("{n}.tangent"));
+                    floats.push(n);
+                }
+                3 => {
+                    nodes.push(serde_json::json!({"id": n, "kind": "pattern.weave", "params": {"kind": self.pick(&["plain", "twill_2x2"])},
+                        "inputs": {"texcoord": {"from": tc}, "pitch_mm": [0.6, 0.8], "crown": self.unit()}}));
+                    floats.push(n);
+                }
+                4 => {
+                    nodes.push(serde_json::json!({"id": n, "kind": "pattern.checker", "inputs": {"texcoord": {"from": tc}, "size_mm": [1, 2]}}));
+                    floats.push(n);
+                }
+                5 => {
+                    nodes.push(
+                        serde_json::json!({"id": n, "kind": "pattern.grid", "inputs": {"texcoord": {"from": tc}, "size_mm": [1, 1], "line_mm": 0.1}}),
+                    );
+                    floats.push(n);
+                }
+                6 => {
+                    nodes.push(serde_json::json!({"id": n, "kind": "pattern.gradient", "params": {"kind": self.pick(&["linear", "radial"])}, "inputs": {"texcoord": {"from": tc}, "start": -2, "end": 3}}));
+                    floats.push(n);
+                }
+                7 if image => {
+                    nodes.push(serde_json::json!({"id": n, "kind": "image", "params": {"space": self.pick(&["srgb", "linear"]), "wrap": self.pick(&["repeat", "clamp", "mirror"]), "channel": self.pick(&["rgb", "r", "a"])},
+                        "inputs": {"texcoord": {"from": tc}, "file": {"interface": "tex"}, "default": [0.4, 0.5, 0.6]}}));
+                    colors.push(n.clone());
+                    floats.push(format!("{n}.value"));
+                }
+                _ => {
+                    let f = fresh();
+                    nodes.push(serde_json::json!({"id": f, "kind": "geometry.facing"}));
+                    floats.push(f);
+                    nodes.push(serde_json::json!({"id": n, "kind": "hsv_adjust", "inputs": {"in": [0.3, 0.5, 0.2], "hue": 0.4, "saturation": 1.5}}));
+                    colors.push(n);
+                }
+            }
+        }
+        for _ in 0..self.below(8) {
+            let a = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let b = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let n = fresh();
+            let op = self.pick(&[
+                "add",
+                "subtract",
+                "multiply",
+                "divide",
+                "min",
+                "max",
+                "power",
+                "mix",
+                "step",
+                "smoothstep",
+                "remap",
+                "clamp",
+                "abs",
+                "floor",
+                "fract",
+                "sin",
+                "cos",
+                "sqrt",
+                "invert",
+                "dot",
+                "length",
+                "normalize",
+            ]);
+            let inputs = match op {
+                "mix" => serde_json::json!({"a": {"from": a}, "b": {"from": b}, "t": {"from": a}}),
+                "step" => serde_json::json!({"edge": 0.4, "in": {"from": a}}),
+                "smoothstep" => serde_json::json!({"edge0": 0.2, "edge1": {"from": b}, "in": {"from": a}}),
+                "remap" => serde_json::json!({"in": {"from": a}, "out_min": 0.2, "out_max": {"from": b}}),
+                "clamp" => serde_json::json!({"in": {"from": a}, "low": 0.1, "high": {"from": b}}),
+                "abs" | "floor" | "fract" | "sin" | "cos" | "sqrt" | "invert" | "length" | "normalize" => serde_json::json!({"in": {"from": a}}),
+                _ => serde_json::json!({"a": {"from": a}, "b": {"from": b}}),
+            };
+            nodes.push(serde_json::json!({"id": n, "kind": op, "inputs": inputs}));
+            floats.push(n);
+        }
+        // Vector maths whose components reach a height: slopes carried per component.
+        if !floats.is_empty() {
+            let a = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let b = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let v = fresh();
+            nodes.push(serde_json::json!({"id": v, "kind": "combine3", "inputs": {"x": {"from": a}, "y": {"from": b}, "z": 0.3}}));
+            let mut last = v;
+            for _ in 0..1 + self.below(3) {
+                let n = fresh();
+                let op = self.pick(&[
+                    "add",
+                    "subtract",
+                    "multiply",
+                    "divide",
+                    "mix",
+                    "min",
+                    "max",
+                    "abs",
+                    "sin",
+                    "power",
+                    "clamp",
+                    "smoothstep",
+                    "remap",
+                    "normalize",
+                    "sqrt",
+                ]);
+                let other = if self.below(2) == 0 {
+                    let p = fresh();
+                    nodes.push(serde_json::json!({"id": p, "kind": "geometry.position", "params": {"space": space(self)}}));
+                    serde_json::json!({"from": p})
+                } else {
+                    serde_json::json!([0.7, 1.3, 0.4])
+                };
+                let inputs = match op {
+                    "mix" => serde_json::json!({"a": {"from": last}, "b": other, "t": {"from": a}}),
+                    "abs" | "sin" | "normalize" | "sqrt" => serde_json::json!({"in": {"from": last}}),
+                    "power" => serde_json::json!({"a": {"from": last}, "b": 1.7}),
+                    "clamp" => serde_json::json!({"in": {"from": last}, "low": 0.2, "high": other}),
+                    "smoothstep" => serde_json::json!({"edge0": 0.1, "edge1": other, "in": {"from": last}}),
+                    "remap" => serde_json::json!({"in": {"from": last}, "in_max": other, "out_min": 0.2, "out_max": 0.8}),
+                    _ => serde_json::json!({"a": {"from": last}, "b": other}),
+                };
+                nodes.push(serde_json::json!({"id": n, "kind": op, "inputs": inputs}));
+                last = n;
+            }
+            let s = fresh();
+            nodes.push(serde_json::json!({"id": s, "kind": "separate3", "inputs": {"in": {"from": last}}}));
+            let h = fresh();
+            nodes.push(serde_json::json!({"id": h, "kind": "add", "inputs": {"a": {"from": format!("{s}.x")}, "b": {"from": format!("{s}.y")}}}));
+            let nh = fresh();
+            nodes.push(serde_json::json!({"id": nh, "kind": "normal.from_height", "inputs": {"height": {"from": h}, "relief_mm": 0.01}}));
+            normals.push(nh);
+        }
+        if let Some(a) = floats.first().cloned() {
+            let n = fresh();
+            nodes.push(serde_json::json!({"id": n, "kind": "combine3", "inputs": {"x": {"from": a}, "y": 0.2, "z": {"from": a}}}));
+            let c = fresh();
+            nodes.push(serde_json::json!({"id": c, "kind": "convert.vector3_to_color3", "inputs": {"in": {"from": n}}}));
+            colors.push(c);
+            let s = fresh();
+            nodes.push(serde_json::json!({"id": s, "kind": "separate3", "inputs": {"in": {"from": n}}}));
+            floats.push(format!("{s}.z"));
+            let l = fresh();
+            nodes.push(serde_json::json!({"id": l, "kind": "luminance", "inputs": {"in": {"from": colors.first().cloned().unwrap_or_default()}}}));
+            floats.push(l);
+        }
+        if self.below(2) == 0 {
+            let h = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            let n = fresh();
+            nodes.push(serde_json::json!({"id": n, "kind": "normal.from_height", "inputs": {"height": {"from": h}, "relief_mm": 0.01}}));
+            normals.push(n);
+        }
+        if image && let Some(c) = colors.first().cloned() {
+            let n = fresh();
+            nodes.push(serde_json::json!({"id": n, "kind": "normal.map", "params": {"convention": self.pick(&["opengl", "directx"])}, "inputs": {"color": {"from": c}, "strength": 0.5}}));
+            normals.push(n);
+        }
+        if normals.len() >= 2 {
+            let n = fresh();
+            nodes.push(
+                serde_json::json!({"id": n, "kind": "normal.blend", "inputs": {"a": {"from": normals[0]}, "b": {"from": normals[1]}, "mix": 0.3}}),
+            );
+            normals.push(n);
+        }
+        let mut surface = |f: &mut Fuzz, nodes: &mut Vec<serde_json::Value>| {
+            let n = fresh();
+            let mut inputs = serde_json::Map::new();
+            let mut wire = |name: &str, list: &[String], f: &mut Fuzz| {
+                if !list.is_empty() && f.below(3) > 0 {
+                    inputs.insert(name.to_owned(), serde_json::json!({"from": list.get(f.below(list.len())).cloned().unwrap_or_default()}));
+                }
+            };
+            wire("base_color", &colors, f);
+            wire("specular_roughness", &floats, f);
+            wire("base_metalness", &floats, f);
+            wire("coat_weight", &floats, f);
+            wire("specular_roughness_anisotropy", &floats, f);
+            wire("geometry_tangent", &tangents, f);
+            wire("geometry_normal", &normals, f);
+            wire("geometry_coat_normal", &normals, f);
+            wire("emission_luminance", &floats, f);
+            wire("geometry_opacity", &floats, f);
+            nodes.push(serde_json::json!({"id": n, "kind": "standard_surface", "inputs": inputs}));
+            n
+        };
+        let mut output = surface(self, &mut nodes);
+        for _ in 0..self.below(3) {
+            let fg = surface(self, &mut nodes);
+            let m = format!("mix{}", nodes.len());
+            let t = floats.get(self.below(floats.len())).cloned().unwrap_or_default();
+            nodes.push(
+                serde_json::json!({"id": m, "kind": "surface.mix", "inputs": {"fg": {"from": fg}, "bg": {"from": output}, "mix": {"from": t}}}),
+            );
+            output = m;
+        }
+        serde_json::json!({"name": "fuzz", "interface": [{"name": "tex", "type": "texture"}], "nodes": nodes, "output": output})
+    }
+}

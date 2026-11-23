@@ -180,7 +180,7 @@ impl JsonSchema for RenderRequest {
             section(
                 "Without `progressive`: the CPU ray tracer's options (lights, reflections, `path`, `progressive` \
             sampling, `output`, `budget` and others; see docs/render-jobs.md), with `integrator: raytrace`. With `progressive: \
-            true`: the GPU's `dielectrics`, `clear_coats` and `textures` overrides, each a list.",
+            true`: the GPU's `dielectrics`, `clear_coats`, `textures`, `graph_values` and `graph_textures` overrides, each a list.",
             ),
         );
         put(
@@ -292,7 +292,7 @@ impl JsonSchema for RenderRequest {
         let runtime = json!({
             "properties": {
                 "progressive": {"enum": [false]},
-                "raytrace": {"not": any_of_keys(&["clear_coats", "textures"])},
+                "raytrace": {"not": any_of_keys(&["clear_coats", "textures", "graph_values", "graph_textures"])},
                 "environment": {
                     "type": ["object", "null"],
                     "properties": {
@@ -344,7 +344,7 @@ impl JsonSchema for RenderRequest {
                 "integrator": {"enum": ["raster"]},
                 "raytrace": {
                     "type": "object",
-                    "properties": {"dielectrics": array, "clear_coats": array, "textures": array},
+                    "properties": {"dielectrics": array, "clear_coats": array, "textures": array, "graph_values": array, "graph_textures": {"type": "array", "items": {"type": "string"}}},
                     "additionalProperties": false,
                 },
                 "environment": {"anyOf": gpu_environments},
@@ -446,6 +446,8 @@ pub struct Checked {
     pub environment: Option<Map<String, Value>>,
     /// The surface maps the scene uses, as the render crate sums them up, or `null` without any.
     pub textures: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<super::render_jobs::GraphSummary>,
     /// How transparency is rendered: `sorted_alpha_approximation` (raster), `opaque_only`,
     /// `coverage_alpha` (a transparent background) or `physical_transmission` (glass that
     /// refracts).

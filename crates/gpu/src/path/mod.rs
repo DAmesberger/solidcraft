@@ -21,6 +21,7 @@ use std::{
 };
 
 mod adaptive;
+mod appearance;
 mod denoise;
 mod dispatch;
 mod image_pages;
@@ -58,9 +59,41 @@ macro_rules! path_shader {
             "\n",
             include_str!("glass_lighting.wgsl"),
             "\n",
+            include_str!("graph_stub.wgsl"),
+            "\n",
             include_str!("photons_disabled.wgsl")
         )
     };
+}
+
+/// Programs for the recent graph shape sets. The optical and indirect-clamp variants have distinct code.
+const GRAPH_PIPELINES: usize = 4;
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct GraphTransport {
+    opaque: bool,
+    clamp: bool,
+    glass_lighting: bool,
+    caustics: bool,
+}
+
+type GraphPipelineKey = (Vec<solidcraft_viewport::appearance_graph::ir::ShapeKey>, GraphTransport);
+
+fn graph_source(evaluators: &str, opaque: bool, clamp: bool) -> String {
+    // A generated module uses concrete constants: no override pass rewrites the SSA evaluator.
+    scene_shader(opaque)
+        .replacen(include_str!("graph_stub.wgsl"), &format!("{}\n{evaluators}", include_str!("graph.wgsl")), 1)
+        .replace("override OPAQUE_SCENE: bool = false;", &format!("const OPAQUE_SCENE: bool = {opaque};"))
+        .replace("override HAS_TEXTURES: bool = false;", "const HAS_TEXTURES: bool = true;")
+        .replace("override GLASS_DELTA_LIGHTS: bool=false;", "const GLASS_DELTA_LIGHTS: bool=false;")
+        .replace("override clamp_indirect: bool = false;", &format!("const clamp_indirect: bool = {clamp};"))
+}
+
+struct GraphPipelines {
+    main: wgpu::ComputePipeline,
+    emit: Option<wgpu::ComputePipeline>,
+    resolve: Option<wgpu::ComputePipeline>,
+    source: String,
+    guide: std::sync::OnceLock<wgpu::ComputePipeline>,
 }
 
 const MAX_TRIANGLES: u64 = MAX_GPU_PATH_TRIANGLES;
@@ -209,6 +242,7 @@ struct Context {
     clamped_pipelines: [std::sync::OnceLock<wgpu::ComputePipeline>; CLAMPED_PIPELINE_CACHE_SLOTS],
     // Built and warmed by the first denoised job, then shared by later ones.
     denoise: std::sync::OnceLock<denoise::Pipelines>,
+    graph_pipelines: std::sync::Mutex<Vec<(GraphPipelineKey, Arc<GraphPipelines>)>>,
     // Only authored caustics compile/retain the seven-storage-buffer variant.
     photons: std::sync::OnceLock<photons::Pipelines>,
     // Optical hard-light connections are specialized away in the legacy program.
@@ -220,6 +254,75 @@ struct Context {
     layout: wgpu::BindGroupLayout,
 }
 impl Context {
+    fn graph_pipeline(
+        &self,
+        graphs: &solidcraft_render::job::graphs::GraphAppearances,
+        mode: GraphTransport,
+        layout: &wgpu::BindGroupLayout,
+        cancel: &CancelToken,
+    ) -> Result<Arc<GraphPipelines>> {
+        let key = (appearance::shape_set(graphs), mode);
+        let cached = || -> Result<Option<Arc<GraphPipelines>>> {
+            let mut cache = self.graph_pipelines.lock().map_err(|_| gpu("graph pipeline cache lock poisoned"))?;
+            let Some(index) = cache.iter().position(|(k, _)| *k == key) else { return Ok(None) };
+            let entry = cache.remove(index);
+            let value = Arc::clone(&entry.1);
+            cache.insert(0, entry);
+            Ok(Some(value))
+        };
+        cancel.check()?;
+        if let Some(value) = cached()? {
+            return Ok(value);
+        }
+        let _compile = one_compile_at_a_time();
+        cancel.check()?;
+        if let Some(value) = cached()? {
+            return Ok(value);
+        }
+        let evaluators = appearance::source(graphs)?;
+        let guide_source = graph_source(&evaluators, false, false);
+        let mut source = graph_source(&evaluators, mode.opaque, mode.clamp);
+        if mode.caustics {
+            source = photons::with_transport(&source)?;
+        }
+        if mode.glass_lighting {
+            source = source.replace("const GLASS_DELTA_LIGHTS: bool=false;", "const GLASS_DELTA_LIGHTS: bool=true;");
+        }
+        let (main, emit, resolve) = checked_creation(&self.device, || {
+            let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("path tracing with appearance graphs"),
+                source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+            });
+            let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("path tracing with appearance graphs"),
+                bind_group_layouts: &[Some(layout)],
+                immediate_size: 0,
+            });
+            let entry = |name| {
+                self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(name),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: Some(name),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+            Ok((entry("main"), mode.caustics.then(|| entry("photon_emit")), mode.glass_lighting.then(|| entry("optical_resolve"))))
+        })?;
+        let dummy = placeholder_bind(&self.device, layout, if mode.caustics { 8 } else { 7 })?;
+        for pipeline in [&main].into_iter().chain(emit.iter()).chain(resolve.iter()) {
+            cancel.check()?;
+            warm_up(&self.device, &self.queue, pipeline, &dummy, &self.healthy)?;
+        }
+        let pipelines = Arc::new(GraphPipelines { main, source: guide_source, emit, resolve, guide: std::sync::OnceLock::new() });
+        let mut cache = self.graph_pipelines.lock().map_err(|_| gpu("graph pipeline cache lock poisoned"))?;
+        cache.insert(0, (key, pipelines.clone()));
+        cache.truncate(GRAPH_PIPELINES);
+        cancel.check()?;
+        Ok(pipelines)
+    }
+
     fn ensure_available(&self) -> Result<()> {
         if self.healthy.load(Ordering::Acquire) {
             Ok(())
@@ -374,6 +477,7 @@ impl Executor {
             pipeline,
             layout,
             denoise: std::sync::OnceLock::new(),
+            graph_pipelines: Default::default(),
             photons: std::sync::OnceLock::new(),
             glass: std::sync::OnceLock::new(),
             photon_glass: std::sync::OnceLock::new(),
@@ -698,6 +802,13 @@ fn admission_with_device_limits(scene: &ProductScene, request: &ImageRequest, op
     // preparation also owns its serialization scratch. Legacy scenes add zero.
     admission.preparation_bytes += model_bytes * 2;
     admission.preparation_bytes += request.environment.as_ref().map_or(0, |source| source.admitted_bytes());
+    if let Some(graphs) = &request.graphs {
+        appearance::admit(graphs, scene)?;
+        admission.preparation_bytes = admission
+            .preparation_bytes
+            .checked_add(graphs.working_bytes())
+            .ok_or_else(|| JobError::new(ErrorCode::LimitExceeded, "appearance graph preparation exceeds the job budget"))?;
+    }
     if let Some(textures) = &request.textures {
         if textures.filtering() != options.texture_filtering {
             return Err(JobError::new(ErrorCode::InvalidRequest, "captured GPU texture filtering does not match the requested policy"));
@@ -783,7 +894,10 @@ fn admit_device_resources(
     let geometry_bytes = 16
         + a.triangles.max(1) * (100 + scene::model_bytes_per_triangle(scene))
         + scene.meshes.iter().map(|m| m.mesh.positions.len() as u64 * 32).sum::<u64>();
-    let texture_bytes = request.textures.as_ref().map_or(16, |t| textures::packed_bytes(t, scene.meshes.len()));
+    let runtime_bytes = request.textures.as_ref().map_or(16, |t| textures::packed_bytes(t, scene.meshes.len()));
+    let texture_bytes = request.graphs.as_ref().map_or(runtime_bytes, |graphs| {
+        appearance::packed_bytes(graphs, request.textures.as_deref(), runtime_bytes, &appearance::texture_policy(limit))
+    });
     let environment_bytes =
         request.environment.as_ref().map_or(48, |source| 16 + u64::from(source.info().width) * u64::from(source.info().height) * 32);
     let node_bytes = a.triangles.max(1) * 64;
@@ -907,8 +1021,16 @@ impl ImageExecutor for Executor {
         // Reuse the production conversions and certificates, including retained-f32
         // contacts, exact medium containment, map decoding and environment PDFs.
         // Begin currently rebuilds these immutable uploads; no GPU work is queued.
-        let texture_upload = textures::flatten(request.textures.as_deref(), scene.meshes.len(), request.camera.target, cancel)?;
-        let upload = scene::flatten_with_media(scene, request.camera.target, cancel, options.nested_media)?;
+        let policy = appearance::texture_policy(self.context.device.limits().max_storage_buffer_binding_size);
+        let (texture_upload, records) = textures::flatten_with_graphs(
+            request.textures.as_deref(),
+            request.graphs.as_deref(),
+            scene.meshes.len(),
+            request.camera.target,
+            cancel,
+            &policy,
+        )?;
+        let upload = scene::flatten_with_graphs(scene, request.camera.target, cancel, options.nested_media, &records)?;
         photons::validate_punctual_origins(scene, request.camera.target, options, upload.epsilon, cancel)?;
         let environment = prepare_environment(request, cancel)?;
         photons::source_distribution(options, request, &upload.nodes, upload.photon_guide, environment.1)?;
@@ -986,6 +1108,8 @@ fn validate_punctual_origin(options: JobOptions, origin: Vec3) -> Result<()> {
 }
 
 struct Task {
+    #[cfg(test)]
+    graph_pipelines: Option<Arc<GraphPipelines>>,
     dispatch_budget: dispatch::Budget,
     context: Arc<Context>,
     request: ImageRequest,
@@ -1049,7 +1173,7 @@ impl Task {
     ) -> Result<Self> {
         cancel.check()?;
         options.validate()?;
-        let output_request = ImageRequest { environment: None, textures: None, ..request.clone() };
+        let output_request = ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() };
         request = trace_request(&request, options)?;
         validate_punctual_origin(options, request.camera.target)?;
         let opaque_scene = use_opaque_pipeline(&scene, options);
@@ -1069,9 +1193,17 @@ impl Task {
         if let Some(resources) = &request.textures {
             resources.validate_scene(&scene)?;
         }
-        let texture_upload = textures::flatten(request.textures.as_deref(), scene.meshes.len(), request.camera.target, &cancel)?;
+        let policy = appearance::texture_policy(context.device.limits().max_storage_buffer_binding_size);
+        let (texture_upload, records) = textures::flatten_with_graphs(
+            request.textures.as_deref(),
+            request.graphs.as_deref(),
+            scene.meshes.len(),
+            request.camera.target,
+            &cancel,
+            &policy,
+        )?;
         request.textures = None; // GPU upload owns decoded pixels; release captured source bytes.
-        let upload = scene::flatten_with_media(&scene, request.camera.target, &cancel, options.nested_media)?;
+        let upload = scene::flatten_with_graphs(&scene, request.camera.target, &cancel, options.nested_media, &records)?;
         // This uniform lane was spare. Keep the material offset mask that the
         // mapped opaque shader has qualified on RADV.
         volume[2][3] = if upload.active_glass_model { 1.0 } else { 0.0 };
@@ -1082,7 +1214,7 @@ impl Task {
         // A job with an indirect clamp (JobOptions::clamp_indirect) uses the program for its scene
         // with the clamp compiled in, built once per device; every other job keeps the ordinary ones.
         let clamp = options.clamp_indirect.is_some();
-        let photons = options
+        let mut photons = options
             .caustics
             .map(|options| {
                 photons::Resources::new(
@@ -1102,7 +1234,7 @@ impl Task {
         let page_layout = image_pages::Layout::new(request.width, request.height, options, optical_tile_bytes, &context.device.limits())?;
         #[cfg(test)]
         let page_layout = if let Some(rows) = _page_rows { page_layout.with_rows(rows, options.supersampling)? } else { page_layout };
-        let optical_pipelines = if glass_lighting {
+        let optical_pipelines = if glass_lighting && request.graphs.is_none() {
             Some(glass_pipeline(
                 &context,
                 photons.as_ref().map_or(&context.layout, |resources| &resources.layout),
@@ -1113,20 +1245,43 @@ impl Task {
         } else {
             None
         };
-        let render_pipeline = if let Some(pipelines) = &optical_pipelines {
+        let graph_pipelines = request
+            .graphs
+            .as_deref()
+            .map(|graphs| {
+                context.graph_pipeline(
+                    graphs,
+                    GraphTransport { opaque: opaque_scene, clamp, glass_lighting, caustics: photons.is_some() },
+                    photons.as_ref().map_or(&context.layout, |p| &p.layout),
+                    &cancel,
+                )
+            })
+            .transpose()?;
+        request.graphs = None;
+        let render_pipeline = if let Some(graphs) = &graph_pipelines {
+            graphs.main.clone()
+        } else if let Some(pipelines) = &optical_pipelines {
             pipelines.camera.clone()
         } else if let Some(resources) = &photons {
             resources.render.clone()
         } else {
             context.prepare_scene_pipeline(opaque_scene, has_textures, clamp, &cancel)?.clone()
         };
-        let optical_resolve = optical_pipelines.map(|pipelines| pipelines.resolve);
+        let optical_resolve = graph_pipelines.as_ref().and_then(|g| g.resolve.clone()).or_else(|| optical_pipelines.map(|p| p.resolve));
+        if let (Some(resources), Some(emit)) = (&mut photons, graph_pipelines.as_ref().and_then(|g| g.emit.clone())) {
+            resources.set_graph_emit(emit);
+        }
         cancel.check()?;
         let mut upload_bytes = (upload.geometry.len() + upload.nodes.len() + texture_upload.len()) as u64;
         cancel.check()?;
         let uploading = Instant::now();
         drop(scene);
         let device = &context.device;
+        let graph_guide = if options.denoise || options.denoise_diagnostics {
+            graph_pipelines.as_ref().map(|graph| denoise::graph_guide(&context, graph, &cancel)).transpose()?
+        } else {
+            None
+        };
         let (uniform, accumulation, pages, failures, readback, bind, denoiser) = checked_creation(device, || {
             let make = |label, bytes: &[u8], usage| solidcraft_viewport_gpu::buffer_init(device, label, bytes, usage).map_err(gpu);
             upload_bytes += environment_bytes.len() as u64;
@@ -1178,7 +1333,7 @@ impl Task {
             let accumulation = first.accumulation.clone();
             let bind = first.bind.clone();
             let denoiser = if options.denoise || options.denoise_diagnostics {
-                Some(denoise::Resources::new_for_layout(
+                let mut resources = denoise::Resources::new_for_layout(
                     &context,
                     &uniform,
                     [&triangles, &nodes, &environment, &texture_buffer, &failures],
@@ -1186,7 +1341,11 @@ impl Task {
                     options.adaptive.is_some(),
                     page_layout,
                     &cancel,
-                )?)
+                )?;
+                if let Some(guide) = graph_guide {
+                    resources.set_guide(guide);
+                }
+                Some(resources)
             } else {
                 None
             };
@@ -1215,6 +1374,8 @@ impl Task {
             cancel.check()?;
         }
         Ok(Self {
+            #[cfg(test)]
+            graph_pipelines,
             dispatch_budget: Default::default(),
             #[cfg(test)]
             opaque_scene,

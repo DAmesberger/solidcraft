@@ -1388,19 +1388,23 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
         }
         coverage = 1.0;
         ray_excluded = 0xffffffffu; ray_minimum = u.lighting.x;
-        let captured = triangle(hit.triangle); let v = -d;
-        let outward = sc_unit(cross(captured.p1.xyz-captured.p0.xyz,captured.p2.xyz-captured.p0.xyz));
+        let hit_surface = triangle(hit.triangle); let v = -d;
+        let outward = sc_unit(cross(hit_surface.p1.xyz-hit_surface.p0.xyz,hit_surface.p2.xyz-hit_surface.p0.xyz));
         let entering = dot(outward,v)>=0.0;
         let geometric = select(-outward,outward,entering);
         var ni = 1.0;
         if medium_count > 0u {ni = media[medium_count-1u].ior;}
-        var position = surface_point(captured,hit.bary);
+        var position = surface_point(hit_surface,hit.bary);
         var position_low = vec3<f32>(0.0);
-        if (captured.base.w>0.0 && (captured.parameters.w<0.0 || GLASS_DELTA_LIGHTS)) || medium_count>0u {
-            let point=surface_point_precise(captured,hit.bary);
+        if (hit_surface.base.w>0.0 && (hit_surface.parameters.w<0.0 || GLASS_DELTA_LIGHTS)) || medium_count>0u {
+            let point=surface_point_precise(hit_surface,hit.bary);
             position=point.hi;position_low=point.lo;
         }
         let shading_position=position+position_low;
+        let interpolated=sc_unit(hit_surface.n0.xyz*hit.bary.x+hit_surface.n1.xyz*hit.bary.y+hit_surface.n2.xyz*hit.bary.z);
+        let winding_normal=select(interpolated,-interpolated,dot(interpolated,geometric)<0.0);
+        let original_normal=select(geometric,winding_normal,dot(winding_normal,v)>0.0);
+        let captured=graph_surface(hit_surface,shading_position,original_normal,v);
         // The travelled ray segment and, inside a medium, its absorbing segment
         // share one inlined precise subtraction.
         var travelled=vec3<f32>(0.0);
@@ -1578,10 +1582,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
         // Retain immutable geometry and medium data across optical map evaluation.
         let textured=Triangle(captured.p0,captured.p1,captured.p2,captured.n0,captured.n1,captured.n2,vec4<f32>(mapped_surface.color,captured.base.w),vec4<f32>(mapped_surface.metallic,mapped_surface.roughness,captured.parameters.zw),captured.optics,captured.coat,captured.interior,captured.glass);
         let t=aged_surface(textured,shading_position,outward);
-        let interpolated=sc_unit(captured.n0.xyz*hit.bary.x+captured.n1.xyz*hit.bary.y+captured.n2.xyz*hit.bary.z);
-        let winding_normal=select(interpolated,-interpolated,dot(interpolated,geometric)<0.0);
-        let original_normal=select(geometric,winding_normal,dot(winding_normal,v)>0.0);
-        let mapped_normal=texture_normal(map_record,mapped_surface.normal,original_normal,geometric);
+        let mapped_normal=texture_normal(map_record,mapped_surface.normal,graph_normal(t,original_normal,geometric),geometric);
         let n=select(original_normal,mapped_normal,dot(mapped_normal,v)>0.0);
         radiance = add_light(radiance,throughput,direct_light(t,shading_position,physical,o,n,geometric,v,u.sampling.y-bounce-1u,&rng),1.0,bounce);
         radiance = add_light(radiance,throughput,photon_gather(t,shading_position,n,geometric,v,u.sampling.y-bounce-1u),1.0,bounce);

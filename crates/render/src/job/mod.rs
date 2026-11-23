@@ -25,6 +25,7 @@ pub(crate) mod denoise;
 mod denoise_diagnostics;
 pub(crate) mod encoding;
 pub mod finishing;
+pub mod graphs;
 mod host;
 mod host_memory;
 pub(crate) mod image;
@@ -1534,6 +1535,9 @@ pub struct ImageRequest {
     pub environment: Option<Arc<crate::lighting::environment::EnvironmentSource>>,
     #[serde(skip)]
     pub textures: Option<Arc<textures::RuntimeTextures>>,
+    /// Captured GPU path appearances serialize as their public summary alone.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub graphs: Option<Arc<graphs::GraphAppearances>>,
     #[serde(default)]
     pub integrator: Integrator,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1582,6 +1586,7 @@ impl ImageRequest {
             .map_or(0, |source| (std::mem::size_of::<crate::lighting::environment::EnvironmentInfo>() + source.info().source_sha256.len()) as u64);
         Self::fixed_cpu_metadata_bytes()
             + environment
+            + self.graphs.as_ref().map_or(0, |graphs| graphs.summary_bytes())
             + if self.textures.is_some() { std::mem::size_of::<textures::TextureSummary>() as u64 } else { 0 }
     }
 }

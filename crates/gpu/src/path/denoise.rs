@@ -20,28 +20,53 @@ pub(super) struct Pipelines {
     filter_layout: wgpu::BindGroupLayout,
 }
 
+fn guide_pipeline(context: &Context, path_source: &str, generated: bool) -> Result<wgpu::ComputePipeline> {
+    let device = &context.device;
+    let error_scopes = scopes(device);
+    let guide_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("denoise guides"),
+        source: wgpu::ShaderSource::Wgsl(format!("{path_source}\n{GUIDES}").into()),
+    });
+    let guide_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("denoise guides"),
+        bind_group_layouts: &[Some(&context.layout)],
+        immediate_size: 0,
+    });
+    let guide = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("denoise guides"),
+        layout: Some(&guide_layout),
+        module: &guide_shader,
+        entry_point: Some("denoise_guides"),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants: if generated { &[] } else { &[("HAS_TEXTURES", 1.0)] },
+            ..Default::default()
+        },
+        cache: None,
+    });
+    checked(error_scopes)?;
+    warm_up(device, &context.queue, &guide, &placeholder_bind(device, &context.layout, 7)?, &context.healthy)?;
+    Ok(guide)
+}
+
+pub(super) fn graph_guide(context: &Context, graph: &super::GraphPipelines, cancel: &CancelToken) -> Result<wgpu::ComputePipeline> {
+    if let Some(guide) = graph.guide.get() {
+        return Ok(guide.clone());
+    }
+    let _compile = one_compile_at_a_time();
+    cancel.check()?;
+    if let Some(guide) = graph.guide.get() {
+        return Ok(guide.clone());
+    }
+    let built = guide_pipeline(context, &graph.source, true)?;
+    Ok(graph.guide.get_or_init(|| built).clone())
+}
+
 impl Pipelines {
     fn new(context: &Context) -> Result<Self> {
         let path_source = scene_shader(false);
         let device = &context.device;
         let error_scopes = scopes(device);
-        let guide_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("denoise guides"),
-            source: wgpu::ShaderSource::Wgsl(format!("{path_source}\n{GUIDES}").into()),
-        });
-        let guide_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("denoise guides"),
-            bind_group_layouts: &[Some(&context.layout)],
-            immediate_size: 0,
-        });
-        let guide = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("denoise guides"),
-            layout: Some(&guide_layout),
-            module: &guide_shader,
-            entry_point: Some("denoise_guides"),
-            compilation_options: wgpu::PipelineCompilationOptions { constants: &[("HAS_TEXTURES", 1.0)], ..Default::default() },
-            cache: None,
-        });
+        let guide = guide_pipeline(context, path_source, false)?;
         let entries: Vec<_> = (0..4)
             .map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -79,7 +104,6 @@ impl Pipelines {
             cache: None,
         });
         checked(error_scopes)?;
-        warm_up(device, &context.queue, &guide, &placeholder_bind(device, &context.layout, 7)?, &context.healthy)?;
         warm_up(device, &context.queue, &filter, &placeholder_bind(device, &filter_layout, 4)?, &context.healthy)?;
         warm_up(device, &context.queue, &classify, &placeholder_bind(device, &filter_layout, 4)?, &context.healthy)?;
         Ok(Self { guide, filter, classify, filter_layout })
@@ -130,6 +154,10 @@ fn full_window(task: &Task) -> Window {
 }
 
 impl Resources {
+    pub(super) fn set_guide(&mut self, pipeline: wgpu::ComputePipeline) {
+        self.guide_pipeline = pipeline;
+    }
+
     #[cfg(test)]
     pub(super) fn new(
         context: &Context,

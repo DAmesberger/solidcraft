@@ -429,6 +429,7 @@ fn cpu_native_studio_cold_capture_matches_typed_source_every_prefix_and_raw_mast
                 transparent_background: *transparent_background,
                 studio_weights: None,
                 environment: None,
+                graphs: None,
                 textures: None,
             };
             let input = hdr.map(|hdr| {

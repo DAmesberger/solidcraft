@@ -347,6 +347,7 @@ fn request(scene: &ProductScene, cpu: bool, case: &str, samples: u32, width: u32
         raytrace,
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
     })
 }

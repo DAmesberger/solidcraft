@@ -298,6 +298,7 @@ fn request() -> ImageRequest {
         studio_weights: None,
         integrator: Default::default(),
         raytrace: None,
+        graphs: None,
         textures: None,
         environment: None,
         camera: Default::default(),
@@ -899,7 +900,7 @@ fn environment_payload_is_owned_by_admitted_work_not_retained_status() {
             Ok(descriptor)
         }
         fn admit(&self, scene: &ProductScene, request: &ImageRequest, _: JobOptions) -> Result<Admission> {
-            let mut admission = admit(scene, &ImageRequest { environment: None, textures: None, ..request.clone() })?;
+            let mut admission = admit(scene, &ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() })?;
             admission.estimated_total_bytes += request.environment.as_ref().map_or(0, |source| source.admitted_bytes());
             Ok(admission)
         }
@@ -945,7 +946,7 @@ fn texture_payload_is_owned_by_admitted_work_not_retained_status() {
             Ok(descriptor)
         }
         fn admit(&self, scene: &ProductScene, request: &ImageRequest, _: JobOptions) -> Result<Admission> {
-            let mut admission = admit(scene, &ImageRequest { environment: None, textures: None, ..request.clone() })?;
+            let mut admission = admit(scene, &ImageRequest { environment: None, graphs: None, textures: None, ..request.clone() })?;
             admission.estimated_total_bytes += request.textures.as_ref().map_or(0, |source| source.working_bytes());
             Ok(admission)
         }

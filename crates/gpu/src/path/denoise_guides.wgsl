@@ -30,13 +30,13 @@ fn guide_look(t:Triangle,hit:Hit,direction:vec3<f32>,position:vec3<f32>,travel:f
     let geometric=select(-outward,outward,dot(outward,-direction)>=0.0);
     let record=texture_record(t.optics.w);
     let gradients=texture_gradients(record,geometric,direction,hit.distance,travel,bounce);
-    let mapped=texture_surface(record,t.base.xyz,t.parameters.x,t.parameters.y,position,gradients,(u32(t.interior.z)&2u)!=0u);
-    var look=t;
-    look.base=vec4<f32>(mapped.color,t.base.w);
-    look.parameters=vec4<f32>(mapped.metallic,mapped.roughness,t.parameters.zw);
-    look=aged_surface(look,position,outward);
     let normal=guide_normal(t,hit.bary,geometric,direction);
-    let perturbed=texture_normal(record,mapped.normal,normal,geometric);
+    var look=graph_surface(t,position,normal,-direction);
+    let mapped=texture_surface(record,look.base.xyz,look.parameters.x,look.parameters.y,position,gradients,(u32(t.interior.z)&2u)!=0u);
+    look.base=vec4<f32>(mapped.color,t.base.w);
+    look.parameters=vec4<f32>(mapped.metallic,mapped.roughness,look.parameters.zw);
+    look=aged_surface(look,position,outward);
+    let perturbed=texture_normal(record,mapped.normal,graph_normal(look,normal,geometric),geometric);
     return GuideLook(look.base.xyz,select(normal,perturbed,dot(perturbed,-direction)>0.0),look.parameters.x,look.parameters.y);
 }
 fn guide_sharp(t:Triangle,look:GuideLook)->bool {

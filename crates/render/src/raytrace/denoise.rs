@@ -697,6 +697,7 @@ mod tests {
             background: [0; 3],
             transparent_background: false,
             environment: None,
+            graphs: None,
             textures: None,
         };
         let ray = Ray::new(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0), 0.0, 10.0).unwrap();

@@ -340,9 +340,10 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
         }
         if emitter.distance<hit.distance {return;}
         if hit.triangle==0xffffffffu {if medium_count>0u {photon_bad_medium();}return;}
-        let t=triangle(hit.triangle);let point=surface_point_precise(t,hit.bary);
-        let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));let entering=dot(outward,direction)<0.0;
+        let surface=triangle(hit.triangle);let point=surface_point_precise(surface,hit.bary);
+        let outward=sc_unit(cross(surface.p1.xyz-surface.p0.xyz,surface.p2.xyz-surface.p0.xyz));let entering=dot(outward,direction)<0.0;
         let geometric=select(-outward,outward,entering);
+        let t=graph_surface(surface,point.hi+point.lo,geometric,-direction);
         if medium_count>0u {flux*=exp(-media[medium_count-1u].sigma*length(precise_point_delta(point.hi,point.lo,previous,previous_low)));}
         if !all(flux>=vec3<f32>(0.0)) || !all(flux<=vec3<f32>(3.4e38)) {atomicOr(&failures[7],1u);return;}
         if !any(flux>vec3<f32>(0.0)) {return;}

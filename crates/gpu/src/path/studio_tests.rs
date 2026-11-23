@@ -86,6 +86,7 @@ fn request(camera: Camera, size: u32) -> ImageRequest {
         studio_weights: None,
         integrator: Default::default(),
         raytrace: None,
+        graphs: None,
         textures: None,
         environment: None,
         camera,

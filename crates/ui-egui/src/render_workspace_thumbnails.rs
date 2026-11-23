@@ -148,6 +148,7 @@ pub(super) fn refresh(app: &mut SolveApp, ctx: &egui::Context) {
             integrator: Default::default(),
             raytrace: None,
             environment: None,
+            graphs: None,
             textures: None,
         };
         let scene = solidcraft_engine::product_scene::extract(&app.session);

@@ -37,6 +37,7 @@ fn request() -> ImageRequest {
     ImageRequest {
         studio_weights: None,
         environment: None,
+        graphs: None,
         textures: None,
         integrator: job::Integrator::Raytrace,
         raytrace: Some(RaytraceOptions { threads: 1, lights: Some(Vec::new()), ..Default::default() }),
