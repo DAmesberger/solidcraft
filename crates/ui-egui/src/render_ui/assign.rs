@@ -38,6 +38,13 @@ pub(crate) struct Preview {
     bodies: Vec<String>,
 }
 
+impl Preview {
+    /// The bodies and faces the look is being tried on.
+    pub(crate) fn targets(&self) -> (&[String], &[(String, usize)]) {
+        (&self.bodies, &self.faces)
+    }
+}
+
 fn component(app: &SolveApp, sel: &Sel) -> Option<u64> {
     match sel {
         Sel::Occurrence { path } => app.session.placed_document().path_placement(path).map(|(id, _)| id).filter(|id| *id != 0),

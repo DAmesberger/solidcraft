@@ -89,6 +89,14 @@ CommandSpec::new("view.visual_style", "Visual Style", crate::checked!("view.visu
     .icon("style").noundo().doc_only()
     .contract(&VISUAL_STYLE_CONTRACT).output(output_schema_for::<VisualStyleResult>)
     .params("style: shaded_with_edges|shaded|wireframe|shaded_with_hidden_edges → style, index (0..3 in that order)"),
+CommandSpec::new("view.realistic", "Realistic View", crate::checked!("view.realistic", realistic))
+    .icon("style").noundo().doc_only()
+    .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
+    .params("on?: bool (omitted: toggle) → on?; draw this view with the selected studio and appearance graphs"),
+CommandSpec::new("view.material_finish", "Material Finish", crate::checked!("view.material_finish", material_finish))
+    .icon("style").noundo().doc_only()
+    .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
+    .params("on?: bool (omitted: toggle) → on?; show the neutral studio finish in this modeling view"),
 CommandSpec::new("view.grid", "Grid", crate::checked!("view.grid", grid))
     .icon("style").noundo().doc_only()
     .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
@@ -357,6 +365,14 @@ fn visual_style(_s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "style must be shaded_with_edges, shaded, wireframe or shaded_with_hidden_edges")),
     };
     typed_reply(cmd, VisualStyleResult { style, index: style.index(), param_warnings: Vec::new() })
+}
+
+fn realistic(_s: &mut Session, p: &Value) -> Result<Value> {
+    view_toggle(p, "view.realistic", "on")
+}
+
+fn material_finish(_s: &mut Session, p: &Value) -> Result<Value> {
+    view_toggle(p, "view.material_finish", "on")
 }
 
 fn view_toggle(p: &Value, cmd: &str, key: &str) -> Result<Value> {

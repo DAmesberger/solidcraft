@@ -648,3 +648,7 @@ Theme files may also set `icon_palette`: opaque colours for SVG display roles,
 and three-colour pale/medium/strong ramps for Solid, Surface, Mesh, Form, Sketch,
 constraints and construction. These settings colour the existing command artwork
 without changing its shapes. Omitted roles keep the default light/dark palette.
+
+### Studio lighting
+
+Open **Display** in a Model or Render view and choose **Realistic** to see the surfaces under the studio lights. Metals reflect the studio and graph looks show their patterns. Each view keeps its own selection, so two views can show the same part under different lighting. In a Model view, choose **Material finish** to return to the neutral studio. Studio lighting requires full GPU graphics.

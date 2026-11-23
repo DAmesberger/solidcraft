@@ -187,6 +187,8 @@ pub struct ViewportState {
     /// The sketches' box in the world of one world state (held, as `pick_bounds` is). Every
     /// `projection` reads it, several times a frame, and each sketch's box samples its curves.
     sketch_bounds: std::sync::Mutex<Option<(std::sync::Arc<solidcraft_engine::doc::ModelState>, solidcraft_engine::geom::Aabb3)>>,
+    /// Appearance-graph looks lowered for the model scene's appearance stream (Realistic view).
+    pub(crate) graph_looks: std::sync::Mutex<crate::viewport_graphs::GraphLooks>,
     /// Where each construction plane made from a face is drawn, for one world state (held, as
     /// `pick_bounds` is): [`plane_face_covers`].
     plane_faces: std::sync::Mutex<Option<PlaneFaces>>,
@@ -944,6 +946,8 @@ fn scene_key(app: &SolveApp) -> u64 {
 fn base_scene_key(app: &SolveApp) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     app.ui.visual_style.hash(&mut h);
+    // The Realistic view adds the graph looks' appearance stream.
+    crate::viewport_graphs::active(app).hash(&mut h);
     app.preferences.vertex_markers.hash(&mut h);
     // The cached ground AO receiver and the ellipse share the selected ground plane.
     app.preferences.ground_shadow_follows_model.hash(&mut h);
@@ -1504,6 +1508,8 @@ fn hash_look(look: Option<&solidcraft_engine::doc::appearance::Look>, h: &mut im
                 }
                 None => 0u8.hash(h),
             }
+            l.graph.as_ref().map(|g| g.as_str()).hash(h);
+            serde_json::to_string(&l.values).ok().hash(h);
         }
         None => 0u8.hash(h),
     }
@@ -2756,6 +2762,9 @@ fn body_scene(
     let mut edge_placements = std::collections::HashMap::new();
     sc.instanced_hidden_edges = hidden_edges && instances.edges.is_some();
     let mut thread_budget = solidcraft_engine::cosmetic_threads::Budget::default();
+    // Graph looks in the Realistic view (`viewport_graphs`), unless components are coloured.
+    let graph_looks = crate::viewport_graphs::active(app) && !colored;
+    let mut graph_cache = app.viewport.graph_looks.lock().unwrap_or_else(|e| e.into_inner());
     for (b, (faded, identity, slots, copy)) in shown.into_iter().zip(keyed) {
         let resolved = match appearance.bodies.get(&b.name) {
             Some((key, resolved)) if *key == identity => resolved.clone(),
@@ -2800,6 +2809,10 @@ fn body_scene(
         let no_looks = std::collections::HashMap::new();
         let face_looks = if ghosted { &no_looks } else { &resolved.face_looks };
         let faces = b.body.face_count();
+        // See-through graph faces: the appearance stream draws them blended, so here they are
+        // glass that shows nothing (and writes no depth).
+        let graph_see_through =
+            if graph_looks && !faded { crate::viewport_graphs::see_through_faces(&s.doc, b, face_looks) } else { vec![false; faces] };
         // A face falls back to the body's own slot only when its face slots run short (the arena
         // full): only then do the copies' faces differ, each copy having a colour slot of its own.
         let fallback = if slots.faces != u32::MAX && slots.face_capacity as usize >= faces { crate::gpu::PaletteIndex(u32::MAX) } else { slots.body };
@@ -2820,6 +2833,8 @@ fn body_scene(
                     let opacity = look.map_or(opacity, |l| l.opacity);
                     let (rgba, class) = if faded {
                         (c4(color.gamma_multiply(0.35)), crate::gpu::TriClass::Faded)
+                    } else if graph_see_through.get(f).copied().unwrap_or(false) {
+                        ([0; 4], crate::gpu::TriClass::Glass)
                     } else if opacity < 0.999 {
                         let mut rgba = c4(color);
                         rgba[3] = glass_alpha(opacity);
@@ -2860,6 +2875,19 @@ fn body_scene(
                 made
             }
         };
+        if graph_looks && !faded {
+            let drawn = |f: usize| face_classes.get(f) == Some(&crate::gpu::TriClass::Opaque) || graph_see_through.get(f).copied().unwrap_or(false);
+            let Ok(_) = crate::viewport_graphs::add_body(
+                &mut sc,
+                &mut graph_cache,
+                &s.doc,
+                b,
+                face_looks,
+                || drawn_mesh(app, b),
+                drawn,
+                |_| Ok::<(), std::convert::Infallible>(()),
+            );
+        }
         let closed = b.is_closed();
         let class = plan_class(app, &face_classes);
         // The plan is built only for a body with a class.
@@ -2870,15 +2898,17 @@ fn body_scene(
         }
         // Opaque, faded and see-through bodies alike, in one colour (faces of their own colour
         // are built as before).
+        let body_see_through = face_looks.is_empty() && !graph_see_through.is_empty() && graph_see_through.iter().all(|x| *x);
         let look = if faded {
             crate::gpu::InstanceLook::Faded
-        } else if opacity < 0.999 {
+        } else if opacity < 0.999 || body_see_through {
             crate::gpu::InstanceLook::Glass
         } else {
             crate::gpu::InstanceLook::Opaque
         };
         let alpha = match look {
             crate::gpu::InstanceLook::Faded => col[3],
+            crate::gpu::InstanceLook::Glass if body_see_through => 0,
             crate::gpu::InstanceLook::Glass => glass_alpha(opacity),
             crate::gpu::InstanceLook::Opaque | crate::gpu::InstanceLook::Pbr => 255,
         };
@@ -4154,6 +4184,17 @@ pub(crate) fn body_tree(app: &SolveApp, boxes: &BodyBoxes) -> std::sync::Arc<Bod
         return t;
     }
     std::sync::Arc::new(BodyTree::new(boxes))
+}
+
+/// The shown bodies' extent (from the cached boxes): what the Realistic view's studio is fitted to.
+fn shown_body_bounds(app: &SolveApp) -> solidcraft_engine::geom::Aabb3 {
+    let st = crate::open_meshing::shown_world(app);
+    let boxes = body_bounds(app, &st);
+    st.bodies
+        .iter()
+        .zip(boxes.iter())
+        .filter(|(x, _)| app.body_visible(&x.name))
+        .fold(solidcraft_engine::geom::Aabb3::EMPTY, |a, (_, (_, b))| a.union(b))
 }
 
 /// The model's extent: bodies (from the cached boxes) and sketches.
@@ -6286,13 +6327,13 @@ impl EdgeHighlights {
             Some(i) => *i,
             None => {
                 self.meshes.push(crate::gpu::InstancedMesh {
-                    graph: None,
                     key: key as u64,
                     tris: std::sync::Arc::new(crate::gpu::SharedTris::default()),
                     instances: Vec::new(),
                     look: crate::gpu::InstanceLook::Opaque,
                     levels: Vec::new(),
                     closed: true,
+                    graph: None,
                     edges: Some(shared_edges(&app.viewport.instanced_edges, &mesh)),
                 });
                 self.by_mesh.insert(key, self.meshes.len() - 1);
@@ -7670,10 +7711,14 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ssaa = supersampling(app, ui.ctx(), paint_vp.to_f32(), size_px);
         let ao_samples = ao_samples(app, ui.ctx(), paint_vp.to_f32(), size_px);
         let (clip, clip_hatch) = section_clip(app);
+        // The Realistic option lights this view with the studio. The default
+        // picture shows until the studio, baked off the window thread, is installed.
+        let product_look = crate::realistic_view::product_look_around(app, || shown_body_bounds(app));
+        crate::realistic_view::repaint_while_preparing(app, ui.ctx(), product_look);
         let frame = Frame {
-            product_look: None,
-            units_per_mm: 1.0,
             product_lights: None,
+            product_look,
+            units_per_mm: 1.0,
             ssaa,
             ao_samples,
             product: false,
@@ -13405,9 +13450,9 @@ mod tests {
                 let proj = projection(&app, rect);
                 let e = proj.cam.eye().to_f32();
                 let frame = Frame {
+                    product_lights: None,
                     product_look: None,
                     units_per_mm: 1.0,
-                    product_lights: None,
                     product: false,
                     upload_error: None,
                     key: 1,

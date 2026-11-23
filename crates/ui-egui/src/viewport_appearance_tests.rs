@@ -352,6 +352,7 @@ fn a_placed_parts_triangles_and_edges_are_uploaded_once_and_a_part_added_alone_a
                 look: solidcraft_viewport_gpu::view::InstanceLook::Opaque,
                 levels: Vec::new(),
                 closed: true,
+                graph: None,
                 edges: with_edges.then(|| edges[k].clone()),
             };
             for i in 0..3 {
@@ -711,6 +712,194 @@ fn the_ambient_occlusion_radius_follows_what_is_drawn() {
     assert_eq!(super::ao_radius(&app), 0.0, "off");
 }
 
+/// Appearance-graph looks in the model view: in the Realistic view (with a GPU), a body whose look
+/// names a graph puts its faces into the scene's appearance stream, over the faces it still draws;
+/// a face's own graph look wins over the body's; a view with Realistic off, or a look without a graph,
+/// adds nothing; and a value edit changes only the uniform page, not the vertices.
+#[test]
+fn graph_looks_feed_the_appearance_stream_in_the_realistic_view() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    let graph = |base: [f64; 3]| {
+        json!({"name": "Brushed", "nodes": [
+            {"id": "uv", "kind": "texcoord.planar", "params": {"space": "object"}},
+            {"id": "lines", "kind": "pattern.brushed", "inputs": {"texcoord": {"from": "uv"}}},
+            {"id": "s", "kind": "standard_surface", "inputs": {"base_color": base, "specular_roughness": {"from": "lines", "fallback": 0.4}, "base_metalness": 1}}],
+            "output": "s"})
+    };
+    app.run("appearance.graph.create", json!({"id": "brushed", "name": "Brushed", "graph": graph([0.8, 0.77, 0.7])})).unwrap();
+    app.run("appearance.graph.create", json!({"id": "plain", "name": "Plain", "graph": {"name": "Plain", "interface": [{"name": "tint", "type": "color3", "default": [0.5, 0.5, 0.5]}],
+        "nodes": [{"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"interface": "tint"}}}], "output": "s"}})).unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "brushed"})).unwrap();
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "graph": "plain", "values": {"tint": [0.1, 0.2, 0.3]}})).unwrap();
+    let counts = |app: &SolveApp| {
+        let sc = build_scene(app);
+        let draws = sc.graphs.draws().to_vec();
+        let vertices = draws.iter().map(|d| d.vertices.len() / solidcraft_viewport_gpu::appearance::GraphScene::stride(d.object)).sum::<usize>();
+        (draws, vertices, sc.graphs.pages().to_vec(), sc.tris.len() + sc.blocks.len())
+    };
+    let (draws, vertices, _, _) = counts(&app);
+    assert!(draws.is_empty() && vertices == 0, "a view with Realistic off draws no graph");
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
+    app.ui.realistic = true;
+    let (draws, vertices, pages, faces_drawn) = counts(&app);
+    assert_eq!(draws.len(), 2, "two shapes: the body's graph and the top face's");
+    assert!(faces_drawn > 0, "the faces are still drawn as the scene's own triangles");
+    let mesh = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.mesh()).unwrap_or_default();
+    assert_eq!(vertices, mesh.triangles.len() * 3, "every face is shaded by a graph");
+    let top: usize = draws.iter().filter(|d| !d.object).map(|d| d.vertices.len() / solidcraft_viewport_gpu::appearance::VERTEX_SIZE).sum();
+    assert!(top > 0 && top < vertices, "the top face has its own graph");
+    // A value edit: the same shapes and vertices, another page.
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "graph": "plain", "values": {"tint": [0.9, 0.2, 0.3]}})).unwrap();
+    let (edited, _, edited_pages, _) = counts(&app);
+    assert_eq!(edited, draws, "a value edit keeps every vertex");
+    assert_ne!(edited_pages, pages, "and rewrites the page");
+    // A look without a graph adds nothing.
+    app.run("appearance.assign", json!({"bodies": [body], "color": [10, 20, 30]})).unwrap();
+    app.run("appearance.assign", json!({"faces": [[20, 15, 20]], "color": [10, 20, 30]})).unwrap();
+    assert!(counts(&app).0.is_empty());
+}
+
+/// Until its shape compiles, a graph look draws its base response (§5.6) with the look's own
+/// values: the record's head is the look's colour, never the graph's default (a first frame in
+/// the default colour flashed before the compiled one).
+#[test]
+fn a_graph_look_waits_for_its_shape_in_its_own_colour() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    // A base and a coat colour on the interface, as the library's coated graphs take them.
+    app.run("appearance.graph.create", json!({"id": "coated", "name": "Coated", "graph": {"name": "Coated", "interface": [
+        {"name": "tint", "type": "color3", "default": [0.5, 0.05, 0.05]}, {"name": "coat", "type": "color3", "default": [0.1, 0.45, 0.12]}],
+        "nodes": [{"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"interface": "tint"}, "coat_weight": 1, "coat_color": {"interface": "coat"}}}], "output": "s"}}))
+    .unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "coated", "values": {"tint": [0.7, 0.6, 0.1], "coat": [0.04, 0.12, 0.42]}}))
+        .unwrap();
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
+    app.ui.realistic = true;
+    let sc = build_scene(&app);
+    let page = sc.graphs.pages().first().map(|p| p.words.clone()).unwrap_or_default();
+    let head: Vec<f32> = page.iter().take(20).map(|w| f32::from_bits(*w)).collect();
+    let close = |a: &[f32], b: [f32; 3]| a.len() == 3 && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+    // `base_record`: (base colour, metalness), …, (coat colour, transmission) at vec4 4.
+    assert!(close(&head[0..3], [0.7, 0.6, 0.1]), "base colour from the look: {head:?}");
+    assert!(close(&head[16..19], [0.04, 0.12, 0.42]), "coat colour from the look: {head:?}");
+}
+
+/// A see-through graph look (transmission) in the Realistic view: the appearance stream draws its
+/// faces blended, and the standard path draws them as glass that shows nothing.
+#[test]
+fn a_see_through_graph_look_is_drawn_blended() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    app.run(
+        "appearance.graph.create",
+        json!({"id": "glass", "name": "Glass", "graph": {"name": "Glass", "nodes": [
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": [0.9, 0.95, 1.0], "transmission_weight": 0.9}}], "output": "s"}}),
+    )
+    .unwrap();
+    let body = crate::open_meshing::shown_world(&app).bodies.first().map(|b| b.name.clone()).unwrap_or_default();
+    app.run("appearance.assign", json!({"bodies": [body], "graph": "glass"})).unwrap();
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
+    app.ui.realistic = true;
+    let sc = build_scene(&app);
+    assert!(!sc.graphs.draws().is_empty() && sc.graphs.draws().iter().all(|d| d.blended), "drawn blended");
+    assert!(sc.palette.entries().contains(&[0, 0, 0, 0]), "the standard faces show nothing");
+    app.ui.realistic = false;
+    assert!(build_scene(&app).graphs.draws().is_empty());
+}
+
+/// `pbr` looks in the Realistic view go through the appearance stream as their one-node constant
+/// graphs (decision O9): every `pbr` look shares one shape, a metal reflects the studio unlike
+/// the same colour as a dielectric, and it draws exactly as the explicit constant graph does.
+/// A view with Realistic off skips graph shading.
+#[test]
+fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    app.run("solid.box", json!({"corner": [50, 0, 0], "length": 40, "width": 30, "height": 20})).unwrap();
+    let names: Vec<String> = crate::open_meshing::shown_world(&app).bodies.iter().map(|b| b.name.clone()).collect();
+    let steel = json!({"metallic": 1.0, "roughness": 0.2, "dielectric_ior": 1.5});
+    app.run("appearance.assign", json!({"bodies": [names[0]], "color": [200, 200, 205], "pbr": steel})).unwrap();
+    app.run(
+        "appearance.assign",
+        json!({"bodies": [names[1]], "color": [180, 60, 40], "pbr": {"metallic": 0.0, "roughness": 0.6, "dielectric_ior": 1.5}}),
+    )
+    .unwrap();
+    assert!(build_scene(&app).graphs.draws().is_empty(), "a view with Realistic off draws no graph");
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
+    app.ui.realistic = true;
+    app.ui.ground_shadow = false;
+    let scene = build_scene(&app);
+    let shapes: std::collections::BTreeSet<_> = scene.graphs.draws().iter().map(|d| d.shape).collect();
+    assert_eq!(shapes.len(), 1, "every pbr look shares one shape");
+    assert_eq!(scene.graphs.pages().len(), 1, "two materials, one page");
+    // Pixels: a metal pbr face against the same colour as a dielectric, and against the explicit
+    // constant graph of the same look.
+    const SIZE: u32 = 256;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
+    let (yaw, pitch) = solidcraft_viewport::StandardView::Iso.angles();
+    app.cam = crate::Camera { target: Vec3::new(20.0, 15.0, 10.0), yaw, pitch, roll: 0.0, distance: 60.0, fov: 0.0, ..Default::default() };
+    let render = |app: &SolveApp| {
+        let proj = super::projection(app, rect);
+        let e = proj.cam.eye().to_f32();
+        let look = crate::realistic_view::product_look_around(app, || super::shown_body_bounds(app));
+        crate::gpu::render_look_offscreen(
+            build_scene(app).merged(),
+            proj.vp.to_f32(),
+            proj.cam.back().to_f32(),
+            [e[0], e[1], e[2], 0.0],
+            SIZE,
+            look,
+            None,
+        )
+    };
+    let Some(metal) = render(&app) else { return };
+    let graph = super::super::viewport_graphs::pbr_graph([200, 200, 205], &doc::pbr_appearance::PbrParameters::new(1.0, 0.2, 1.5).unwrap()).unwrap();
+    app.run("appearance.graph.create", json!({"id": "steel", "name": "Steel", "graph": graph})).unwrap();
+    app.run("appearance.assign", json!({"bodies": [names[0]], "graph": "steel"})).unwrap();
+    let explicit = render(&app).unwrap_or_default();
+    let worst = metal.iter().zip(&explicit).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(255);
+    assert!(worst <= 1, "a pbr look draws as its constant graph (worst {worst})");
+    app.run(
+        "appearance.assign",
+        json!({"bodies": [names[0]], "color": [200, 200, 205], "pbr": {"metallic": 0.0, "roughness": 0.2, "dielectric_ior": 1.5}}),
+    )
+    .unwrap();
+    let dielectric = render(&app).unwrap_or_default();
+    let differ = metal.chunks(4).zip(dielectric.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+    assert!(differ > 500, "a metal reflects the studio unlike a dielectric ({differ} pixels differ)");
+}
+
 /// A body whose appearance has a PBR finish (brass) carries it in the model scene's palette on
 /// its body, instance and face slots; a plain body has none (the shader gives it a satin finish).
 /// The finish is shown by default, and the preference that turns it off reaches the shader.
@@ -958,4 +1147,53 @@ fn a_failed_sketch_is_not_drawn_while_the_model_cannot_be_placed() {
     assert_eq!(sketch_lines_in(&h.app, t.sketch_lost), 0);
     h.app.session.pending_moves.remove(&part);
     assert!(sketch_lines_in(&h.app, t.sketch_lost) > 0, "placed again");
+}
+
+/// The graph stream includes both the world point used for rasterisation and the point
+/// used for object-space pattern coordinates. Rotating and moving a copy preserves the latter.
+#[test]
+fn object_space_patterns_stay_on_a_turned_copy_of_a_component() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    let part = app.run("component.create", json!({"name":"Part","grounded":false})).unwrap();
+    app.run("solid.box", json!({"body_name":"Coupon","length":6,"width":4,"height":2})).unwrap();
+    let graph: serde_json::Value =
+        serde_json::from_str(include_str!("../../viewport/tests/fixtures/appearance_graph/brushed-stainless.json")).unwrap();
+    app.run("appearance.graph.create", json!({"id":"brush","name":"Brushed metal","graph":graph})).unwrap();
+    app.run("appearance.assign", json!({"bodies":["Coupon"],"graph":"brush"})).unwrap();
+    app.run("component.activate", json!({"component":0})).unwrap();
+    let copy = app.run("occurrence.copy", json!({"component":part["component"]})).unwrap();
+    app.run("occurrence.move", json!({"occurrence":copy["occurrence"],"translate":[40,20,5],"origin":[0,0,0],"axis":[0,0,1],"angle":"90 deg"}))
+        .unwrap();
+    app.viewport.gpu = Some(crate::gpu::GpuTarget {
+        format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
+        depth: None,
+        samples: 1,
+        tess: false,
+        oit: false,
+        edges: false,
+    });
+    app.ui.realistic = true;
+
+    let mut vertices = [0, 0];
+    let mut corner = [false, false];
+    for draw in build_scene(&app).graphs.draws() {
+        assert!(draw.object, "brushed steel reads its local planar coordinates");
+        let (records, rest) = draw.vertices.as_chunks::<{ solidcraft_viewport_gpu::appearance::OBJECT_VERTEX_SIZE }>();
+        assert!(rest.is_empty());
+        for record in records {
+            let coord = |offset: usize| f32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+            let [x, y, z] = [coord(0), coord(4), coord(8)];
+            let actual = [coord(28), coord(32), coord(36)];
+            let copy = usize::from(x > 20.);
+            // Inverting world = (40 - local.y, 20 + local.x, 5 + local.z) is independent
+            // of the renderer and of the triangle order or tessellation density.
+            let expected = if copy == 1 { [y - 20., 40. - x, z - 5.] } else { [x, y, z] };
+            let close = |a: [f32; 3], b: [f32; 3]| a.into_iter().zip(b).all(|(l, r)| (l - r).abs() < 1e-4);
+            assert!(close(actual, expected), "world {x},{y},{z} local {actual:?}, expected {expected:?}");
+            vertices[copy] += 1;
+            corner[copy] |= close(actual, [6., 4., 2.]);
+        }
+    }
+    assert!(vertices.into_iter().all(|n| n > 0), "both placements contributed graph vertices");
+    assert_eq!(corner, [true; 2], "the same asymmetric corner occurs on both copies");
 }
