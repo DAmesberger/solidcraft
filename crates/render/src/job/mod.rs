@@ -47,6 +47,7 @@ mod quality;
 mod regrade;
 #[cfg(test)]
 mod rt2_tests;
+pub mod studio;
 pub mod textures;
 pub mod volume;
 

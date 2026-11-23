@@ -714,7 +714,7 @@ fn scratch_keeps_visible_analytic_emission_and_its_raw_master_exact() {
     use solidcraft_render::job::{AreaLight, AreaLights, StudioLighting};
     let Some(executor) = executor() else { return };
     let source = ProductScene { meshes: Vec::new(), bounds: solidcraft_geom::Aabb3::EMPTY };
-    let light = AreaLight { center: [0.0; 3], u: [10.0, 0.0, 0.0], v: [0.0, 10.0, 0.0], radiance: [1.5, 0.5, 0.25] };
+    let light = AreaLight { center: [0.0; 3], u: [10.0, 0.0, 0.0], v: [0.0, 10.0, 0.0], radiance: [1.5, 0.5, 0.25], grade: 0.0 };
     let complete = |aging| {
         let options = JobOptions {
             samples: 4,

@@ -1605,7 +1605,7 @@ fn guided_photons_preserve_parallel_point_spot_and_area_power_at_a_translated_ap
             outer_half_angle_radians: 25_f64.to_radians(),
         }))
     };
-    let rectangle = AreaLight { center: point.position_mm, u: [0.25, 0.0, 0.0], v: [0.0, -0.25, 0.0], radiance: [1.0; 3] };
+    let rectangle = AreaLight { center: point.position_mm, u: [0.25, 0.0, 0.0], v: [0.0, -0.25, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let area = |light| StudioLighting { area_lights: AreaLights::new(&[light]).unwrap(), ..Default::default() };
     let radius = 0.5_f64;
     let height = 9.0_f64;
@@ -1660,7 +1660,7 @@ fn area_photon_caustics_match_rectangle_radiometry_and_partition_camera_depth() 
     let mut image = request(8);
     image.camera.target = Vec3::new(0.0, 0.0, -1.0);
     image.camera.distance = 0.1;
-    let light = AreaLight { center: [0.0, 0.0, 1.5], u: [0.75, 0.0, 0.0], v: [0.0, -0.75, 0.0], radiance: [1.0; 3] };
+    let light = AreaLight { center: [0.0, 0.0, 1.5], u: [0.75, 0.0, 0.0], v: [0.0, -0.75, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let render = |scene: ProductScene, light: AreaLight, area_lights: bool, light_depth, max_depth| {
         let options = JobOptions {
             samples: 256,
@@ -1792,7 +1792,7 @@ fn environment_photon_caustics_preserve_sun_and_analytic_rectangle_visibility() 
 
     // This black rectangle is behind the entire scene projection disk. Every
     // upward path through the slab hits it, including from its nonemitting side.
-    let blocker = AreaLight { center: [0.0, 0.0, 8.0], u: [100.0, 0.0, 0.0], v: [0.0, 100.0, 0.0], radiance: [0.0; 3] };
+    let blocker = AreaLight { center: [0.0, 0.0, 8.0], u: [100.0, 0.0, 0.0], v: [0.0, 100.0, 0.0], radiance: [0.0; 3], grade: 0.0 };
     let blocked = StudioLighting { area_lights: AreaLights::new(&[blocker]).unwrap(), ..lighting };
     let blocked_camera = render(blocked, false, 3, 4);
     assert!(blocked_camera[0] < 0.04);
@@ -1823,7 +1823,8 @@ fn photon_subsurface_flight_precedes_a_closer_analytic_emitter() {
             }),
         }])
         .unwrap(),
-        area_lights: AreaLights::new(&[AreaLight { center: [0.0; 3], u: [0.25, 0.0, 0.0], v: [0.0, 0.25, 0.0], radiance: [0.0; 3] }]).unwrap(),
+        area_lights: AreaLights::new(&[AreaLight { center: [0.0; 3], u: [0.25, 0.0, 0.0], v: [0.0, 0.25, 0.0], radiance: [0.0; 3], grade: 0.0 }])
+            .unwrap(),
         ..Default::default()
     };
     let options = JobOptions {
@@ -3362,7 +3363,7 @@ fn gpu_studio_area_mis_matches_independent_quadrature_and_distance_visibility() 
             faces: Vec::new(),
         }
     };
-    let light = AreaLight { center: [2.0, 0.0, 2.0], u: [1.0, 0.0, 0.0], v: [0.0, -1.0, 0.0], radiance: [3.0; 3] };
+    let light = AreaLight { center: [2.0, 0.0, 2.0], u: [1.0, 0.0, 0.0], v: [0.0, -1.0, 0.0], radiance: [3.0; 3], grade: 0.0 };
     let mut expected = 0.0;
     for y in 0..256 {
         for x in 0..256 {
@@ -3439,7 +3440,7 @@ fn gpu_emitter_inside_glass_applies_final_segment_absorption() {
     let Some(executor) = executor() else { return };
     let mut glass = sphere(OpaqueSurface::new(Vec3::ZERO, 0.0, 0.1, 1.0).unwrap());
     glass.meshes[0].transmission = Some(solidcraft_render::transmission::Transmission::new(Vec3::new(0.7, 0.3, 0.0), None).unwrap());
-    let light = AreaLight { center: [0.0; 3], u: [0.4, 0.0, 0.0], v: [0.0, 0.4, 0.0], radiance: [3.0; 3] };
+    let light = AreaLight { center: [0.0; 3], u: [0.4, 0.0, 0.0], v: [0.0, 0.4, 0.0], radiance: [3.0; 3], grade: 0.0 };
     let options = JobOptions {
         samples: 16,
         max_depth: 2,
@@ -3780,7 +3781,7 @@ fn gpu_shadow_mis_does_not_double_direct_energy_through_index_matched_glass() {
         transmission: None,
         faces: vec![],
     };
-    let light = AreaLight { center: [0.0, 0.0, 2.0], u: [4.0, 0.0, 0.0], v: [0.0, -4.0, 0.0], radiance: [1.0; 3] };
+    let light = AreaLight { center: [0.0, 0.0, 2.0], u: [4.0, 0.0, 0.0], v: [0.0, -4.0, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let mut expected = 0.0;
     for y in 0..128 {
         for x in 0..128 {
@@ -3843,7 +3844,7 @@ fn gpu_absorbing_two_sheet_mis_matches_f64_quadrature() {
         transmission: None,
         faces: vec![],
     };
-    let light = AreaLight { center: [0.0, 0.0, 2.0], u: [4.0, 0.0, 0.0], v: [0.0, -4.0, 0.0], radiance: [1.0; 3] };
+    let light = AreaLight { center: [0.0, 0.0, 2.0], u: [4.0, 0.0, 0.0], v: [0.0, -4.0, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let optics = solidcraft_render::transmission::Transmission::new(Vec3::new(0.2, 0.1, 0.05), Some(0.7)).unwrap();
     let mut expected = 0.0;
     for y in 0..128 {
@@ -4370,7 +4371,7 @@ fn gpu_finite_emitter_inside_solid_retains_entry_radiance_eta() {
         transmission: None,
         faces: vec![],
     };
-    let light = AreaLight { center: [0.0, 0.0, 0.0], u: [9.0, 0.0, 0.0], v: [0.0, -9.0, 0.0], radiance: [1.0; 3] };
+    let light = AreaLight { center: [0.0, 0.0, 0.0], u: [9.0, 0.0, 0.0], v: [0.0, -9.0, 0.0], radiance: [1.0; 3], grade: 0.0 };
     // Broad finite emitter makes edge/refraction disagreement small; the missing eta term is a 125% error.
     let mut expected = 0.0;
     for y in 0..128 {
@@ -7073,6 +7074,7 @@ fn gpu_punctual_delta_sources_preserve_zero_default_stream_and_cancel_without_pu
             u: [1.0, 0.0, 0.0],
             v: [0.0, -1.0, 0.0],
             radiance: [1.0, 2.0, 3.0],
+            grade: 0.0,
         }])
         .unwrap(),
         ..Default::default()

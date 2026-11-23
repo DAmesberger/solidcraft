@@ -28,6 +28,8 @@ mod media_hierarchy;
 mod photons;
 mod scene;
 #[cfg(test)]
+mod studio_tests;
+#[cfg(test)]
 mod tests;
 mod textures;
 // Opaque producers specialize away dielectric traversal and use a single
@@ -1313,7 +1315,8 @@ impl Task {
         for light in lighting.area_lights.iter() {
             let vector = |[x, y, z]: [f64; 3]| Vec3::new(x, y, z);
             scene::vector(&mut bytes, vector(light.center) - camera.target, light.area() as f32);
-            scene::vector(&mut bytes, vector(light.u), 0.0);
+            // The grade rides in u's fourth component (path.wgsl `area_profile`).
+            scene::vector(&mut bytes, vector(light.u), light.grade as f32);
             scene::vector(&mut bytes, vector(light.v), 0.0);
             scene::vector(&mut bytes, vector(light.radiance), 0.0);
         }
