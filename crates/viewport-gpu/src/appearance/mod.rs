@@ -20,7 +20,7 @@ mod compile;
 pub mod scene;
 
 pub use cache::AppearanceStats;
-pub use codegen::{BASE_VEC4, CodegenError, appearance_eval};
+pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, appearance_eval, generate};
 pub use scene::{GraphAppearance, GraphDraw, GraphScene, GraphSceneError, base_record};
 
 use solidcraft_viewport::appearance_graph::ir::Ir;

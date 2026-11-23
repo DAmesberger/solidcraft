@@ -129,6 +129,12 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 /// Entries ending in `*` are prefixes.
 pub const UI_CRATES: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit", "egui_kittest", "rfd", "bevy*"];
 
+/// Features that exist only for tests: `(crate, feature)`. Only a dev-dependency may enable one;
+/// no normal or build dependency, no feature of any crate and not the crate's own `default`.
+/// The appearance graph's f64 reference interpreter is a test oracle and never ships
+/// (docs/appearance-graph.md, decision O12).
+pub const TEST_ONLY_FEATURES: &[(&str, &str)] = &[("viewport", "test-reference")];
+
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 5;
 
@@ -161,6 +167,8 @@ pub struct Dep {
     pub kind: DepKind,
     /// `true` if the dependency is a workspace member.
     pub workspace: bool,
+    /// Features the dependency enables.
+    pub features: Vec<String>,
     /// `true` if the package comes from tangency-labs/solidcore (its git URL, or the vendored
     /// `solidcore/` directory), whatever it is called.
     pub from_solidcore: bool,
@@ -172,6 +180,8 @@ pub struct Crate {
     /// The crate's directory relative to the workspace root (`crates/smlib`).
     pub path: String,
     pub deps: Vec<Dep>,
+    /// The crate's own `[features]` table: each feature and what it enables.
+    pub features: Vec<(String, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +216,11 @@ pub enum Violation {
         dep: String,
         layer: u8,
     },
+    TestOnlyFeature {
+        krate: String,
+        feature: String,
+        via: String,
+    },
     SharedDependsOnApp {
         krate: String,
         dep: String,
@@ -235,6 +250,9 @@ impl std::fmt::Display for Violation {
             Violation::UiBelowL5 { krate, dep, layer } => {
                 write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L5+")
             }
+            Violation::TestOnlyFeature { krate, feature, via } => {
+                write!(f, "{krate} enables the test-only feature `{feature}` {via}; only a dev-dependency may")
+            }
             Violation::UiReachedBelowL5 { krate, via, dep, layer } => {
                 write!(f, "{krate} (L{layer}) reaches UI crate `{dep}` through {via}; UI toolkits are only allowed in L5+, directly or not")
             }
@@ -257,6 +275,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
 fn check_with(crates: &[Crate], classify: impl Fn(&str) -> Option<Class>) -> Vec<Violation> {
     let mut out = Vec::new();
     for c in crates {
+        test_only_features(c, &mut out);
         let Some(class) = classify(&c.name) else {
             out.push(Violation::Unregistered { krate: c.name.clone() });
             continue;
@@ -315,6 +334,27 @@ fn check_with(crates: &[Crate], classify: impl Fn(&str) -> Option<Class>) -> Vec
     out.sort_by_key(|v| v.to_string());
     out.dedup();
     out
+}
+
+/// Test-only features reach product builds through a normal or build dependency, a feature
+/// that forwards them, or the owner's `default`. Apps are checked too: they are what ships.
+fn test_only_features(c: &Crate, out: &mut Vec<Violation>) {
+    for (owner, feature) in TEST_ONLY_FEATURES {
+        let package = format!("solidcraft-{owner}");
+        let full = format!("{package}/{feature}");
+        for d in &c.deps {
+            if d.name == package && d.kind != DepKind::Dev && d.features.iter().any(|f| f == feature) {
+                out.push(Violation::TestOnlyFeature { krate: c.name.clone(), feature: full.clone(), via: format!("in a {:?} dependency", d.kind) });
+            }
+        }
+        for (name, enables) in &c.features {
+            let forwards = enables.iter().any(|e| e == &full || *e == format!("{package}?/{feature}"));
+            let own_default = c.name == package && name == "default" && enables.iter().any(|e| e == feature);
+            if forwards || own_default {
+                out.push(Violation::TestOnlyFeature { krate: c.name.clone(), feature: full.clone(), via: format!("through its feature `{name}`") });
+            }
+        }
+    }
 }
 
 /// Plugin contracts and runtimes must remain independent of every SolidCraft crate, including
@@ -392,14 +432,21 @@ pub fn from_metadata(meta: &Value, root: Option<&std::path::Path>) -> Result<Vec
                 _ => DepKind::Normal,
             };
             let workspace = members.contains(&dname.as_str()) || d["path"].is_string();
+            let features = d["features"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect();
             let from_git = d["source"].as_str().is_some_and(|u| u.contains("tangency-labs/solidcore"));
             let vendored = match (root, d["path"].as_str()) {
                 (Some(r), Some(p)) => std::path::Path::new(p).strip_prefix(r).is_ok_and(|rel| rel.starts_with("solidcore")),
                 _ => false,
             };
-            deps.push(Dep { name: dname, kind, workspace, from_solidcore: from_git || vendored });
+            deps.push(Dep { name: dname, kind, workspace, features, from_solidcore: from_git || vendored });
         }
-        out.push(Crate { name, path, deps });
+        let features = p["features"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_owned)).collect()))
+            .collect();
+        out.push(Crate { name, path, deps, features });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -622,7 +669,11 @@ mod tests {
         Crate {
             name: name.into(),
             path: format!("crates/{}", short_name(name)),
-            deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w, from_solidcore: false }).collect(),
+            deps: deps
+                .iter()
+                .map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w, features: Vec::new(), from_solidcore: false })
+                .collect(),
+            features: Vec::new(),
         }
     }
     use DepKind::*;
@@ -730,6 +781,35 @@ mod tests {
     }
 
     #[test]
+    fn test_only_features_stay_in_dev_dependencies() {
+        let with = |kind: DepKind| {
+            let mut krate = c("solidcraft-viewport-gpu", &[("solidcraft-viewport", kind, true)]);
+            krate.deps[0].features = vec!["test-reference".into()];
+            krate
+        };
+        assert!(check(&[with(Dev)]).is_empty());
+        for kind in [Normal, Build] {
+            let v = check(&[with(kind)]);
+            assert!(matches!(&v[..], [Violation::TestOnlyFeature { .. }]), "{kind:?}: {v:?}");
+        }
+        // Apps are exempt from layering, not from this.
+        let mut app = with(Normal);
+        app.name = "solidcraft".into();
+        assert!(matches!(&check(&[app])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut forwarding = c("solidcraft-engine", &[]);
+        forwarding.features = vec![("oracle".into(), vec!["solidcraft-viewport/test-reference".into()])];
+        assert!(matches!(&check(&[forwarding])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut weak = c("solidcraft-engine", &[]);
+        weak.features = vec![("oracle".into(), vec!["solidcraft-viewport?/test-reference".into()])];
+        assert!(matches!(&check(&[weak])[..], [Violation::TestOnlyFeature { .. }]));
+        let mut default_on = c("solidcraft-viewport", &[]);
+        default_on.features = vec![("default".into(), vec!["test-reference".into()]), ("test-reference".into(), vec!["dep:serde_json".into()])];
+        assert!(matches!(&check(&[default_on.clone()])[..], [Violation::TestOnlyFeature { .. }]));
+        default_on.features.remove(0);
+        assert!(check(&[default_on]).is_empty());
+    }
+
+    #[test]
     fn shared_crate_must_not_depend_on_layered_crates() {
         let v = check(&[c("solidcraft-ui-registry", &[("solidcraft-engine", Normal, true)])]);
         assert!(matches!(&v[..], [Violation::SharedDependsOnApp { krate, dep }] if krate == "solidcraft-ui-registry" && dep == "solidcraft-engine"));
@@ -816,7 +896,8 @@ mod tests {
         Crate {
             name: "solidcraft-smlib".into(),
             path: "crates/smlib".into(),
-            deps: vec![Dep { name: dep.into(), kind, workspace: false, from_solidcore }],
+            deps: vec![Dep { name: dep.into(), kind, workspace: false, features: Vec::new(), from_solidcore }],
+            features: Vec::new(),
         }
     }
 

@@ -1,8 +1,8 @@
 //! The test-only reference: an f64 interpreter of the appearance-graph [`Ir`]
-//! (docs/appearance-graph.md §5.4). It is an **oracle**, never a renderer: product code
-//! never evaluates a graph on the CPU. The module exists only under `cfg(test)`. When the GPU
-//! back ends land, a test-only feature will share it with their tests, and only a
-//! dev-dependency will be able to turn that feature on.
+//! (docs/appearance-graph.md §5.7). It is an **oracle**, never a renderer: product code
+//! never evaluates a graph on the CPU. The module exists only under `cfg(test)` or the
+//! `test-reference` feature, which only dev-dependencies enable; `cargo xtask layers` refuses a
+//! normal or build dependency that enables it.
 //!
 //! The GPU back ends (the viewport's raster back end and the path tracer's)
 //! read back their evaluation at fixed points and compare it with [`evaluate`] at the same
@@ -12,6 +12,7 @@
 //! # Using it from a back end's tests
 //!
 //! ```ignore
+//! // Cargo.toml: [dev-dependencies] solidcraft-viewport = { workspace = true, features = ["test-reference"] }
 //! use solidcraft_viewport::appearance_graph::reference::{self, Point, ReferenceSurface};
 //! let (ir, words) = reference::prepare_json(fixture_text, &Default::default())?;
 //! for point in reference::sample_points() {
@@ -24,7 +25,7 @@
 //!
 //! [`Evaluation::values`] holds every instruction's value, indexed by [`ValueId`], so a back end
 //! can compare intermediate pattern values too (the path tracer's pattern values equal the
-//! viewport's at the same points, §5.4).
+//! viewport's at the same points, §5.7).
 //!
 //! # What is compared, and where it can differ from a GPU
 //!
@@ -308,7 +309,8 @@ impl ReferenceTexture {
     }
 }
 
-/// The WGSL `Surface` the GPU back ends' generated functions return, field for field.
+/// The WGSL `Surface` the back ends' `appearance_eval` returns (crates/viewport-gpu/src/pbr.rs), field for
+/// field.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReferenceSurface {
     pub base_color: [f64; 3],

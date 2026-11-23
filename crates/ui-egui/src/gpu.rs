@@ -750,6 +750,7 @@ fn offscreen(
     let none = || Arc::new(Mutex::new(None));
     let cb = solidcraft_viewport_egui::ViewportCallback(Frame {
         product_look: None,
+        units_per_mm: 1.0,
         product_lights,
         product,
         upload_error: None,

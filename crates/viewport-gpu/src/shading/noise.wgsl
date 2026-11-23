@@ -1,6 +1,6 @@
-// Shared shading library: noise (shading/mod.rs). Pure functions, `sc_` names,
+// Shared shading library: noise (crates/viewport-gpu/src/shading/mod.rs). Pure functions, `sc_` names,
 // WebGL2-safe. Original lattice noise: every value is in [0, 1], seeded, and continuous in its
-// point. The 3D hash and value noise are the path tracer's surface variation' (`aging.wgsl`), the 2D
+// point. The 3D hash and value noise are the path tracer's aging masks' (`aging.wgsl`), the 2D
 // ones the viewport's former `pat_hash` and `pat_noise` at seed 0.
 
 // Noise kinds and dimensions for `sc_noise` and `sc_fbm` (the `pattern.noise` node's params).
@@ -144,13 +144,96 @@ fn sc_noise(kind: u32, dimensions: u32, p: vec3<f32>, seed: u32) -> f32 {
 
 // Fractional Brownian motion: `octaves` (1–8) of `sc_noise`, each `lacunarity` times finer and
 // `gain` times weaker, with its own seed, normalised by the total weight so it stays in [0, 1].
+// One function per kind and dimensions (`sc_fbm_<kind><dimensions>`), which generated code
+// calls (see `pattern.noise` in patterns.wgsl); `sc_fbm` picks one.
 fn sc_fbm(kind: u32, dimensions: u32, p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    if (dimensions == 2u) {
+        if (kind == sc_noise_kind_gradient) { return sc_fbm_gradient2(p, seed, octaves, lacunarity, gain); }
+        if (kind == sc_noise_kind_cellular) { return sc_fbm_cellular2(p, seed, octaves, lacunarity, gain); }
+        return sc_fbm_value2(p, seed, octaves, lacunarity, gain);
+    }
+    if (kind == sc_noise_kind_gradient) { return sc_fbm_gradient3(p, seed, octaves, lacunarity, gain); }
+    if (kind == sc_noise_kind_cellular) { return sc_fbm_cellular3(p, seed, octaves, lacunarity, gain); }
+    return sc_fbm_value3(p, seed, octaves, lacunarity, gain);
+}
+
+fn sc_fbm_value2(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
     var sum = 0.0;
     var total = 0.0;
     var amplitude = 1.0;
     var frequency = 1.0;
     for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
-        sum += amplitude * sc_noise(kind, dimensions, p * frequency, seed + k);
+        sum += amplitude * sc_value_noise2(p.xy * frequency, seed + k);
+        total += amplitude;
+        amplitude *= gain;
+        frequency *= lacunarity;
+    }
+    return select(0.0, sum / total, total > 0.0);
+}
+
+fn sc_fbm_gradient2(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amplitude = 1.0;
+    var frequency = 1.0;
+    for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
+        sum += amplitude * sc_gradient_noise2(p.xy * frequency, seed + k);
+        total += amplitude;
+        amplitude *= gain;
+        frequency *= lacunarity;
+    }
+    return select(0.0, sum / total, total > 0.0);
+}
+
+fn sc_fbm_cellular2(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amplitude = 1.0;
+    var frequency = 1.0;
+    for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
+        sum += amplitude * sc_cellular_noise2(p.xy * frequency, seed + k);
+        total += amplitude;
+        amplitude *= gain;
+        frequency *= lacunarity;
+    }
+    return select(0.0, sum / total, total > 0.0);
+}
+
+fn sc_fbm_value3(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amplitude = 1.0;
+    var frequency = 1.0;
+    for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
+        sum += amplitude * sc_value_noise3(p * frequency, seed + k);
+        total += amplitude;
+        amplitude *= gain;
+        frequency *= lacunarity;
+    }
+    return select(0.0, sum / total, total > 0.0);
+}
+
+fn sc_fbm_gradient3(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amplitude = 1.0;
+    var frequency = 1.0;
+    for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
+        sum += amplitude * sc_gradient_noise3(p * frequency, seed + k);
+        total += amplitude;
+        amplitude *= gain;
+        frequency *= lacunarity;
+    }
+    return select(0.0, sum / total, total > 0.0);
+}
+
+fn sc_fbm_cellular3(p: vec3<f32>, seed: u32, octaves: u32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var total = 0.0;
+    var amplitude = 1.0;
+    var frequency = 1.0;
+    for (var k = 0u; k < clamp(octaves, 1u, 8u); k += 1u) {
+        sum += amplitude * sc_cellular_noise3(p * frequency, seed + k);
         total += amplitude;
         amplitude *= gain;
         frequency *= lacunarity;

@@ -336,11 +336,11 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 /// [`MAX_SECTION_PLANES`] planes, 6 more `vec4`s (the last carries the ambient occlusion
 /// radius), the 8 analysis colours, their flags, the depth direction, the model matrix, the two
 /// whole-body highlight colours, the section hatch colours, the product lights (a flag and
-/// count, then 21 lights of 4 `vec4`s), the product look, the look's room,
+/// count, then 21 lights of 4 `vec4`s), the product look, the scene's units, the look's room,
 /// the inverse of the view-projection matrix, each section plane's hatch and the sky
 /// (`uniform_bytes`).
 const UNIFORM_SIZE: u64 =
-    480 + 16 * (2 * MAX_SECTION_PLANES as u64 - 1) + 16 * solidcraft_viewport::hatch::HATCH_COLOURS as u64 + 16 + 21 * 64 + 48 + 16 + 64;
+    480 + 16 * (2 * MAX_SECTION_PLANES as u64 - 1) + 16 * solidcraft_viewport::hatch::HATCH_COLOURS as u64 + 16 + 21 * 64 + 32 + 32 + 16 + 64;
 
 /// The identity, column-major: a scene drawn where it was built.
 const IDENTITY: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
@@ -1504,6 +1504,10 @@ pub struct Frame {
     pub product_lights: Option<Vec<[f32; 16]>>,
     /// The opt-in product look of PBR surfaces ([`ProductLook`]; None: the default preview).
     pub product_look: Option<ProductLook>,
+    /// World units per millimetre: the scale at which material lengths, given in millimetres,
+    /// are drawn. A constant of the scene (1 for a model in millimetres), not of a material;
+    /// sanitised by [`units_per_mm`].
+    pub units_per_mm: f32,
     /// Product preview uses its own batches, retaining the Design viewport's uploads.
     pub product: bool,
     /// Product preview only: receives a GPU error raised by its geometry upload.
@@ -4831,6 +4835,16 @@ fn product_look(cb: &Frame) -> Option<ProductLook> {
     cb.product_look.map(ProductLook::sanitized)
 }
 
+/// Smallest and largest [`Frame::units_per_mm`] the renderer draws with.
+pub const UNITS_PER_MM_RANGE: [f32; 2] = [1e-6, 1e6];
+
+/// The frame's world units per millimetre as drawn: clamped to [`UNITS_PER_MM_RANGE`], and 1 for
+/// a value that is not positive and finite.
+pub fn units_per_mm(cb: &Frame) -> f32 {
+    let units = cb.units_per_mm;
+    if units.is_finite() && units > 0.0 { units.clamp(UNITS_PER_MM_RANGE[0], UNITS_PER_MM_RANGE[1]) } else { 1.0 }
+}
+
 /// Everything the drawn picture depends on: the scene keys and camera, the viewport's size, the
 /// section, images, analysis, accessibility map, ambient occlusion, the product look and the
 /// theme's hover and selection tints. The same key draws the same picture (pipelines and shaders
@@ -4841,6 +4855,7 @@ pub fn frame_key(cb: &Frame) -> u64 {
     cb.product.hash(&mut h);
     cb.product_lights.as_ref().map(|lights| lights.iter().take(21).map(|light| light.map(f32::to_bits)).collect::<Vec<_>>()).hash(&mut h);
     product_look(cb).map(|look| (look.studio, look.uniform().map(f32::to_bits), look.room_uniform().map(f32::to_bits))).hash(&mut h);
+    units_per_mm(cb).to_bits().hash(&mut h);
     cb.key.hash(&mut h);
     cb.sketch_key.hash(&mut h);
     cb.hl_key.hash(&mut h);
@@ -6201,8 +6216,9 @@ fn uniform_bytes_placing(cb: &Frame, look: Option<ProductLook>, w: f32, h: f32, 
         let light = cb.product_lights.as_ref().and_then(|lights| lights.get(index)).copied().unwrap_or([0.0; 16]);
         v.extend(light.map(|value| if value.is_finite() { value } else { 0.0 }));
     }
-    // The product look ([`ProductLook::uniform`]; all zero without it).
+    // The product look ([`ProductLook::uniform`]; all zero without it), then the scene's units.
     v.extend(look.map_or([0.0; 4], |look| look.uniform()));
+    v.extend([units_per_mm(cb), 0.0, 0.0, 0.0]);
     // The look's room ([`ProductLook::room_uniform`]; all zero without the look or a room).
     v.extend(product_look(cb).map_or([0.0; 8], |look| look.room_uniform()));
     // The view-projection's inverse, to find a pixel's point in the world from its depth
@@ -6788,6 +6804,7 @@ mod tests {
         super::Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,
@@ -7540,6 +7557,7 @@ pub(crate) mod glass_tests {
         let frame = Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,
@@ -7748,6 +7766,7 @@ pub(crate) mod glass_tests {
         Frame {
             product_lights: None,
             product_look: None,
+            units_per_mm: 1.0,
             product: false,
             upload_error: None,
             key: 1,

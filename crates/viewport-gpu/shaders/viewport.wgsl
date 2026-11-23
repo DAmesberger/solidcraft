@@ -26,6 +26,7 @@ struct U {
     product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
     look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
+    units: vec4<f32>,       // world units per millimetre
     look_room: vec4<f32>, // the product look's room (`ibl::StudioRoom`): subject centre x, y, ground z, extent (0: none)
     look_foot: vec4<f32>, // its floor-contact ellipse radii x, y (world units)
     inv_vp: mat4x4<f32>, // the inverse of `vp`: a pixel's point in the world from its depth
