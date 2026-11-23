@@ -483,6 +483,7 @@ fn frame(scene: &Scene, cam: &Camera, [width, height]: [u32; 2], key: u64, acces
     let cap = scene.cap.unwrap_or(SECTION_CAP);
     let mode = scene.analysis.map(|a| a.mode);
     Frame {
+        product_look: None,
         product_lights: None,
         product: false,
         upload_error: None,

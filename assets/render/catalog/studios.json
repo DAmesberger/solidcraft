@@ -401,6 +401,378 @@
     ],
     "rig": "RIG-002"
    }
+  },
+  {
+   "id": "NATIVE-STUDIO-026",
+   "name": "Product",
+   "description": "Three-point product studio (STU-002): a graded key above front-left, a fill card front-right and a strip rim behind, in a mid-bright cyclorama room. The Realistic view's default.",
+   "source": "STU-002",
+   "realistic": {
+    "lights": [
+     {
+      "id": "key",
+      "centre": [
+       -1.2,
+       -1.2,
+       1.0
+      ],
+      "width_axis": [
+       -0.7071067811865476,
+       0.7071067811865476,
+       0.0
+      ],
+      "height_axis": [
+       0.358979079309,
+       0.358979079309,
+       0.861549790341
+      ],
+      "half_width": 0.4,
+      "half_height": 0.5,
+      "radiance": [
+       357.289685146,
+       357.289685146,
+       357.289685146
+      ],
+      "grade": 0.5
+     },
+     {
+      "id": "fill",
+      "centre": [
+       1.2,
+       -1.0,
+       0.6
+      ],
+      "width_axis": [
+       -0.640184399664,
+       -0.768221279597,
+       -2.77555756156e-17
+      ],
+      "height_axis": [
+       -0.275460015502,
+       0.229550012919,
+       0.933503385869
+      ],
+      "half_width": 0.6,
+      "half_height": 0.5,
+      "radiance": [
+       45.1401839419,
+       45.1401839419,
+       45.1401839419
+      ],
+      "grade": 0.35
+     },
+     {
+      "id": "rim",
+      "centre": [
+       0.7,
+       1.1,
+       1.0
+      ],
+      "width_axis": [
+       0.843661487732,
+       -0.536875492193,
+       2.77555756156e-17
+      ],
+      "height_axis": [
+       -0.326732019607,
+       -0.51343603081,
+       0.793492047616
+      ],
+      "half_width": 0.125,
+      "half_height": 0.6,
+      "radiance": [
+       475.065381914,
+       475.065381914,
+       475.065381914
+      ],
+      "grade": 0.3
+     }
+    ],
+    "rig_lights": 3,
+    "cyclorama": {
+     "floor": [
+      0.9,
+      0.8865,
+      0.864
+     ],
+     "wall": [
+      1.05,
+      1.05,
+      1.05
+     ],
+     "band": [
+      0.8,
+      0.8,
+      0.8
+     ],
+     "ceiling": [
+      0.576,
+      0.588,
+      0.6
+     ],
+     "spill": 0.4
+    },
+    "room": {
+     "half": 2.0,
+     "floor": -0.5,
+     "ceiling": 2.5
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-027",
+   "name": "Soft",
+   "description": "Black housing with broad side reflections (STU-004): two broad side panels over a bright cyclorama. Low contrast, soft highlights.",
+   "source": "STU-004",
+   "realistic": {
+    "lights": [
+     {
+      "id": "key",
+      "centre": [
+       -1.5,
+       -0.4,
+       0.7
+      ],
+      "width_axis": [
+       -0.25766265056,
+       0.966234939601,
+       -1.38777878078e-17
+      ],
+      "height_axis": [
+       0.397174885335,
+       0.105913302756,
+       0.911610927292
+      ],
+      "half_width": 0.75,
+      "half_height": 0.75,
+      "radiance": [
+       106.904574216,
+       106.904574216,
+       106.904574216
+      ],
+      "grade": 0.5
+     },
+     {
+      "id": "fill",
+      "centre": [
+       1.5,
+       -0.4,
+       0.7
+      ],
+      "width_axis": [
+       -0.25766265056,
+       -0.966234939601,
+       1.38777878078e-17
+      ],
+      "height_axis": [
+       -0.397174885335,
+       0.105913302756,
+       0.911610927292
+      ],
+      "half_width": 0.75,
+      "half_height": 0.75,
+      "radiance": [
+       75.5929493679,
+       75.5929493679,
+       75.5929493679
+      ],
+      "grade": 0.5
+     }
+    ],
+    "rig_lights": 2,
+    "cyclorama": {
+     "floor": [
+      1.35,
+      1.32975,
+      1.296
+     ],
+     "wall": [
+      1.9,
+      1.9,
+      1.9
+     ],
+     "band": [
+      0.6,
+      0.6,
+      0.6
+     ],
+     "ceiling": [
+      1.3439999999999999,
+      1.3719999999999999,
+      1.4
+     ],
+     "spill": 0.15
+    },
+    "room": {
+     "half": 2.0,
+     "floor": -0.5,
+     "ceiling": 2.5
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
+  },
+  {
+   "id": "NATIVE-STUDIO-028",
+   "name": "Contrast",
+   "description": "Mirror-metal vertical strips (STU-005): two tall strips and a low front fill in a darker cyclorama room, with a broad overhead scrim so flat metal seen from above or from a three-quarter view reads light (flat gold reads gold). Crisp highlights on metal; dark materials darker on faces turned from the light.",
+   "source": "STU-005",
+   "realistic": {
+    "lights": [
+     {
+      "id": "left_strip",
+      "centre": [
+       -1.1,
+       -0.3,
+       0.2
+      ],
+      "width_axis": [
+       -0.263117405792,
+       0.964763821238,
+       0.0
+      ],
+      "height_axis": [
+       0.166685800662,
+       0.0454597638169,
+       0.984961549367
+      ],
+      "half_width": 0.06,
+      "half_height": 0.8,
+      "radiance": [
+       592.738980244,
+       592.738980244,
+       592.738980244
+      ],
+      "grade": 0.3
+     },
+     {
+      "id": "right_strip",
+      "centre": [
+       1.1,
+       -0.3,
+       0.2
+      ],
+      "width_axis": [
+       -0.263117405792,
+       -0.964763821238,
+       0.0
+      ],
+      "height_axis": [
+       -0.166685800662,
+       0.0454597638169,
+       0.984961549367
+      ],
+      "half_width": 0.06,
+      "half_height": 0.8,
+      "radiance": [
+       296.369490122,
+       296.369490122,
+       296.369490122
+      ],
+      "grade": 0.3
+     },
+     {
+      "id": "front_fill",
+      "centre": [
+       0.0,
+       -1.8,
+       0.8
+      ],
+      "width_axis": [
+       -1.0,
+       0.0,
+       0.0
+      ],
+      "height_axis": [
+       0.0,
+       0.406138466053,
+       0.91381154862
+      ],
+      "half_width": 0.55,
+      "half_height": 0.4,
+      "radiance": [
+       40.6801806776,
+       40.6801806776,
+       40.6801806776
+      ],
+      "grade": 0.4
+     },
+     {
+      "id": "top_scrim",
+      "centre": [
+       0.0,
+       1.2,
+       1.0
+      ],
+      "width_axis": [
+       1.0,
+       0.0,
+       0.0
+      ],
+      "height_axis": [
+       0.0,
+       -1.0,
+       0.0
+      ],
+      "half_width": 3.9,
+      "half_height": 2.7,
+      "radiance": [
+       29.0,
+       29.0,
+       29.0
+      ],
+      "grade": 0.55
+     }
+    ],
+    "rig_lights": 3,
+    "cyclorama": {
+     "floor": [
+      0.9,
+      0.8865,
+      0.864
+     ],
+     "wall": [
+      0.9,
+      0.9,
+      0.9
+     ],
+     "band": [
+      0.75,
+      0.75,
+      0.75
+     ],
+     "ceiling": [
+      0.576,
+      0.588,
+      0.6
+     ],
+     "spill": 0.2
+    },
+    "room": {
+     "half": 4.0,
+     "floor": -0.5,
+     "ceiling": 4.0
+    },
+    "white_under_key": 0.6438,
+    "acceptance": {
+     "dark_albedo": 0.05,
+     "highlight": 24.0,
+     "distinct": 6.0,
+     "narrow_face": 0.2
+    }
+   }
   }
  ]
 }

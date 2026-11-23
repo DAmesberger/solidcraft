@@ -11,7 +11,7 @@ pub use rounded::clip_card;
 
 use std::sync::Arc;
 
-use solidcraft_viewport_gpu::view::{DrawStatsHandle, Frame, GpuTarget, Renderer};
+use solidcraft_viewport_gpu::view::{DrawStatsHandle, Frame, GpuTarget, ProductLook, Renderer, StudioBake, StudioEnvironment, StudioPreset};
 
 /// A frame of the viewport as an egui paint callback.
 pub struct ViewportCallback(pub Frame);
@@ -139,6 +139,65 @@ pub fn log_uncaptured_errors(device: &wgpu::Device, report: impl Fn(&wgpu::Error
     }));
 }
 
+/// Whether a renderer has installed this particular studio for all of its view tiles.
+pub fn studio_ready(stats: &DrawStatsHandle, preset: StudioPreset) -> bool {
+    stats.lock().is_ok_and(|s| s.installed_studios.contains(&Some(preset)))
+}
+
+/// The product look's studio while it is being baked. The renderer never bakes it, so the paint
+/// callback does: on another thread natively (about 0.1 s in an optimised build), and a frame's
+/// bounded share at a time on the web, which has no threads ([`StudioBake::FRAME_WORK`]).
+#[derive(Default)]
+pub struct StudioBaking {
+    #[cfg(not(target_arch = "wasm32"))]
+    worker: Option<std::thread::JoinHandle<StudioEnvironment>>,
+    steps: Option<StudioBake>,
+}
+
+impl StudioBaking {
+    /// Advance one bake and return the preset that actually finished, even when
+    /// a second tile requests another studio in the meantime.
+    pub fn advance(&mut self, preset: StudioPreset) -> Option<StudioEnvironment> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(worker) = &self.worker {
+                if worker.is_finished() {
+                    return self.worker.take().and_then(|worker| worker.join().ok());
+                }
+                return None;
+            }
+            if self.steps.is_none() {
+                match std::thread::Builder::new().name("viewport-studio".into()).spawn(move || StudioEnvironment::bake(preset)) {
+                    Ok(worker) => {
+                        self.worker = Some(worker);
+                        return None;
+                    }
+                    Err(error) => log::warn!("studio thread unavailable, advancing over frames: {error}"),
+                }
+            }
+        }
+        let bake = self.steps.get_or_insert_with(|| StudioBake::new(preset));
+        if bake.step(StudioBake::FRAME_WORK) { self.steps.take().and_then(StudioBake::finish) } else { None }
+    }
+}
+
+/// Install the studio that a frame's product `look` names once it is baked, starting the bake if
+/// it has not started.
+pub fn bake_studio(device: &wgpu::Device, queue: &wgpu::Queue, resources: &mut egui_wgpu::CallbackResources, look: Option<ProductLook>) {
+    let Some(look) = look else { return };
+    let installed = resources.get::<Renderer>().is_none_or(|r| r.has_studio_environment(look.studio));
+    if installed {
+        return;
+    }
+    if resources.get::<StudioBaking>().is_none() {
+        resources.insert(StudioBaking::default());
+    }
+    let studio = resources.get_mut::<StudioBaking>().and_then(|baking| baking.advance(look.studio));
+    if let (Some(studio), Some(renderer)) = (studio, resources.get_mut::<Renderer>()) {
+        renderer.set_studio_environment(device, queue, &studio);
+    }
+}
+
 impl egui_wgpu::CallbackTrait for ViewportCallback {
     fn prepare(
         &self,
@@ -148,6 +207,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        bake_studio(device, queue, resources, self.0.product_look);
         if let Some(res) = resources.get_mut::<Renderer>() {
             res.prepare(device, queue, encoder, &self.0);
         }
@@ -170,6 +230,7 @@ impl egui_wgpu::CallbackTrait for TileCallback {
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
+        bake_studio(device, queue, resources, self.1.product_look);
         if let Some(res) = resources.get_mut::<Renderer>() {
             res.prepare_view(self.0, device, queue, &self.1);
         }

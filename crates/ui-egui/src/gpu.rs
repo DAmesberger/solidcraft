@@ -749,6 +749,7 @@ fn offscreen(
     resources.insert(Renderer::new(&device, target, compute));
     let none = || Arc::new(Mutex::new(None));
     let cb = solidcraft_viewport_egui::ViewportCallback(Frame {
+        product_look: None,
         product_lights,
         product,
         upload_error: None,

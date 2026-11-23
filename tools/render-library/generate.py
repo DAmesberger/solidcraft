@@ -67,6 +67,19 @@ def catalog_exports(check: bool) -> None:
             target.write_bytes(data)
 
 
+def studio_fixture(check: bool) -> None:
+    """Export only the lighting rigs for the standalone viewport tests."""
+    items = [s for s in load(CATALOGS["studios"])["items"] if s.get("realistic")]
+    data = json.dumps({"items": items}, indent=2, ensure_ascii=False) + "\n"
+    target = ROOT / "crates/viewport-gpu/tests/fixtures/studios.json"
+    if check:
+        if not target.is_file() or target.read_text(encoding="utf-8") != data:
+            raise ValueError("Stale studio fixture; run tools/render-library/generate.py")
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(data, encoding="utf-8", newline="\n")
+
+
 def generated() -> tuple[str, dict]:
     assets: dict[str, tuple[str, str]] = {}
     for item in load(CATALOGS["surface_manifest"])["items"]:
@@ -114,6 +127,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     catalog_exports(args.check)
+    studio_fixture(args.check)
     text, summary = generated()
     if args.check:
         if not OUTPUT.is_file() or OUTPUT.read_text(encoding="utf-8") != text:

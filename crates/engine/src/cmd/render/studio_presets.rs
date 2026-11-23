@@ -17,42 +17,18 @@ use solidcraft_render::{
 };
 use std::sync::Arc;
 
-#[derive(serde::Deserialize)]
-struct StudioFile {
-    items: Vec<NativeStudio>,
-}
-
-#[derive(serde::Deserialize)]
-struct NativeStudio {
-    id: String,
-    name: String,
-    description: String,
-    path: NativeComposition,
-}
-
-#[derive(serde::Deserialize)]
-struct NativeComposition {
-    hdr: String,
-    intensity: f64,
-    exposure_ev: f64,
-    ground: [f64; 3],
-    rig: Option<String>,
-}
-
 /// Built-in compositions in the shape returned by `render.library.list`.
 pub(super) fn entries() -> std::result::Result<&'static [Value], String> {
     static ENTRIES: std::sync::OnceLock<std::result::Result<Vec<Value>, String>> = std::sync::OnceLock::new();
     ENTRIES
         .get_or_init(|| {
-            let source = super::library_data::catalog("studios").ok_or("missing native studio catalog")?;
-            let file: StudioFile = serde_json::from_str(source).map_err(|e| format!("invalid native studio catalog: {e}"))?;
-            Ok(file
-                .items
-                .into_iter()
-                .map(|s| {
-                    let path = s.path;
-                    json!({"id":s.id, "name":s.name, "description":s.description, "hdr":path.hdr, "intensity":path.intensity,
-                "exposure_ev":path.exposure_ev, "ground":path.ground, "rig":path.rig})
+            let studios = super::studios::try_builtin()?;
+            Ok(studios
+                .iter()
+                .filter_map(|s| {
+                    let path = s.path.as_ref()?;
+                    Some(json!({"id":s.id, "name":s.name, "description":s.description, "hdr":path.hdr, "intensity":path.intensity,
+                    "exposure_ev":path.exposure_ev, "ground":path.ground, "rig":path.rig}))
                 })
                 .collect())
         })

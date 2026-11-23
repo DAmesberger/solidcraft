@@ -7667,6 +7667,7 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ao_samples = ao_samples(app, ui.ctx(), paint_vp.to_f32(), size_px);
         let (clip, clip_hatch) = section_clip(app);
         let frame = Frame {
+            product_look: None,
             product_lights: None,
             ssaa,
             ao_samples,
@@ -13399,6 +13400,7 @@ mod tests {
                 let proj = projection(&app, rect);
                 let e = proj.cam.eye().to_f32();
                 let frame = Frame {
+                    product_look: None,
                     product_lights: None,
                     product: false,
                     upload_error: None,

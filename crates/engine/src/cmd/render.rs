@@ -38,6 +38,7 @@ mod resources;
 mod shots;
 mod staging;
 mod studio_presets;
+pub mod studios;
 mod surface_bindings;
 mod surface_resources;
 mod textures;

@@ -143,7 +143,7 @@ impl Renderer {
         queue.write_buffer(
             &self.uniform,
             0,
-            &uniform_bytes(frame, frame.size_px[0], frame.size_px[1], self.linear_out, self.target.reversed_depth()),
+            &super::frame_uniform(frame, self.drawn_look(frame), frame.size_px[0], frame.size_px[1], self.linear_out, self.target.reversed_depth()),
         );
         failed.is_none()
     }
