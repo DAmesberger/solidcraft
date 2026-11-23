@@ -288,7 +288,7 @@ fn gpu_coat_colour_matches_the_f64_oracle() {
     let v = inputs[k + 4u].xyz;
     let l = inputs[k + 5u].xyz;
     let parameters = vec3<f32>(i.w, 0.35, 1.5);
-    o = vec4<f32>(sc_coat_layer(sc_base_brdf(i.xyz, parameters, n, v, l), inputs[k + 1u].xyz, inputs[k + 2u].xyz, n, v, l), 0.0);
+    o = vec4<f32>(sc_colored_coat(sc_base_brdf(i.xyz, parameters, n, v, l), inputs[k + 1u].xyz, inputs[k + 2u].xyz, n, v, l), 0.0);
 "#;
     let Some(got) = evaluate_cases(body, &inputs, 6) else { return gpu_required() };
     assert_eq!(got.len(), expected.len());
@@ -427,7 +427,7 @@ fn probe_c2(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> @location(0
     let alpha = sc_aniso_alpha(p.y, p.z);
     var c = sc_layered_brdf(vec3<f32>(0.5), vec3<f32>(0.0, 0.4, 1.5), vec4<f32>(p.x, 0.5, 0.6, 0.7), p.z, t, vec3<f32>(1.0, 0.1, 1.5), vec3<f32>(0.2, 0.5, 0.2), un, sc_unit(n + p * 0.1), sc_unit(p + n), sc_unit(n - p));
     c += sc_aniso_base_brdf(vec3<f32>(0.5), vec3<f32>(1.0, 0.4, 1.5), alpha, un, t, sc_unit(p + n), un);
-    c += sc_coat_layer(c, vec3<f32>(0.5, 0.2, 1.4), vec3<f32>(0.9), un, sc_unit(p + n), un) * sc_coat_tint(0.5, vec3<f32>(0.3));
+    c += sc_colored_coat(c, vec3<f32>(0.5, 0.2, 1.4), vec3<f32>(0.9), un, sc_unit(p + n), un) * sc_coat_tint(0.5, vec3<f32>(0.3));
     c += sc_aniso_reflect(un, t, sc_unit(p + n), p.y, p.z);
     c += sc_tinted_base_brdf(vec3<f32>(0.5), vec3<f32>(0.5, 0.4, 1.5), vec4<f32>(0.8, p), alpha, un, t, sc_unit(p + n), un);
     c += sc_tinted_fresnel(sc_specular_f0(c, 0.5, 1.5, vec4<f32>(p, 1.0)), sc_specular_f90(0.5, 1.5, vec4<f32>(p, 1.0)), p.x);
