@@ -1160,8 +1160,9 @@ fn vector_slopes_match_the_reference() {
     }
 }
 
-/// C2's rule for the blended class: a surface that drives transmission or opacity, or holds a
-/// transmission above 0 or an opacity below 1, in any layer.
+/// A texture the scene gives only as encoded bytes is decoded on the renderer's worker and made
+/// resident: until then its `image` node draws its default colour; afterwards the image itself
+/// (red on the left half of the square, blue on the right).
 #[test]
 fn scene_textures_are_decoded_and_drawn() {
     let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };

@@ -155,6 +155,7 @@ impl TextureMap {
             MapRole::Roughness => 2,
             MapRole::Metallic => 3,
             MapRole::AmbientOcclusion => 4,
+            MapRole::Height => 5,
         };
         (self.digest, role | if self.gpu_mip_filtering { 0x80 } else { 0 })
     }
