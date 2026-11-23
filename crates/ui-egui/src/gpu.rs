@@ -748,6 +748,8 @@ fn offscreen(
     let Offscreen { look, tess, product_lights, product, srgb, analysis, analysis_colors, ssaa, ao_radius, ao_samples, preview, moving } = options;
     let (adapter, device, queue) = offscreen_device()?;
     eprintln!("offscreen adapter: {:?}", adapter.get_info().backend);
+    // Appearance-graph surfaces compile off the frame; until then a frame skips them.
+    let graphs = !scene.graphs.is_empty();
     let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
     let depth = solidcraft_viewport_gpu::depth_format(&device, true);
     let compute = tess.and_then(|shader| {
@@ -820,7 +822,7 @@ fn offscreen(
     let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
     // Preparation submits shader and texture work in the background. Let subsequent frames
     // install completed resources before reading the test picture.
-    if look.is_some() {
+    if look.is_some() || graphs {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let mut encoder = device.create_command_encoder(&Default::default());
