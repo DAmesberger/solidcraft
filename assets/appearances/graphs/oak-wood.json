@@ -1,0 +1,16 @@
+{
+ "name": "Oak, satin finish",
+ "interface": [{"name": "light", "type": "color3", "default": [0.62, 0.43, 0.24]}, {"name": "dark", "type": "color3", "default": [0.42, 0.26, 0.13]}],
+ "nodes": [
+  {"id": "uv", "kind": "texcoord.triplanar", "params": {"space": "object"}, "inputs": {"scale_mm": [1, 1, 12]}},
+  {"id": "grain", "kind": "pattern.noise", "params": {"kind": "gradient", "dimensions": 2, "octaves": 3}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.8, "seed": 5}},
+  {"id": "pores", "kind": "pattern.noise", "params": {"kind": "value", "dimensions": 2, "octaves": 1}, "inputs": {"texcoord": {"from": "uv"}, "scale_mm": 0.12, "seed": 6}},
+  {"id": "bands", "kind": "smoothstep", "inputs": {"edge0": 0.35, "edge1": 0.65, "in": {"from": "grain"}}},
+  {"id": "base", "kind": "mix", "inputs": {"a": {"interface": "light"}, "b": {"interface": "dark"}, "t": {"from": "bands", "fallback": 0.4}}},
+  {"id": "rough", "kind": "remap", "inputs": {"in": {"from": "pores"}, "out_min": 0.5, "out_max": 0.65}},
+  {"id": "relief_h", "kind": "add", "inputs": {"a": {"from": "bands"}, "b": {"from": "pores"}}},
+  {"id": "relief", "kind": "normal.from_height", "inputs": {"height": {"from": "relief_h"}, "relief_mm": 0.004}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"from": "base", "fallback": [0.54, 0.36, 0.19]}, "specular_roughness": {"from": "rough", "fallback": 0.58}, "specular_ior": 1.5, "geometry_normal": {"from": "relief"}}}
+ ],
+ "output": "surface"
+}

@@ -1,0 +1,11 @@
+{
+ "name": "Textured ABS",
+ "interface": [{"name": "color", "type": "color3", "default": [0.05, 0.05, 0.055]}],
+ "nodes": [
+  {"id": "p", "kind": "geometry.position", "params": {"space": "object"}},
+  {"id": "stipple", "kind": "pattern.noise", "params": {"kind": "cellular", "dimensions": 3, "octaves": 1}, "inputs": {"position": {"from": "p"}, "scale_mm": 0.25, "seed": 9}},
+  {"id": "rough", "kind": "remap", "inputs": {"in": {"from": "stipple"}, "out_min": 0.55, "out_max": 0.75}},
+  {"id": "surface", "kind": "standard_surface", "inputs": {"base_color": {"interface": "color"}, "specular_roughness": {"from": "rough", "fallback": 0.65}, "specular_ior": 1.53}}
+ ],
+ "output": "surface"
+}
