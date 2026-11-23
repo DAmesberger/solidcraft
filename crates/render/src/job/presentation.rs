@@ -180,16 +180,18 @@ impl Display {
                 ((absolute / self.width as usize) as f64 + 0.5) / f64::from(self.height),
             ];
             let background = self.backdrop.map_or(self.background, |backdrop| backdrop.color(position));
-            let mapped = std::array::from_fn(|channel| {
-                let c = if alpha > 0. { f64::from(pixel[channel]) * self.exposure / alpha * self.finishing.rgb_gain[channel] } else { 0. };
-                self.tone_map.map(c)
-            });
+            let mapped = self.tone_map.map_rgb(std::array::from_fn(|channel| {
+                if alpha > 0. { f64::from(pixel[channel]) * self.exposure / alpha * self.finishing.rgb_gain[channel] } else { 0. }
+            }));
             let mapped = self.finishing.display(mapped, position);
+            let glow = bloom.and_then(|pixels| pixels.get(index)).map(|glow| {
+                self.tone_map.map_rgb(std::array::from_fn(|channel| f64::from(glow[channel]) * self.exposure * self.finishing.rgb_gain[channel]))
+            });
             for (channel, ((c, b), out)) in mapped.into_iter().zip(background).zip(rgba.iter_mut()).enumerate() {
                 let mut value = if self.transparent { c } else { c * alpha + b * (1. - alpha) };
-                if let Some(glow) = bloom.and_then(|pixels| pixels.get(index)) {
+                if let Some(glow) = glow {
                     let strength = self.finishing.bloom.map_or(0.0, |b| b.strength);
-                    value += strength * self.tone_map.map(f64::from(glow[channel]) * self.exposure * self.finishing.rgb_gain[channel]);
+                    value += strength * glow[channel];
                 }
                 *out = solidcraft_color::srgb::encode8(value);
             }

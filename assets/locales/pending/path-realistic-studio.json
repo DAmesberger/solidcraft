@@ -1,0 +1,26 @@
+{
+  "en": {
+    "render.tone_pbr_neutral": "PBR Neutral"
+  },
+  "ar": {
+    "render.tone_pbr_neutral": "PBR محايد"
+  },
+  "de": {
+    "render.tone_pbr_neutral": "PBR Neutral"
+  },
+  "he": {
+    "render.tone_pbr_neutral": "PBR ניטרלי"
+  },
+  "ja": {
+    "render.tone_pbr_neutral": "PBR ニュートラル"
+  },
+  "ko": {
+    "render.tone_pbr_neutral": "PBR 뉴트럴"
+  },
+  "vi": {
+    "render.tone_pbr_neutral": "PBR trung tính"
+  },
+  "zh": {
+    "render.tone_pbr_neutral": "PBR 中性"
+  }
+}

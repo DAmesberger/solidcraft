@@ -177,7 +177,7 @@ fn nested_media_camera_inside_before_opaque_geometry_attenuates_the_visible_emit
         // In the inside case the geometry ray first meets the opaque plane at1.5mm,
         // before the inner exit at2mm. The front-facing analytic light at1mm must
         // still acquire Beer attenuation from the camera's actual inner medium.
-        let light = AreaLight { center: [0.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance };
+        let light = AreaLight { center: [0.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance, grade: 0.0 };
         let bounds = outer.mesh.bounds();
         let mut source = ProductScene { bounds, meshes: vec![outer, inner, opaque] };
         if reverse {
@@ -660,7 +660,7 @@ fn gpu_actual_sampled_pupils_normalize_initial_beer_before_visible_emission_with
     let seed = 71;
     let lens = solidcraft_render::job::ThinLens { aperture_radius_mm: 1.0, focus_distance_mm: 2.0 };
     let radiance = [2.0, 3.0, 5.0];
-    let light = AreaLight { center: [0.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance };
+    let light = AreaLight { center: [0.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance, grade: 0.0 };
     let options = JobOptions {
         nested_media: true,
         samples,
@@ -767,7 +767,7 @@ fn gpu_boundary_origins_refuse_through_existing_diagnostics_and_non_nested_outsi
         assert_eq!(error.code, ErrorCode::InvalidScene);
         assert!(error.message.contains("code 4"));
     }
-    let light = AreaLight { center: [-5.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance: [2.0, 3.0, 5.0] };
+    let light = AreaLight { center: [-5.0, 0.0, -1.0], u: [3.0, 0.0, 0.0], v: [0.0, 3.0, 0.0], radiance: [2.0, 3.0, 5.0], grade: 0.0 };
     let mut image = request(4);
     image.camera.fov = 0.0;
     image.camera.target = Vec3::new(-5.0, 0.0, 0.0);

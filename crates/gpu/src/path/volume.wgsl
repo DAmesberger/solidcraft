@@ -88,11 +88,13 @@ fn volume_direct(position: vec3<f32>, physical: PrecisePoint, incoming: vec3<f32
         var punctual=false;
         if source<count {
             let light=u.area_lights[source];
-            let point=light.center.xyz+light.u.xyz*(2.0*random(rng)-1.0)+light.v.xyz*(2.0*random(rng)-1.0);
+            let area_s=2.0*random(rng)-1.0;
+            let area_t=2.0*random(rng)-1.0;
+            let point=light.center.xyz+light.u.xyz*area_s+light.v.xyz*area_t;
             let delta=point-position;
             distance=length(delta);
             if distance<=u.lighting.x { continue; }
-            sample=EnvironmentSample(sc_unit(delta),light.radiance.xyz,area_pdf(light,delta));
+            sample=EnvironmentSample(sc_unit(delta),light.radiance.xyz*area_profile(light,vec2<f32>(area_s,area_t)),area_pdf(light,delta));
         } else if source==count {
             if u.environment_map.w<=0.0 && !any(u.environment.xyz>vec3<f32>(0.0)) { continue; }
             sample=env_sample(rng);

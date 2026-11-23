@@ -935,9 +935,10 @@ fn power_weight(a: f32, b: f32) -> f32 {
     let ratio = b/a;
     return 1.0/(1.0+ratio*ratio);
 }
-struct EmitterHit { distance: f32, index: u32 };
+// `local`: where the ray meets the emitter, in its own coordinates (s, t in [-1, 1]).
+struct EmitterHit { distance: f32, index: u32, local: vec2<f32> };
 fn emitter_hit_precise_except(o: vec3<f32>, o_low: vec3<f32>, d: vec3<f32>, minimum: f32, excluded: u32) -> EmitterHit {
-    var hit = EmitterHit(FAR,0xffffffffu);
+    var hit = EmitterHit(FAR,0xffffffffu,vec2<f32>(0.0));
     for (var i=0u; i<u32(u.light_count.w); i+=1u) {
         if i==excluded {continue;}
         let light = u.area_lights[i];
@@ -949,8 +950,10 @@ fn emitter_hit_precise_except(o: vec3<f32>, o_low: vec3<f32>, d: vec3<f32>, mini
         if distance <= minimum || distance >= hit.distance { continue; }
         var q = o+d*distance-light.center.xyz;
         if any(o_low!=vec3<f32>(0.0)) { q=fma(d,vec3<f32>(distance),-to_light); }
-        if abs(dot(q,light.u.xyz))<=dot(light.u.xyz,light.u.xyz) && abs(dot(q,light.v.xyz))<=dot(light.v.xyz,light.v.xyz) {
-            hit = EmitterHit(distance,i);
+        let along = vec2<f32>(dot(q,light.u.xyz),dot(q,light.v.xyz));
+        let extent = vec2<f32>(dot(light.u.xyz,light.u.xyz),dot(light.v.xyz,light.v.xyz));
+        if abs(along.x)<=extent.x && abs(along.y)<=extent.y {
+            hit = EmitterHit(distance,i,along/extent);
         }
     }
     return hit;
@@ -965,6 +968,16 @@ fn emitter_hit(o: vec3<f32>, d: vec3<f32>) -> EmitterHit {
     return emitter_hit_bounded(o,d,u.lighting.x);
 }
 
+// A rectangle's relative radiance at local `s`, `t` in [-1, 1], graded toward its edges over its
+// grade (`u.w`, 0 uniform): solidcraft_viewport::studio::graded_profile, the Realistic view's
+// definition, with mean 1 over the rectangle, so `radiance` stays its mean.
+fn area_profile(light: AreaLight, local: vec2<f32>) -> f32 {
+    let g = clamp(light.u.w,0.0,1.0);
+    if g<=0.0 { return 1.0; }
+    let edge = vec2<f32>(1.0)-smoothstep(vec2<f32>(1.0-g),vec2<f32>(1.0),abs(local));
+    let mean = 1.0-0.5*g;
+    return edge.x*edge.y/(mean*mean);
+}
 fn area_pdf(light: AreaLight, delta: vec3<f32>) -> f32 {
     let cosine = dot(sc_unit(cross(light.u.xyz,light.v.xyz)),-sc_unit(delta));
     if cosine<=0.0 { return 0.0; }
@@ -1056,9 +1069,11 @@ fn direct_light(t: Triangle, position: vec3<f32>, physical: PrecisePoint, o: vec
         } else {
             if source<area_count {
                 let light = u.area_lights[source];
-                let point = light.center.xyz + light.u.xyz*(2.0*random(rng)-1.0) + light.v.xyz*(2.0*random(rng)-1.0);
+                let area_s = 2.0*random(rng)-1.0;
+                let area_t = 2.0*random(rng)-1.0;
+                let point = light.center.xyz + light.u.xyz*area_s + light.v.xyz*area_t;
                 let delta = point-position;
-                sample = EnvironmentSample(sc_unit(delta),light.radiance.xyz,area_pdf(light,delta));
+                sample = EnvironmentSample(sc_unit(delta),light.radiance.xyz*area_profile(light,vec2<f32>(area_s,area_t)),area_pdf(light,delta));
                 let shadow = precise_point_delta(point,vec3<f32>(0.0),shadow_origin,shadow_origin_low);
                 shadow_direction = sc_unit(shadow);
                 shadow_distance = length(shadow);
@@ -1349,7 +1364,7 @@ fn sample_path_lane(pixel: u32, lane: u32) -> vec4<f32> {
                 let pdf = area_pdf(light,scatter_segment);
                 if pdf>0.0 && !suppress_direct && !photon_owns_smooth_tail(smooth_tail,false) {
                     let weight = select(power_weight(previous_pdf,pdf),1.0,previous_delta);
-                    radiance = add_light(radiance,throughput,light.radiance.xyz,weight,bounce);
+                    radiance = add_light(radiance,throughput,light.radiance.xyz*area_profile(light,emitter.local),weight,bounce);
                 }
                 coverage = 1.0;
                 break;
