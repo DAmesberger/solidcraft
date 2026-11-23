@@ -334,6 +334,7 @@ pub(crate) fn view_frame(
     crate::gpu::Frame {
         product: false,
         product_look: None,
+        units_per_mm: 1.0,
         product_lights: None,
         upload_error: None,
         key: model.0,

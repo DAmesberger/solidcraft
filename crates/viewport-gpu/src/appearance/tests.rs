@@ -1115,9 +1115,6 @@ fn the_generated_corpus_matches_the_reference() {
     assert!(bad.is_empty(), "{} of {compared} graphs differ:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Prints a corpus graph's code and every point where it differs from the reference, with the
-/// reference's instruction values: `GRAPHS=3,17 cargo test … debug_corpus_graph -- --ignored --nocapture`.
-
 /// Slopes through vector maths (a component-wise multiply, add, mix, abs, power and clamp of a
 /// vector3, and of a position) into a height: the GPU carries each component's gradient as the
 /// reference does, so the relief survives.
@@ -1161,23 +1158,6 @@ fn vector_slopes_match_the_reference() {
         assert!(tilted, "case {i}: the height tilts the normal");
     }
 }
-
-/// C2's rule for the blended class: a surface that drives transmission or opacity, or holds a
-/// transmission above 0 or an opacity below 1, in any layer.
-
-/// A see-through graph surface is drawn blended over what lies behind it (premultiplied, as C2's
-/// shading returns it): a transmissive, or half cut-out, blue square over a red face shows both.
-
-/// A texture the scene gives only as encoded bytes is decoded on the renderer's worker and made
-/// resident: until then its `image` node draws its default colour; afterwards the image itself
-/// (red on the left half of the square, blue on the right).
-
-/// Diagnostics for the brushed fixture's look (`--ignored --nocapture`): its evaluated surface on
-/// a box top, and a tilted square of it against the same metal through the PBR stream, and with
-/// its anisotropy off.
-
-/// Diagnostics (`--ignored --nocapture`): the brushed fixture on a sphere in the viewport's
-/// realistic look, against a plain metal and a plain dielectric of its roughness.
 
 /// A graph of a shape no driver has seen: a chain of `n` additions on a noise (so its code, and
 /// the driver's shader cache key, are new).

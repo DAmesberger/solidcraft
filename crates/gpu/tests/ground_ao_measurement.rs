@@ -204,6 +204,7 @@ fn comparison_frame(scene: GpuScene, cam: &Camera, width: u32, height: u32, key:
     let empty = || Arc::new(std::sync::Mutex::new(None));
     Frame {
         product_look: None,
+        units_per_mm: 1.0,
         product_lights: None,
         upload_error: None,
         product: false,
