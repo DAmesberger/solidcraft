@@ -429,7 +429,7 @@ fn the_section_draws_every_example_without_sending_anything() {
         let ed = editor(&mut fake);
         let mut actions = Vec::new();
         ctx.run_ui(Default::default(), |ui| {
-            ui_scope(ui, |ui| actions = super::body(ui, &ed, None, &no_look()));
+            ui_scope(ui, |ui| actions = super::body(ui, &ed, None, &no_look(), false));
         })
         .textures_delta
         .clear();
@@ -443,7 +443,7 @@ fn the_section_draws_every_example_without_sending_anything() {
     let mut canned = Canned(g);
     let mut ed = Editor::default();
     ed.sync(&mut canned);
-    ctx.run_ui(Default::default(), |ui| ui_scope(ui, |ui| assert!(super::body(ui, &ed, None, &no_look()).is_empty()))).textures_delta.clear();
+    ctx.run_ui(Default::default(), |ui| ui_scope(ui, |ui| assert!(super::body(ui, &ed, None, &no_look(), false).is_empty()))).textures_delta.clear();
 }
 
 /// Replies for a graph the engine would not hold; it changes nothing.
@@ -660,6 +660,56 @@ fn the_look_link_chooses_the_graph_and_carries_its_values() {
     assert!(ed.link.as_ref().is_some_and(|l| l.values.is_empty()));
     ed.unlink();
     assert!(ed.link.is_none());
+}
+
+#[test]
+fn selecting_a_starter_imports_it_and_use_assigns_it_to_the_picked_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.call("ui.resize", json!({"width": 1600, "height": 2400}));
+    h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    h.app.session.selection = vec![solidcraft_engine::Sel::Body { name: "Body1".into() }];
+    h.app.start("appearance.assign");
+    h.frames(3);
+    h.step(&json!({"click": {"handle": "dialog:section:Appearance graph"}})).unwrap();
+    h.frames(2);
+    h.step(&json!({"click": {"handle": "dialog:section:Add from graph library"}})).unwrap();
+    h.frames(2);
+    let list = h.app.session.execute("appearance.graph.library.list", &json!({})).unwrap();
+    let entries = list["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 6);
+    let glass = entries.iter().find(|entry| entry["name"] == "Clear glass").unwrap();
+    let undo = h.app.session.undo.len();
+    let handle = format!("appearance:graph_import:{}", glass["id"].as_str().unwrap());
+    h.step(&json!({"click": {"handle": handle}})).unwrap();
+    h.frames(2);
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    h.step(&json!({"click": {"handle": "appearance:graph_use"}})).unwrap();
+    let look = &h.app.session.doc.appearances.bodies["Body1"];
+    let id = look.graph.as_ref().unwrap().as_str().to_owned();
+    let graph = h.app.session.execute("appearance.graph.get", &json!({"id": id})).unwrap();
+    assert_eq!(graph["graph"]["name"], glass["name"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_prepared_library_import_is_undoable_and_cannot_replace_a_newer_edit() {
+    let mut h = crate::scenario::Harness::new();
+    let entries = h.app.session.execute("appearance.graph.library.list", &json!({})).unwrap();
+    let entry = &entries["entries"][0];
+    let params = json!({"entry":entry["id"],"revision":entry["revision"]});
+    let command = [("appearance.graph.library.import".into(), params.clone())];
+    let stale = h.app.session.scratch().compute_commands(&command, None).unwrap();
+    h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+    let before = h.app.session.doc.clone();
+    let undo = h.app.session.undo.len();
+    assert!(super::library::accept(&mut h.app, stale, &params).is_err());
+    assert_eq!(h.app.session.undo.len(), undo);
+    let prepared = h.app.session.scratch().compute_commands(&command, None).unwrap();
+    let reply = super::library::accept(&mut h.app, prepared, &params).unwrap();
+    assert!(reply["id"].is_string());
+    assert_eq!(h.app.session.undo.len(), undo + 1);
+    h.app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.app.session.doc, before);
 }
 
 /// Through the app: convert the picked body's PBR look to a graph, add a layer, give the look

@@ -16,6 +16,7 @@
 //!
 //! A graph that is not stack-shaped opens read-only with a summary and "Edit as JSON".
 
+mod library;
 mod model;
 mod swatch;
 #[cfg(test)]
@@ -88,6 +89,13 @@ pub(crate) enum TextureUse {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Action {
     Choose(String),
+    /// Read the starter entries or a local graph library.
+    Browse(Option<String>),
+    PickLibrary,
+    ImportEntry {
+        id: String,
+        revision: String,
+    },
     Create(String),
     Duplicate,
     Delete,
@@ -139,6 +147,7 @@ pub(crate) struct LookContext {
 /// The editor's state inside the Appearance dialog.
 #[derive(Clone, Debug, Default)]
 pub struct Editor {
+    library: library::Browser,
     pub(crate) catalogue: Option<Result<Catalogue, String>>,
     pub(crate) graphs: Option<Result<Vec<GraphEntry>, String>>,
     pub(crate) chosen: Option<String>,
@@ -329,6 +338,28 @@ impl Editor {
             self.refusal = None;
         }
         match action {
+            Action::Browse(folder) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(path) = folder {
+                    return Some(Next::Folder(library::FolderCommand::List, json!({"folder": path})));
+                }
+                self.note = None;
+                self.library.load(c, folder);
+            }
+            Action::PickLibrary => return Some(Next::PickLibrary),
+            Action::ImportEntry { id, revision } => {
+                let mut params = self.library.source_params();
+                params["entry"] = json!(id);
+                params["revision"] = json!(revision);
+                #[cfg(not(target_arch = "wasm32"))]
+                if params.get("folder").is_some() {
+                    return Some(Next::Folder(library::FolderCommand::Import, params));
+                }
+                if let Some(reply) = self.change(c, "appearance.graph.library.import", params) {
+                    self.chosen = reply.get("id").and_then(Value::as_str).map(str::to_owned);
+                    self.layer = 0;
+                }
+            }
             Action::Choose(graph) => {
                 self.chosen = Some(graph);
                 self.layer = 0;
@@ -491,6 +522,9 @@ fn texture_bytes(path: &str, bytes: &[u8]) -> Value {
 /// What `Editor::apply` hands back to the section.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Next {
+    #[cfg(not(target_arch = "wasm32"))]
+    Folder(library::FolderCommand, Value),
+    PickLibrary,
     PickTexture(TextureUse),
     Dialog(Outcome),
 }
@@ -504,15 +538,23 @@ pub(crate) fn section(
     current: fn(&mut SolveApp) -> Option<&mut Editor>,
 ) -> Option<Outcome> {
     let mut actions = Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    library::poll(app, ed);
     ed.sync(app);
     // Open by default when the design has a graph to show.
     let open = ed.graph().is_some();
     ui_kit::section(ui, "ap_appearance_graph", tr("appearance.graph.section"), open, |ui| {
-        actions = body(ui, ed, app.viewport.gpu.is_some().then_some(&*app), look)
+        actions = body(ui, ed, app.viewport.gpu.is_some().then_some(&*app), look, !cfg!(target_arch = "wasm32") && app.services.pick_folder.is_some())
     });
     let mut outcome = None;
     for action in actions {
         match ed.apply(app, action, look) {
+            Some(Next::PickLibrary) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                library::pick_folder(app, current, ed.library.token.clone(), ui.ctx().clone());
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(Next::Folder(command, params)) => library::begin(app, ed, ui.ctx().clone(), command, params),
             Some(Next::PickTexture(use_)) => pick_texture(app, use_, current, ed.chosen.clone()),
             Some(Next::Dialog(o)) => outcome = Some(o),
             None => {}
@@ -544,9 +586,10 @@ fn pick_texture(app: &mut SolveApp, use_: TextureUse, current: fn(&mut SolveApp)
 }
 
 /// The section's contents; returns what the user asked for.
-pub(crate) fn body(ui: &mut egui::Ui, ed: &Editor, gpu: Option<&SolveApp>, look: &LookContext) -> Vec<Action> {
+pub(crate) fn body(ui: &mut egui::Ui, ed: &Editor, gpu: Option<&SolveApp>, look: &LookContext, can_pick_folder: bool) -> Vec<Action> {
     let mut out = Vec::new();
     graph_chooser(ui, ed, look, &mut out);
+    ed.library.rows(ui, can_pick_folder, &mut out);
     match &ed.loaded {
         None => {}
         Some(Err(e)) => {

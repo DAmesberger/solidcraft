@@ -652,3 +652,23 @@ without changing its shapes. Omitted roles keep the default light/dark palette.
 ### Studio lighting
 
 Open **Display** in a Model or Render view and choose **Realistic** to see the surfaces under the studio lights. Metals reflect the studio and graph looks show their patterns. Each view keeps its own selection, so two views can show the same part under different lighting. In a Model view, choose **Material finish** to return to the neutral studio. Studio lighting requires full GPU graphics.
+
+### Add a finish from the graph library
+
+Pick a body, open **Appearance**, and expand **Appearance graph → Add from graph library**.
+The built-in entries include anodised aluminium, clear glass, matte rubber, satin oak,
+orange-peel gloss paint and textured ABS. Click a finish to copy its graph into the design.
+You can edit the copy or choose **Use on picked objects** to assign it. In a **Realistic**
+view, the studio lights show the finish. Save the design to keep the graph and its assignment.
+
+On the desktop, choose **Choose library folder…** and select the folder containing the
+`*.sclibrary.json` manifest. Hover over a graph to see its licence and source details. Click its name
+to import the graph and the textures it uses. The saved design can be reopened after the
+folder is moved. Use **Refresh** to see changes in that folder or **Built-in graphs** to
+return to the starter entries.
+
+Scripts can call `appearance.graph.library.list` with `{}` for the built-in entries or
+`{"folder":"/path/to/library"}` for a local library. Pass the chosen entry’s `id` as
+`entry` and its `revision` to `appearance.graph.library.import`, using the same folder.
+Import refuses an entry that changed after it was listed. Use the returned design graph
+ID as `graph` in `appearance.assign` to apply the copy.
