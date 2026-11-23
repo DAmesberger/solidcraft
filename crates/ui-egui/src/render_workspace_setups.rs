@@ -183,6 +183,7 @@ pub(super) fn draft(app: &SolveApp) -> Result<RenderSetup, String> {
                     denoise_diagnostics: studio.denoise_diagnostics,
                     supersampling: studio.supersampling,
                     lens: studio.lens_enabled.then_some(studio.lens),
+                    studio: studio.realistic.clone(),
                     lighting: if studio.lighting_enabled {
                         Some(StudioLighting {
                             punctual_lights: studio.punctual_lights,
@@ -428,6 +429,7 @@ fn load_values(view: &mut super::ViewState, setup: RenderSetup) {
             view.studio.denoise_settings = options.denoise_settings;
             view.studio.denoise_diagnostics = options.denoise_diagnostics;
             view.studio.supersampling = options.supersampling;
+            view.studio.realistic = options.studio.clone();
             if let Some(lens) = options.lens {
                 view.studio.lens_enabled = true;
                 view.studio.lens = lens;

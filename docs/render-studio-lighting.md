@@ -123,3 +123,23 @@ or new light-selection RNG dimension is introduced. Default/absent-list numerica
 streams are protected by retained zero-source/mixed-family regressions, but
 cross-platform byte identity, device validation and native usability still need
 execution on this staged candidate.
+
+## Lighting a job with a built-in studio
+
+Use `studio` in a progressive GPU request to place a rig around the visible subject.
+Product (`NATIVE-STUDIO-026`) uses the starter product rig. Soft
+(`NATIVE-STUDIO-027`) gives a broader reflection. Contrast (`NATIVE-STUDIO-028`)
+includes an overhead scrim. The rotation is in radians about the world Z axis.
+
+```json
+{
+  "progressive": true,
+  "studio": {"id": "NATIVE-STUDIO-026", "rotation_rad": 0.5},
+  "tone_map": "pbr_neutral"
+}
+```
+
+The studio supplies both the lights and the environment. A request combining a
+studio with explicit lighting or an environment reports a conflict. To keep the choice
+in a design, put the same `studio` and `tone_map` fields in a GPU path setup’s
+`job.options`. Graded lights keep their mean radiance as their edges soften.

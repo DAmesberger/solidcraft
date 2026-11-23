@@ -805,10 +805,14 @@ fn cpu_authored_rig_domain_is_exact_and_preserves_dormant_sampling_without_impli
     assert_eq!(over_domain.len(), 16);
     let mut options = CpuJob { area_samples: Some(64), seed: Some(731), ..Default::default() };
     let before = options.clone();
-    let light = AreaLight { center: [0., 0., 10.], u: [1., 0., 0.], v: [0., -1., 0.], radiance: [1., 0.5, 0.25] };
+    let light = AreaLight { center: [0., 0., 10.], u: [1., 0., 0.], v: [0., -1., 0.], radiance: [1., 0.5, 0.25], grade: 0.0 };
     let lighting = StudioLighting { area_lights: AreaLights::new(&[light]).unwrap(), ..Default::default() };
     assert!(cpu_studio_lighting(&mut options, &lighting, "test").unwrap_err().to_string().contains("lossless CPU colour/intensity projection"));
     assert_eq!(options, before, "no lossy colour decomposition");
+    let graded = AreaLight { radiance: [1.0; 3], grade: 0.5, ..light };
+    let lighting = StudioLighting { area_lights: AreaLights::new(&[graded]).unwrap(), ..Default::default() };
+    assert!(cpu_studio_lighting(&mut options, &lighting, "test").unwrap_err().to_string().contains("graded"));
+    assert_eq!(options, before, "a graded rectangle is refused, not drawn uniform");
 }
 
 #[test]

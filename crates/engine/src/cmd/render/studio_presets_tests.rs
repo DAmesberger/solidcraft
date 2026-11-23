@@ -477,3 +477,23 @@ fn moving_the_native_studios_to_data_preserves_the_compositions() {
     let encoded = serde_json::to_vec(&inputs).unwrap();
     assert_eq!(solidcraft_doc::render_resources::HdrId::of(&encoded).to_string(), "dc18eb3884fa38ecc06a01be459eb49bde034dd64af595035376b6ce02bb70b6");
 }
+
+#[test]
+fn a_saved_studio_uses_a_known_rig_and_preserves_its_rotation() {
+    let mut s = subject();
+    let options = |id: &str| json!({"method":"gpu_path","options":{"studio":{"id":id,"rotation_rad":0.5},"tone_map":"pbr_neutral"}});
+    let id = crate::cmd::studios::DEFAULT_REALISTIC;
+    s.execute("render.settings.set", &json!({"name":"Shot","set":{"job":options(id)}})).unwrap();
+    let saved = s.doc.to_json();
+    let setup = serde_json::to_value(&s.doc.render.setups["Shot"]).unwrap();
+    assert_eq!(setup["job"]["options"]["studio"], json!({"id":id,"rotation_rad":0.5}));
+    assert_eq!(setup["job"]["options"]["tone_map"], "pbr_neutral");
+    let conflict = json!({"progressive":true,"studio":{"id":id},"studio_weights":[1,1,1]});
+    let message = s.execute("render.preflight", &conflict).unwrap_err().to_string();
+    assert!(message.contains("studio_weights"), "{message}");
+    assert_eq!(s.doc.to_json(), saved);
+    for unknown in ["missing", "NATIVE-STUDIO-001"] {
+        assert!(s.execute("render.settings.set", &json!({"name":"Shot","set":{"job":options(unknown)}})).is_err());
+        assert_eq!(s.doc.to_json(), saved);
+    }
+}
