@@ -96,10 +96,11 @@ fn gpu_volume_beer_coverage_and_single_scatter_match_independent_slab_quadrature
 
 #[test]
 fn gpu_hg_inverse_cdf_and_phase_match_f64_including_nearly_isotropic_media() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n{}",
+        "{path_source}\n{}",
         r#"
 @compute @workgroup_size(64)
 fn phase_reference(@builtin(global_invocation_id) gid: vec3<u32>) {

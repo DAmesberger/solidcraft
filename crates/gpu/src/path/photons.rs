@@ -280,7 +280,7 @@ impl Pipelines {
     }
 }
 pub(super) fn shader_source() -> Result<String> {
-    let base = SHADER.strip_suffix(DISABLED).ok_or_else(|| gpu("legacy path shader has no photon-disabled suffix"))?;
+    let base = scene_shader(false).strip_suffix(DISABLED).ok_or_else(|| gpu("legacy path shader has no photon-disabled suffix"))?;
     let mut source = String::new();
     source
         .try_reserve_exact(base.len() + PHOTONS.len())
@@ -572,7 +572,7 @@ mod tests {
     }
     #[test]
     fn photon_shader_variant_preserves_the_legacy_six_buffer_source() {
-        assert!(!SHADER.contains("@binding(7)"));
+        assert!(!scene_shader(false).contains("@binding(7)"));
         let caustic = shader_source().unwrap();
         assert!(caustic.contains("@binding(7)"));
         assert!(caustic.contains("fn photon_emit") && caustic.contains("fn photon_clear"));

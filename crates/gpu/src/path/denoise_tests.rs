@@ -192,6 +192,7 @@ fn f64_atrous_preserves_body_normal_depth_and_albedo_edges() {
 // query is the other.
 #[test]
 fn guides_inline_two_bvh_walks() {
+    let path_source = scene_shader(false);
     fn walks(module: &naga::Module, block: &naga::Block) -> usize {
         block
             .iter()
@@ -209,7 +210,7 @@ fn guides_inline_two_bvh_walks() {
             })
             .sum()
     }
-    let module = naga::front::wgsl::parse_str(&format!("{SHADER}\n{GUIDES}")).unwrap();
+    let module = naga::front::wgsl::parse_str(&format!("{path_source}\n{GUIDES}")).unwrap();
     let guides = module.entry_points.iter().find(|entry| entry.name == "denoise_guides").unwrap();
     let inlined = walks(&module, &guides.function.body);
     // Exactly two, not at most two: if a walk function is renamed, the names above match nothing

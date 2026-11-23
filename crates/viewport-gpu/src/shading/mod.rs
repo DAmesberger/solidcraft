@@ -1,0 +1,20 @@
+//! Pure WGSL shared by the viewport and the GPU path tracer.
+
+macro_rules! library_source {
+    () => {
+        concat!(
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/bsdf.wgsl")),
+            "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/noise.wgsl")),
+            "\n",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/shading/projection.wgsl"))
+        )
+    };
+}
+pub(crate) use library_source;
+
+/// Shared surface response, periodic noise and texture projections in dependency order.
+pub const SOURCE: &str = library_source!();
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

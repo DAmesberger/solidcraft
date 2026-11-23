@@ -18,10 +18,10 @@ fn guide_bypass(base:u32,reason:u32) {
 }
 
 fn guide_outward(t:Triangle)->vec3<f32> {
-    return unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    return sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
 }
 fn guide_normal(t:Triangle,bary:vec3<f32>,geometric:vec3<f32>,direction:vec3<f32>)->vec3<f32> {
-    let interpolated=unit(t.n0.xyz*bary.x+t.n1.xyz*bary.y+t.n2.xyz*bary.z);
+    let interpolated=sc_unit(t.n0.xyz*bary.x+t.n1.xyz*bary.y+t.n2.xyz*bary.z);
     let winding=select(interpolated,-interpolated,dot(interpolated,geometric)<0.0);
     return select(geometric,winding,dot(winding,-direction)>0.0);
 }
@@ -77,7 +77,7 @@ fn guide_interface(t:Triangle,bary:vec3<f32>,direction:vec3<f32>,geometric:vec3<
         transmitted=refract(direction,normal,ni/nt);
     }
     // Keep a numerical zero from Snell so a degenerate branch is rejected.
-    if any(transmitted!=vec3<f32>(0.0)) {transmitted=unit(transmitted);}
+    if any(transmitted!=vec3<f32>(0.0)) {transmitted=sc_unit(transmitted);}
     return GuideInterface(reflect(direction,normal),transmitted,fresnel);
 }
 fn guide_launch(t:Triangle,hit:Hit,geometric:vec3<f32>,direction:vec3<f32>)->GuideRay {

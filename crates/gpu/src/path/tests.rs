@@ -143,7 +143,9 @@ fn multiple_closed_shells_in_one_dielectric_body_are_rejected() {
 fn gpu_exact_dielectric_matches_f64_fresnel() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -184,10 +186,11 @@ fn gpu_exact_dielectric_matches_f64_fresnel() {
 
 #[test]
 fn gpu_sheet_grazing_and_zero_thickness_match_physical_path_limits() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn sheet_limit_reference() {{
+        "{path_source}\n@compute @workgroup_size(1) fn sheet_limit_reference() {{
             var t=triangle(0u);t.parameters.w=u.up.w;t.optics=vec4<f32>(u.right.xyz,t.optics.w);
             let weights=sheet(t,dielectric(u.up.x,u.up.y,u.up.z));
             accumulation[0]=vec4<f32>(weights.reflection,1.0);
@@ -257,16 +260,17 @@ fn gpu_sheet_grazing_and_zero_thickness_match_physical_path_limits() {
 
 #[test]
 fn optional_glass_gpu_film_dispersion_and_visible_normals_match_the_f64_oracle() {
+    let path_source = scene_shader(false);
     use solidcraft_render::glass_model::{Dispersion, GlassModel, ThinFilm};
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn glass_model_reference() {{
+        "{path_source}\n@compute @workgroup_size(1) fn glass_model_reference() {{
         var t=triangle(0u);t.glass=u.lighting;
         let f=glass_film(u.up.x,u.up.y,u.up.z,t.glass.w,t.glass.z,u.up.w);
         accumulation[0]=vec4<f32>(f,glass_ior(u.up.z,t.glass.y,u.up.w),1.0);
         var rng=u.sampling.x;
-        let event=glass_interface(t,-unit(u.back.xyz),vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,0.0,1.0),u.up.y,u.up.z,u.up.w,true,0u,1u,&rng);
+        let event=glass_interface(t,-sc_unit(u.back.xyz),vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,0.0,1.0),u.up.y,u.up.z,u.up.w,true,0u,1u,&rng);
         accumulation[1]=vec4<f32>(event.direction+vec3<f32>(2.0),select(0.0,1.0,event.valid));
         accumulation[2]=vec4<f32>(event.weight,select(0.0,1.0,event.transmitted));
         let bent=vec3<f32>(0.6,0.0,0.8);
@@ -720,6 +724,7 @@ fn rough_closed_shadow_approximation_replaces_only_the_transmitted_hard_source_f
 
 #[test]
 fn reflection_only_closed_nee_packet_keeps_its_actual_inside_medium_beer() {
+    let path_source = scene_shader(false);
     use solidcraft_render::job::{PunctualLightOptions, PunctualLights, StudioLighting};
     let Some(executor) = executor() else { return };
     let context = &executor.context;
@@ -740,7 +745,7 @@ fn reflection_only_closed_nee_packet_keeps_its_actual_inside_medium_beer() {
     let optics = scene.meshes[0].transmission.unwrap();
     scene.meshes[0].transmission = Some(optics.with_shadow_transmission(true));
     let mut task = Task::new(context.clone(), scene, request(1), options, CancelToken::default()).unwrap();
-    let source=format!("{SHADER}\n@compute @workgroup_size(1) fn closed_reflection_medium_reference() {{
+    let source=format!("{path_source}\n@compute @workgroup_size(1) fn closed_reflection_medium_reference() {{
         if u.sampling.z==0u {{return;}}
         let hit=trace_precise(vec3<f32>(0.13,-0.07,-2.0),vec3<f32>(0.0),vec3<f32>(0.0,0.0,1.0),false,0xffffffffu,0.0,false);
         var payload:array<vec4<u32>,6>;var count=0u;var selection_rng=81u;
@@ -972,7 +977,7 @@ fn rough_volume_photon_kernels_and_hg_delta_connection_match_independent_measure
         }}
         accumulation[3]=vec4<f32>(sum/4096.0,1.0);
         var narrow=t;narrow.glass.x=0.001;
-        accumulation[4]=vec4<f32>(glass_evaluate_cosine(narrow.glass,vec3<f32>(0.0,0.0,-1.0),unit(vec3<f32>(0.0002,0.0,1.0)),vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,0.0,1.0),1.0,1.5,0.0),1.0);
+        accumulation[4]=vec4<f32>(glass_evaluate_cosine(narrow.glass,vec3<f32>(0.0,0.0,-1.0),sc_unit(vec3<f32>(0.0002,0.0,1.0)),vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,0.0,1.0),1.0,1.5,0.0),1.0);
         for(var case_index=0u;case_index<18u;case_index+=1u) {{
             let vertices=max(1u,case_index-min(case_index,1u));
             let trials=select(4096u,1u,case_index<3u);var total=vec3<f32>(0.0);
@@ -2005,7 +2010,9 @@ fn gpu_nonabsorbing_glass_sphere_white_furnace_conserves_radiance() {
 fn gpu_ball_lens_focus_uses_actual_mesh_intersections() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -2103,7 +2110,9 @@ fn engine_preflight_keeps_cpu_alpha_and_routes_physical_glass_to_the_native_host
 fn gpu_thin_lens_focus_and_defocus_match_geometric_oracle() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -2359,7 +2368,7 @@ fn gpu_solid_and_thin_slabs_match_absorbing_interreflection_oracle() {
 
 #[test]
 fn shader_validates_without_a_device() {
-    for source in [SHADER, SINGLE_MEDIUM_SHADER] {
+    for source in [scene_shader(false), scene_shader(true)] {
         let module = naga::front::wgsl::parse_str(source).unwrap();
         let parameters = module.types.iter().find(|(_, ty)| ty.name.as_deref() == Some("Params")).unwrap().1;
         let naga::TypeInner::Struct { span, .. } = &parameters.inner else { panic!("Params must be a struct") };
@@ -2400,7 +2409,7 @@ fn each_inlined(module: &naga::Module, block: &naga::Block, visit: &mut impl FnM
 /// is a deliberate choice, checked on such a driver.
 #[test]
 fn main_inlines_few_bvh_walks() {
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap();
+    let module = naga::front::wgsl::parse_str(scene_shader(false)).unwrap();
     let main = module.entry_points.iter().find(|entry| entry.name == "main").unwrap();
     let mut inlined = 0;
     each_inlined(&module, &main.function.body, &mut |statement| {
@@ -2419,12 +2428,25 @@ fn main_inlines_few_bvh_walks() {
 /// 54,888 -> 7,777, `denoise_guides` 70,517 -> 7,906, caustic `main` 211,786 -> 33,386 and
 /// `photon_emit` 107,085 -> 14,782. A larger program is a deliberate choice, checked on such a driver.
 #[test]
+fn both_medium_programs_and_the_viewport_share_the_same_shading_source() {
+    let common = solidcraft_viewport_gpu::shading::SOURCE;
+    assert!(solidcraft_viewport_gpu::pbr::SOURCE.starts_with(common));
+    for opaque in [false, true] {
+        let source = scene_shader(opaque);
+        assert!(source.starts_with(common));
+        assert_eq!(source.matches("fn sc_base_at(").count(), 1);
+        assert!(source.ends_with(include_str!("photons_disabled.wgsl")));
+    }
+}
+
+#[test]
 fn heavy_entry_points_inline_few_statements() {
-    let guides = format!("{SHADER}\n{}", denoise::GUIDES);
+    let path_source = scene_shader(false);
+    let guides = format!("{path_source}\n{}", denoise::GUIDES);
     let caustics = photons::shader_source().unwrap();
     for (program, source, entry, budget) in [
-        ("path", SHADER, "main", 45_000),
-        ("path", SHADER, "optical_resolve", 12_000),
+        ("path", scene_shader(false), "main", 45_000),
+        ("path", scene_shader(false), "optical_resolve", 12_000),
         ("denoise", guides.as_str(), "denoise_guides", 12_000),
         ("caustic", caustics.as_str(), "main", 50_000),
         ("caustic", caustics.as_str(), "photon_emit", 22_000),
@@ -2440,7 +2462,7 @@ fn heavy_entry_points_inline_few_statements() {
 #[test]
 fn geometry_materialization_lane_keeps_positive_zero_at_the_shader_offset() {
     let Some(executor) = executor() else { return };
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap();
+    let module = naga::front::wgsl::parse_str(scene_shader(false)).unwrap();
     let params = module.types.iter().find(|(_, ty)| ty.name.as_deref() == Some("Params")).unwrap().1;
     let naga::TypeInner::Struct { members, .. } = &params.inner else { panic!("Params must be a struct") };
     let offset = members.iter().find(|member| member.name.as_deref() == Some("studio_weights")).unwrap().offset as usize + 12;
@@ -2609,9 +2631,10 @@ fn bvh_handles_empty_and_cancelled_scenes() {
 fn gpu_brdf_matches_f64_surface_oracle() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("path BRDF reference"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("path BRDF reference"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3018,9 +3041,10 @@ fn admission_refuses_cpu_options_without_opening_a_device() {
 fn gpu_clear_coat_brdf_matches_f64_surface_oracle() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("path BRDF reference"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("path BRDF reference"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3078,9 +3102,10 @@ fn gpu_clear_coat_brdf_matches_f64_surface_oracle() {
 fn gpu_clear_coat_pdf_matches_f64_surface_oracle() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("path BRDF reference"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("path BRDF reference"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3139,9 +3164,10 @@ fn gpu_clear_coat_pdf_matches_f64_surface_oracle() {
 fn gpu_clear_coat_samples_the_pdf_mixture_components() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("coat sampling oracle"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("coat sampling oracle"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3210,9 +3236,10 @@ fn gpu_clear_coat_samples_the_pdf_mixture_components() {
 fn gpu_indirect_clamp_keeps_hue_caps_the_brightest_channel_and_spares_the_first_hit() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("indirect clamp oracle"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("indirect clamp oracle"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3575,7 +3602,9 @@ fn gpu_environment_orientation_rotation_intensity_and_pdf_match_cpu() {
     let mut image = request(1);
     image.environment = Some(source);
     let mut task = Task::new(context.clone(), sphere(white()), image, JobOptions::default(), CancelToken::default()).unwrap();
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -3622,7 +3651,7 @@ fn gpu_environment_orientation_rotation_intensity_and_pdf_match_cpu() {
 fn shadow_probe(context: &Arc<Context>, scene: ProductScene, origin: Vec3, direction: Vec3, limit: f64) -> [[f32; 4]; 2] {
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("shadow connection oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4118,7 +4147,9 @@ fn gpu_planar_color_and_normal_maps_match_cpu_sampling_oracle() {
     use solidcraft_render::job::textures::{PlanarFrame, sample_map};
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -4190,7 +4221,9 @@ fn gpu_quality_texture_preserves_minor_axis_detail_and_linear_mip_precision() {
     binding.base_color = Some(TextureMap::new(encoded, MapRole::BaseColor).unwrap());
     binding.normal = None;
     let filtered = Arc::new(RuntimeTextures::new(vec![binding]).unwrap().with_filtering(true));
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -4240,6 +4273,7 @@ fn gpu_quality_texture_preserves_minor_axis_detail_and_linear_mip_precision() {
 
 #[test]
 fn gpu_quality_normal_mips_broaden_mapped_roughness_only_for_unresolved_detail() {
+    let path_source = scene_shader(false);
     use image::ImageEncoder;
     use solidcraft_render::{
         job::textures::{PlanarFrame, RuntimeTextures, TextureMap},
@@ -4248,7 +4282,7 @@ fn gpu_quality_normal_mips_broaden_mapped_roughness_only_for_unresolved_detail()
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn texture_variance_reference() {{
+        "{path_source}\n@compute @workgroup_size(1) fn texture_variance_reference() {{
             let t=triangle(0u);
             let mapped=texture_surface(texture_record(t.optics.w),t.base.xyz,t.parameters.x,t.parameters.y,u.eye.xyz,TextureGradients(u.right.xy,u.up.xy),false);
             accumulation[0]=vec4<f32>(mapped.roughness,0.0,0.0,1.0);
@@ -4399,7 +4433,7 @@ fn gpu_secondary_closed_corner_exits_are_not_skipped() {
     let context = &executor.context;
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("closed corner boundary oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4474,7 +4508,7 @@ fn gpu_triangle_bound_away_rejects_rounded_behind_origin_hit() {
     let context = &executor.context;
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("positive triangle oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4535,7 +4569,7 @@ fn gpu_oblique_coplanar_grazing_reflection_does_not_rehit() {
     let context = &executor.context;
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("coplanar boundary oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4653,7 +4687,7 @@ fn gpu_exact_rim_tie_prefers_entry_from_outside() {
 fn assert_entry_before_exit(context: &Arc<Context>, origin: Vec3, direction: Vec3, entry: [Vec3; 3], exit: [Vec3; 3]) {
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("long-ray ordering oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4724,9 +4758,10 @@ fn assert_entry_before_exit(context: &Arc<Context>, origin: Vec3, direction: Vec
 fn gpu_far_rib_reentry_near_an_edge_is_not_lost_between_paths() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("rib re-entry oracle"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("rib re-entry oracle"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -4787,9 +4822,10 @@ fn gpu_far_rib_reentry_near_an_edge_is_not_lost_between_paths() {
 fn gpu_entry_at_a_shared_edge_does_not_reenter_the_adjacent_face() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("edge entry oracle"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("edge entry oracle"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -4853,7 +4889,7 @@ fn gpu_long_ray_near_corner_refraction_keeps_real_exit() {
     let context = &executor.context;
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("refracted corner oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -4958,9 +4994,10 @@ fn gpu_long_ray_near_corner_refraction_keeps_real_exit() {
 fn gpu_rib_total_internal_reflection_retains_origin_residual() {
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("rib residual oracle"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("rib residual oracle"),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
+    });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -5090,7 +5127,7 @@ fn gpu_split_products_reconstruct_exact_products_and_near_determinants() {
     });
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("split determinant oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let pipeline = context.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -5180,7 +5217,7 @@ fn gpu_integer_binary32_add_sub_matches_hardware_bits() {
     });
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("integer binary32 oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let pipeline = context.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -5225,7 +5262,7 @@ fn gpu_emitter_short_segment_beer_and_area_pdf() {
     let context = &executor.context;
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("short emitter segment oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
@@ -5314,7 +5351,7 @@ fn gpu_integer_relative_fast_paths_match_ordered_rounding() {
     });
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("relative coordinate oracle"),
-        source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()),
     });
     let pipeline = context.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -5494,7 +5531,9 @@ fn gpu_trilinear_minification_matches_singular_value_lod_and_repeat_oracle() {
     };
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -5572,7 +5611,9 @@ fn gpu_scalar_faces_preserve_legacy_roles_and_suppress_only_portable_roles() {
     };
     let Some(executor) = executor() else { return };
     let context = &executor.context;
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -5972,7 +6013,9 @@ fn gpu_scalar_maps_match_linear_reference_without_touching_ior() {
     binding.roughness = Some(scalar(192, MapRole::Roughness));
     binding.metallic = Some(scalar(64, MapRole::Metallic));
     let source = Arc::new(RuntimeTextures::new(vec![binding]).unwrap());
-    let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+    let shader = context
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(scene_shader(false).into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[Some(&context.layout)],
@@ -6434,7 +6477,7 @@ fn actual_first_gpu_quantum_is_small_and_cancellation_retains_no_completed_image
 
 #[test]
 fn production_path_workgroup_matches_the_host_dispatch_contract() {
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|error| panic!("{}", error.emit_to_string(SHADER)));
+    let module = naga::front::wgsl::parse_str(scene_shader(false)).unwrap_or_else(|error| panic!("{}", error.emit_to_string(scene_shader(false))));
     let main = module.entry_points.iter().find(|entry| entry.name == "main").unwrap();
     assert_eq!(main.workgroup_size, [PATH_WORKGROUP_SIZE, 1, 1]);
 }
@@ -6804,7 +6847,7 @@ fn gpu_hard_directional_uniform_layout_and_admission_keep_the_positive_zero_abi(
     let Some(executor) = executor() else { return };
     shader_validates_without_a_device();
     main_inlines_few_bvh_walks();
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap();
+    let module = naga::front::wgsl::parse_str(scene_shader(false)).unwrap();
     let params = module.types.iter().find(|(_, t)| t.name.as_deref() == Some("Params")).unwrap().1;
     let naga::TypeInner::Struct { members, .. } = &params.inner else { panic!("Params") };
     let offset = members.iter().find(|m| m.name.as_deref() == Some("directional_lights")).unwrap().offset as usize;
@@ -6978,7 +7021,7 @@ fn gpu_punctual_uniform_high_low_precision_and_admission_keep_studio_barrier_bef
     }
     assert_eq!(packed[0][0], 1e9_f32);
     assert!(packed[1][0] < -0.009 && packed[1][0] > -0.011);
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap();
+    let module = naga::front::wgsl::parse_str(scene_shader(false)).unwrap();
     let params = module.types.iter().find(|(_, t)| t.name.as_deref() == Some("Params")).unwrap().1;
     let naga::TypeInner::Struct { members, span } = &params.inner else { panic!("Params") };
     assert_eq!(*span as usize, PARAMETER_BYTES);
@@ -7079,13 +7122,14 @@ fn gpu_punctual_finite_shadow_blocks_only_before_the_source_and_preserves_physic
 
 #[test]
 fn gpu_punctual_samples_match_independent_cone_boundaries_midpoint_high_low_and_counter_carry() {
+    let path_source = scene_shader(false);
     use solidcraft_render::job::SpotConeOptions;
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     // A test-only entry calls the production sampler at an independently given
     // physical point; it does not launch a camera ray or copy the sampler math.
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn punctual_reference() {{ let value=punctual_sample(u.punctual_lights[0],PrecisePoint(u.eye.xyz,u.right.xyz)); accumulation[0]=vec4<f32>(value.radiance,1.0); }}"
+        "{path_source}\n@compute @workgroup_size(1) fn punctual_reference() {{ let value=punctual_sample(u.punctual_lights[0],PrecisePoint(u.eye.xyz,u.right.xyz)); accumulation[0]=vec4<f32>(value.radiance,1.0); }}"
     );
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -7371,10 +7415,11 @@ fn gpu_point_spot_complete_previews_match_prefixes_and_preserve_exact_final_png_
 
 #[test]
 fn gpu_punctual_volume_connection_matches_independent_hg_and_finite_beer_without_rng_consumption() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn punctual_volume_reference() {{ var rng=123u; let value=volume_direct(u.eye.xyz,PrecisePoint(u.eye.xyz,vec3<f32>(0.0)),vec3<f32>(0.0,0.0,1.0),0u,&rng); accumulation[0]=vec4<f32>(value,f32(rng)); }}"
+        "{path_source}\n@compute @workgroup_size(1) fn punctual_volume_reference() {{ var rng=123u; let value=volume_direct(u.eye.xyz,PrecisePoint(u.eye.xyz,vec3<f32>(0.0)),vec3<f32>(0.0,0.0,1.0),0u,&rng); accumulation[0]=vec4<f32>(value,f32(rng)); }}"
     );
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -7484,10 +7529,11 @@ fn gpu_adaptive_denoised_point_spot_updates_preserve_every_pilot_production_pass
 
 #[test]
 fn gpu_punctual_offset_preserves_small_shift_after_large_local_barycentric_displacement() {
+    let path_source = scene_shader(false);
     let Some(executor) = executor() else { return };
     let context = &executor.context;
     let source = format!(
-        "{SHADER}\n@compute @workgroup_size(1) fn punctual_offset_reference() {{ let original=PrecisePoint(vec3<f32>(1000000.0,0.0,0.0),vec3<f32>(-999999.0,0.0,0.0)); let shifted=punctual_offset(original,vec3<f32>(0.00001,0.0,0.0)); let canonical=punctual_offset(original,vec3<f32>(0.0)); let delta=precise_point_delta(shifted.hi,shifted.lo,canonical.hi,canonical.lo); accumulation[0]=vec4<f32>(delta,1.0); let light=punctual_sample(u.punctual_lights[0],original); accumulation[1]=vec4<f32>(light.radiance,1.0); }}"
+        "{path_source}\n@compute @workgroup_size(1) fn punctual_offset_reference() {{ let original=PrecisePoint(vec3<f32>(1000000.0,0.0,0.0),vec3<f32>(-999999.0,0.0,0.0)); let shifted=punctual_offset(original,vec3<f32>(0.00001,0.0,0.0)); let canonical=punctual_offset(original,vec3<f32>(0.0)); let delta=precise_point_delta(shifted.hi,shifted.lo,canonical.hi,canonical.lo); accumulation[0]=vec4<f32>(delta,1.0); let light=punctual_sample(u.punctual_lights[0],original); accumulation[1]=vec4<f32>(light.radiance,1.0); }}"
     );
     let shader = context.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
     let layout = context.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -7739,7 +7785,7 @@ fn legacy_precise_policy(o: vec3<f32>, o_low: vec3<f32>, d: vec3<f32>, any_hit: 
 }
 "#;
     let source = [
-        SHADER,
+        scene_shader(false),
         "\n",
         legacy,
         "\n",

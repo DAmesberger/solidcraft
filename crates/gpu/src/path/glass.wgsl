@@ -116,9 +116,9 @@ fn glass_smith_weight(nv: f32, nl: f32, alpha: f32) -> f32 {
 }
 fn glass_visible_normal(n: vec3<f32>, view: vec3<f32>, alpha: f32, variates: vec2<f32>) -> vec3<f32> {
     let axis=select(vec3<f32>(0.0,0.0,1.0),vec3<f32>(1.0,0.0,0.0),abs(n.z)>=0.9);
-    let x=unit(cross(axis,n));let y=cross(n,x);
+    let x=sc_unit(cross(axis,n));let y=cross(n,x);
     let v=vec3<f32>(dot(view,x),dot(view,y),dot(view,n));
-    let stretched=unit(vec3<f32>(alpha*v.xy,v.z));
+    let stretched=sc_unit(vec3<f32>(alpha*v.xy,v.z));
     let length_squared=dot(stretched.xy,stretched.xy);
     var t1=vec3<f32>(1.0,0.0,0.0);
     if length_squared>0.0 {t1=vec3<f32>(-stretched.y,stretched.x,0.0)/sqrt(length_squared);}
@@ -128,8 +128,8 @@ fn glass_visible_normal(n: vec3<f32>, view: vec3<f32>, alpha: f32, variates: vec
     let s=(1.0+stretched.z)*0.5;
     b=(1.0-s)*sqrt(max(0.0,1.0-a*a))+s*b;
     let normal=a*t1+b*t2+sqrt(max(0.0,1.0-a*a-b*b))*stretched;
-    let h=unit(vec3<f32>(alpha*normal.xy,max(0.0,normal.z)));
-    return unit(x*h.x+y*h.y+n*h.z);
+    let h=sc_unit(vec3<f32>(alpha*normal.xy,max(0.0,normal.z)));
+    return sc_unit(x*h.x+y*h.y+n*h.z);
 }
 struct GlassEvent {direction:vec3<f32>,weight:vec3<f32>,transmitted:bool,valid:bool};
 fn glass_rough_active(t:Triangle,ni:f32,nt:f32)->bool {
@@ -158,7 +158,7 @@ fn glass_interface(t:Triangle,incident:vec3<f32>,macro_normal:vec3<f32>,geometri
         if dot(outgoing,geometric)<=0.0 {return GlassEvent(outgoing,weight,false,false);}
         weight=reflection/probability;
     } else {
-        outgoing=unit(refract(incident,normal,ni/nt));
+        outgoing=sc_unit(refract(incident,normal,ni/nt));
         if f.z<0.0 || dot(outgoing,geometric)>=0.0 {return GlassEvent(outgoing,weight,true,false);}
         weight=(vec3<f32>(1.0)-reflection)/(1.0-probability);
         if radiance {weight*=(ni/nt)*(ni/nt);}

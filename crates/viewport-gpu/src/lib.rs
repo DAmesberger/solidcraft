@@ -25,6 +25,7 @@ mod environment;
 pub mod pbr;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod select;
+pub mod shading;
 #[cfg(test)]
 mod test_env;
 pub mod view;

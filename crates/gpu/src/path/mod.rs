@@ -60,8 +60,7 @@ macro_rules! path_shader {
         )
     };
 }
-const SHADER: &str = path_shader!(16);
-const SINGLE_MEDIUM_SHADER: &str = path_shader!(1);
+
 const MAX_TRIANGLES: u64 = MAX_GPU_PATH_TRIANGLES;
 const PATH_WORKGROUP_SIZE: u32 = 32;
 const SCENE_PIPELINE_CACHE_SLOTS: usize = 2;
@@ -423,7 +422,7 @@ fn glass_pipeline(context: &Context, layout: &wgpu::BindGroupLayout, caustics: b
     if let Some(pipeline) = slot.get() {
         return Ok(pipeline.clone());
     }
-    let source = if caustics { std::borrow::Cow::Owned(photons::shader_source()?) } else { std::borrow::Cow::Borrowed(SHADER) };
+    let source = if caustics { std::borrow::Cow::Owned(photons::shader_source()?) } else { std::borrow::Cow::Borrowed(scene_shader(false)) };
     let compiling = one_compile_at_a_time();
     cancel.check()?;
     let device = &context.device;
@@ -538,7 +537,10 @@ fn descriptor() -> Result<ExecutorDescriptor> {
 // producer. Keep the qualified full stack for optical transport. The nested
 // media option still controls admission and the actual boundary transitions.
 fn scene_shader(opaque: bool) -> &'static str {
-    if opaque { SINGLE_MEDIUM_SHADER } else { SHADER }
+    static OPAQUE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static OPTICAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let (cache, transport) = if opaque { (&OPAQUE, path_shader!(1)) } else { (&OPTICAL, path_shader!(16)) };
+    cache.get_or_init(|| [solidcraft_viewport_gpu::shading::SOURCE, "\n", transport].concat())
 }
 
 /// A captured scene's program slot, or None for the eager opaque/no-map program. A slot is one

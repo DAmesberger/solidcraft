@@ -120,7 +120,7 @@ fn photon_project(direction:vec3<f32>,guide:vec4<f32>,rng:ptr<function,u32>)->ve
         radius=guide.w;
     }
     let axis=select(vec3<f32>(0.0,0.0,1.0),vec3<f32>(0.0,1.0,0.0),abs(direction.z)>0.9);
-    let x=unit(cross(axis,direction));let y=cross(direction,x);
+    let x=sc_unit(cross(axis,direction));let y=cross(direction,x);
     let r=radius*sqrt(random(rng));let phi=2.0*PI*random(rng);
     let origin=center-direction*launch+r*(cos(phi)*x+sin(phi)*y);
     return vec4<f32>(origin,PI*radius*radius);
@@ -272,7 +272,7 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
         let light=u.area_lights[min(area_index,3u)];
         origin=light.center.xyz;
         origin_low=(2.0*random(&rng)-1.0)*light.u.xyz+(2.0*random(&rng)-1.0)*light.v.xyz;
-        let normal=unit(cross(light.u.xyz,light.v.xyz));
+        let normal=sc_unit(cross(light.u.xyz,light.v.xyz));
         let radius_squared=random(&rng);let phi=2.0*PI*random(&rng);
         let radius=sqrt(radius_squared);
         direction=from_local(vec3<f32>(radius*cos(phi),radius*sin(phi),sqrt(1.0-radius_squared)),normal);
@@ -339,7 +339,7 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
         if emitter.distance<hit.distance {return;}
         if hit.triangle==0xffffffffu {if medium_count>0u {photon_bad_medium();}return;}
         let t=triangle(hit.triangle);let point=surface_point_precise(t,hit.bary);
-        let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));let entering=dot(outward,direction)<0.0;
+        let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));let entering=dot(outward,direction)<0.0;
         let geometric=select(-outward,outward,entering);
         if medium_count>0u {flux*=exp(-media[medium_count-1u].sigma*length(precise_point_delta(point.hi,point.lo,previous,previous_low)));}
         if !all(flux>=vec3<f32>(0.0)) || !all(flux<=vec3<f32>(3.4e38)) {atomicOr(&failures[7],1u);return;}
@@ -352,7 +352,7 @@ fn photon_trace(index:u32,seed:u32,epoch:u32,reservoir:ptr<function,PhotonReserv
             return;
         }
         if continuous && (t.parameters.w>=0.0 || t.glass.x>0.0) {return;}
-        var normal=unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
+        var normal=sc_unit(t.n0.xyz*hit.bary.x+t.n1.xyz*hit.bary.y+t.n2.xyz*hit.bary.z);
         if dot(normal,geometric)<0.0 {normal=-normal;}
         if dot(normal,-direction)<=0.0 {normal=geometric;}
         // All light tracing belongs to the reciprocal physical-normal mode.
@@ -453,7 +453,7 @@ fn photon_receiver_allowed(record:u32,position:vec3<f32>)->bool {
 fn photon_gather_glass(t:Triangle,position:vec3<f32>,normal:vec3<f32>,geometric:vec3<f32>,incident:vec3<f32>,ni:f32,nt:f32,wavelength:f32,side:i32)->vec3<f32> {
     let count=photon_word(0u);if count==0u {return vec3<f32>(0.0);}
     let radius=photon_float(2u);let center=photon_cell(position);var result=vec3<f32>(0.0);
-    let outward=unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
+    let outward=sc_unit(cross(t.p1.xyz-t.p0.xyz,t.p2.xyz-t.p0.xyz));
     for(var z=-1;z<=1;z+=1) {for(var y=-1;y<=1;y+=1) {for(var x=-1;x<=1;x+=1) {
         let cell=center+vec3<i32>(x,y,z);var index=photon_word(16u+photon_hash(cell));var visited=0u;
         loop {

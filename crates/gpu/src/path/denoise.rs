@@ -1,5 +1,5 @@
 //! Optional output filtering; never writes the Monte Carlo accumulation buffer.
-use super::{Context, Result, SHADER, TIMEOUT, Task, checked, gpu, one_compile_at_a_time, placeholder_bind, scopes, warm_up};
+use super::{Context, Result, TIMEOUT, Task, checked, gpu, one_compile_at_a_time, placeholder_bind, scene_shader, scopes, warm_up};
 use solidcraft_render::job::{CancelToken, DenoiseDiagnostics, DenoiseGuideClass, resolve_denoise_class};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,11 +22,12 @@ pub(super) struct Pipelines {
 
 impl Pipelines {
     fn new(context: &Context) -> Result<Self> {
+        let path_source = scene_shader(false);
         let device = &context.device;
         let error_scopes = scopes(device);
         let guide_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("denoise guides"),
-            source: wgpu::ShaderSource::Wgsl(format!("{SHADER}\n{GUIDES}").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{path_source}\n{GUIDES}").into()),
         });
         let guide_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("denoise guides"),
