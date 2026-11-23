@@ -177,7 +177,7 @@ fn pbr_steel_draws_as_its_pbr_look() {
     let graph = render_frame(&mut r, &device, &queue, &realistic(scene, 2, 1.0), true);
     assert_eq!(r.appearance_stats().compiled, 1);
     assert_eq!(r.appearance_stats().fallback_draws, 0, "drawn by its own pipeline");
-    let changed = pbr.chunks_exact(4).zip(graph.chunks_exact(4)).filter(|(a, b)| a != b).count();
+    let changed = pbr.as_chunks::<4>().0.iter().zip(graph.as_chunks::<4>().0.iter()).filter(|(a, b)| a != b).count();
     assert_eq!(changed, 0, "the full frame matches the conventional PBR stream pixel for pixel");
     let b = inner_pixels(&graph);
     assert!(mean(&b) > 20.0, "lit: {}", mean(&b));

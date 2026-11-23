@@ -5031,7 +5031,7 @@ impl Renderer {
         if cb.product {
             let _ = res.prepare_product_geometry(device, queue, cb);
             res.product.sort_glass(queue, cb.back);
-            res.materials.prepare(device, queue, &res.product.graphs, started);
+            res.materials.prepare(&res.product.graphs, started);
             res.product.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.

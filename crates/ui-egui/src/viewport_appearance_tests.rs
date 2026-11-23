@@ -352,6 +352,7 @@ fn a_placed_parts_triangles_and_edges_are_uploaded_once_and_a_part_added_alone_a
                 look: solidcraft_viewport_gpu::view::InstanceLook::Opaque,
                 levels: Vec::new(),
                 closed: true,
+                graph: None,
                 edges: with_edges.then(|| edges[k].clone()),
             };
             for i in 0..3 {

@@ -31,7 +31,7 @@ fn field(ir: &Ir, name: &str) -> Result<String, CodegenError> {
         _ => return Err(CodegenError(format!("invalid uniform at float {offset}"))),
     };
     let value = format!("mat_page.m[record + {index}u].{component}");
-    let clean = if *width == 3 { "sc_clean3" } else { "sc_clean" };
+    let clean = if width == 3 { "sc_clean3" } else { "sc_clean" };
     Ok(format!("{clean}({value}, {:?}, {:?}, {default})", lo as f32, hi as f32))
 }
 
