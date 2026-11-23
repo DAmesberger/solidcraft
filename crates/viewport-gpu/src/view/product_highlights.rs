@@ -143,7 +143,7 @@ impl Renderer {
         queue.write_buffer(
             &self.uniform,
             0,
-            &uniform_bytes(frame, frame.size_px[0], frame.size_px[1], self.linear_out, self.target.reversed_depth()),
+            &super::frame_uniform(frame, self.drawn_look(frame), frame.size_px[0], frame.size_px[1], self.linear_out, self.target.reversed_depth()),
         );
         failed.is_none()
     }
@@ -172,7 +172,8 @@ impl Renderer {
         if self.pic.product_highlights && can_reuse(self.pic.ss_ready && self.pic.ss.is_some(), self.pic.ss_key, key) {
             let filter = self.pic.ss_scaled && self.pic.cached.is_none();
             if filter {
-                self.cache_picture(device, encoder, frame.size_px);
+                let redither = self.redithers(frame);
+                self.cache_picture(device, encoder, frame.size_px, redither);
             }
             self.pic.ss_stats = DrawStats { draw_calls: u32::from(filter), ..DrawStats::default() };
             return;

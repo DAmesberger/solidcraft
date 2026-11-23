@@ -19,6 +19,7 @@ pub mod hatch;
 mod pick;
 mod raster;
 mod scene;
+pub mod studio;
 pub mod surface;
 pub mod vec;
 mod view_spec;

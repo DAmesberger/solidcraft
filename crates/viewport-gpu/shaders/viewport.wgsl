@@ -25,6 +25,9 @@ struct U {
     hatch: array<vec4<f32>, 3>,
     product_lights_meta: vec4<f32>, // explicit preview flag and bounded count
     product_lights: array<vec4<f32>,84>, // position/kind, radiance, axis/cone, attenuation
+    look: vec4<f32>,        // the opt-in product look: exposure, studio intensity, studio rotation, 1 (0: off)
+    look_room: vec4<f32>, // the product look's room (`ibl::StudioRoom`): subject centre x, y, ground z, extent (0: none)
+    look_foot: vec4<f32>, // its floor-contact ellipse radii x, y (world units)
     inv_vp: mat4x4<f32>, // the inverse of `vp`: a pixel's point in the world from its depth
     plane_hatch: array<vec4<f32>, 6>, // each section plane's hatch: stripe phase pixel · xy (`section_hatch`)
     sky: vec4<f32>,    // xyz = world up; w = 1: shade in linear light with a sky fill (#7974)
@@ -164,6 +167,34 @@ fn out_color(c: vec4<f32>) -> vec4<f32> {
         return vec4<f32>(srgb_decode(c.rgb), c.a);
     }
     return c;
+}
+
+// The opt-in product look (`Frame::product_look`, docs/render-opaque-pbr.md): `u.look.w` is 1
+// with it, 0 without.
+fn look_on() -> bool {
+    return u.look.w > 0.5;
+}
+
+/// The look's (exposure, studio intensity, studio rotation, 1); only when `look_on()`.
+fn look_params() -> vec4<f32> {
+    return u.look;
+}
+
+/// Interleaved gradient noise in [0, 1) at pixel `p` (as the ambient occlusion's turn).
+fn look_noise(p: vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+/// A triangular dither in (−1, 1) LSB: two noise values along different pixel gradients, summed.
+fn look_dither(p: vec2<f32>) -> f32 {
+    return look_noise(p) + look_noise(vec2<f32>(p.y, p.x) + vec2<f32>(19.0, 47.0)) - 1.0;
+}
+
+/// A tone-mapped colour sRGB-encoded for an 8-bit target, dithered at pixel `p`.
+fn look_encode(mapped: vec3<f32>, p: vec2<f32>) -> vec3<f32> {
+    let c = clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0));
+    let e = select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
+    return clamp(e + vec3<f32>(look_dither(p) / 255.0), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 struct TOut {
@@ -518,7 +549,7 @@ fn solid(i: TOut, front: bool) -> vec4<f32> {
     if (u.ana.x > 0.5 && length(i.n) > 0.5) {
         return analysis(i, k);
     }
-    let c = lit(i, occlusion(i));
+    let c = face_lit(i, occlusion(i));
     // Silhouettes (styles with edges): where a curved surface turns away from the eye, a line
     // about 1.5 px wide, on the visible surface only (depth-correct).
     if (u.screen.w > 0.5 && length(i.n) > 0.5 && fw > 1e-6) {
@@ -840,6 +871,21 @@ fn shade(i: TOut) -> vec4<f32> {
     return lit_color(i, 1.0, i.c, false);
 }
 
+// Scalar face colours are dielectric swatches in the selected studio. Overlays
+// retain their own draw calls and their original display-space colours.
+fn face_lit(i: TOut, visibility: f32) -> vec4<f32> {
+    if (look_on() && length(i.n) > 0.5) {
+        var view = u.back.xyz;
+        if (u.eye.w > 0.5) { view = u.eye.xyz - i.wp; }
+        let v = pbr_unit(view);
+        var n = pbr_unit(i.n);
+        if (dot(n, v) < 0.0) { n = -n; }
+        let color = pbr_lit(srgb_decode(i.c.rgb), vec3<f32>(0.0, 0.5, 1.5), n, v, i.wp, i.pos.xy, visibility);
+        return vec4<f32>(color, i.c.a);
+    }
+    return lit(i, visibility);
+}
+
 fn product_light_unit(v: vec3<f32>) -> vec3<f32> {
     let scale=max(max(abs(v.x),abs(v.y)),abs(v.z));
     if scale == 0.0 { return vec3<f32>(0.0,0.0,1.0); }
@@ -1010,6 +1056,8 @@ fn lit_color(i: TOut, visibility: f32, base: vec4<f32>, finish: bool) -> vec4<f3
     let v = normalize(u.back.xyz);
     var n = normalize(i.n);
     if (dot(n, v) < 0.0) { n = -n; }
+    // The frame's product lights, when it names them; the product look's opaque faces are lit in
+    // `face_lit`, and everything drawn here keeps this drawing in either look.
     if u.product_lights_meta.x>0.0 {
         var radiance=vec3<f32>(0.0);
         let albedo=srgb_decode(base.rgb);
