@@ -3414,6 +3414,7 @@ pub fn gpu_scene_cached(
         };
         let at = *by_look.entry((address, look)).or_insert_with(|| {
             gpu.instanced.push(crate::gpu::InstancedMesh {
+                graph: None,
                 key: address as u64,
                 tris,
                 instances: Vec::new(),

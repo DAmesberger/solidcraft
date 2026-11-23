@@ -50,6 +50,7 @@ pub const TRI_COLOR_AT: usize = 24;
 pub const TRI_VALUE_AT: usize = 28;
 /// A triangle vertex's value word when it has no value (a NaN's bits no producer writes).
 pub const NO_VALUE: u32 = u32::MAX;
+/// Opaque PBR vertex: position, normal, linear base colour, (metallic, roughness, IOR).
 pub const PBR_SIZE: usize = pbr::VERTEX_SIZE;
 /// Line instance: a, b (3 × f32 each), palette index (u32), width in pixels (f32).
 pub const LINE_SIZE: usize = 32;
@@ -335,7 +336,7 @@ fn octahedral6(n: [f32; 3]) -> u32 {
 /// [`MAX_SECTION_PLANES`] planes, 6 more `vec4`s (the last carries the ambient occlusion
 /// radius), the 8 analysis colours, their flags, the depth direction, the model matrix, the two
 /// whole-body highlight colours, the section hatch colours, the product lights (a flag and
-/// count, then 21 lights of 4 `vec4`s), the product look and its room,
+/// count, then 21 lights of 4 `vec4`s), the product look, the look's room,
 /// the inverse of the view-projection matrix, each section plane's hatch and the sky
 /// (`uniform_bytes`).
 const UNIFORM_SIZE: u64 =
@@ -372,6 +373,9 @@ pub struct DrawStats {
     /// The device refused the memory for a frame (#7296): the view is drawn at a lower
     /// resolution, or with its see-through surfaces sorted.
     pub lowered: bool,
+    /// Appearance-graph shapes or textures were still being prepared (off the frame): the next
+    /// frame draws more, so a client asks for another ([`Renderer::wants_redraw`]).
+    pub appearances_pending: bool,
     /// Studios installed by this renderer, shared by its view tiles.
     pub installed_studios: [Option<StudioPreset>; ibl::MAX_INSTALLED],
     /// Asked by the UI: time the view's render passes on the GPU (the frame-rate readout is on).
@@ -397,6 +401,10 @@ pub struct UploadStats {
     pub planned: u64,
     /// Vertices of planned bodies evaluated again on the GPU (chunks whose plans changed).
     pub evaluated: u64,
+    /// Appearance-graph uniform pages rewritten (a value edit writes only these).
+    pub material_pages: u64,
+    /// Appearance-graph vertices uploaded (only draws whose vertices changed).
+    pub material_vertices: u64,
 }
 
 /// The renderer's last [`DrawStats`], shared with the UI that shows them.
@@ -412,7 +420,7 @@ pub(crate) struct Tally {
 
 impl Tally {
     /// A draw call of `vertices` triangle corners (or indices), `instances` times.
-    fn triangles(&self, vertices: u32, instances: u32) {
+    pub(crate) fn triangles(&self, vertices: u32, instances: u32) {
         self.call();
         self.triangles.set(self.triangles.get().saturating_add(u64::from(vertices / 3) * u64::from(instances)));
     }
@@ -659,6 +667,10 @@ pub struct InstancedMesh {
     pub levels: Vec<(Arc<SharedTris>, f32)>,
     /// The triangles enclose a volume (see [`PlannedBody::closed`]).
     pub closed: bool,
+    /// Every opaque placement also shaded through this material of [`GpuScene::graphs`], over its
+    /// opaque faces as the scene's other material surfaces are, from the same shared triangles
+    /// and levels. A see-through material draws no overlay.
+    pub graph: Option<crate::appearance::GraphAppearance>,
     /// The part's model edges, drawn at every placement in each placement's edge colours (where
     /// the renderer draws edges this way, [`GpuTarget::edges`]); `None` when its edges are drawn
     /// from the scene's blocks.
@@ -830,8 +842,14 @@ pub struct GpuScene {
     /// Opaque triangles of open bodies, drawn as `tris` but left out of a section's crossing
     /// count (see [`PlannedBody::closed`]).
     pub open_tris: Vec<u8>,
-    /// Opaque product PBR vertices; linear base color and explicit optical parameters.
+    /// Opaque product PBR vertices ([`PBR_SIZE`] each); linear base color and explicit optical
+    /// parameters.
     pub pbr: Vec<u8>,
+    /// Appearance-graph shading of opaque faces this scene also draws (in `tris`, its blocks, plans
+    /// or instances), for the realistic look (docs/appearance-graph.md §5.2): their uniform pages
+    /// and one vertex list per (shape, page, texture set). Drawn over those faces without
+    /// writing depth, so the faces keep their depth, occlusion, edges and highlights.
+    pub graphs: crate::appearance::GraphScene,
     /// Translucent triangles (alpha from the colour), drawn after the opaque ones without
     /// writing depth.
     pub trans: Vec<u8>,
@@ -1304,13 +1322,19 @@ impl BlockBuilder {
 }
 
 impl GpuScene {
+    /// A vertex of an opaque PBR surface ([`PBR_SIZE`] bytes into [`GpuScene::pbr`]): its base
+    /// colour and optical parameters. A clear coat is not carried: the vertex path draws the
+    /// uncoated surface (docs/render-opaque-pbr.md).
     pub fn pbr_tri(&mut self, p: [f32; 3], n: [f32; 3], surface: solidcraft_viewport::surface::OpaqueSurface) {
-        let base = surface.base_color().to_f32();
-        let parameters = [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32];
-        for value in p.into_iter().chain(n).chain(base).chain(parameters) {
+        for value in p.into_iter().chain(n).chain(surface.base_color().to_f32()).chain(Self::pbr_parameters(surface)) {
             self.pbr.extend_from_slice(&value.to_le_bytes());
         }
     }
+
+    fn pbr_parameters(surface: solidcraft_viewport::surface::OpaqueSurface) -> [f32; 3] {
+        [surface.metallic() as f32, surface.roughness() as f32, surface.dielectric_ior() as f32]
+    }
+
     pub fn tri(&mut self, p: [f32; 3], n: [f32; 3], c: PaletteIndex) {
         for v in p.iter().chain(&n) {
             self.tris.extend_from_slice(&v.to_le_bytes());
@@ -1921,6 +1945,10 @@ struct LevelDraw {
 #[derive(Clone)]
 struct InstancedDraw {
     look: InstanceLook,
+    /// Its material overlay ([`InstancedMesh::graph`]).
+    graph: Option<crate::appearance::GraphAppearance>,
+    /// That material's record for each placement.
+    records: Option<wgpu::Buffer>,
     /// Its triangles enclose a volume ([`InstancedMesh::closed`]).
     closed: bool,
     /// The full triangles first, then coarser ones.
@@ -2411,6 +2439,8 @@ struct Batches {
     ground_ao: Option<Batch>,
     ground_input: Option<GroundAo>,
     pbr: Option<Batch>,
+    /// The scene's appearance-graph surfaces.
+    graphs: crate::appearance::cache::GraphBatches,
     trans: Option<Batch>,
     shadow: Option<Batch>,
     glass: Option<Batch>,
@@ -2574,7 +2604,9 @@ impl Batches {
                 None
             };
             let arena = self.arena.clone();
-            self.instanced = self.instanced(device, &sc.instanced, donor.as_deref(), arena.as_deref());
+            // The triangles of the last scene, kept for whichever list of this one draws them.
+            let mut kept = std::mem::take(&mut self.instanced_tris);
+            self.instanced = self.instanced(device, &sc.instanced, donor.as_deref(), &mut kept, arena.as_deref());
             self.indirect = arena.clone().and_then(|a| indirect::Indirect::new(device, &self.instanced, a));
             // The instanced edges, and the lit ones drawn again over them, from one segment
             // buffer: a lit part's edges are the model's (this scene's, or the model scene's for
@@ -2606,18 +2638,19 @@ impl Batches {
             self.selected_blocks = sc.selected_blocks.clone();
             self.recoloured = sc.recoloured.clone();
             self.lit_edges = sc.lit_edges.clone();
-            self.hover_instanced = self.instanced(device, &sc.hover_instanced, donor.as_deref(), arena.as_deref());
-            self.selected_instanced = self.instanced(device, &sc.selected_instanced, donor.as_deref(), arena.as_deref());
+            self.hover_instanced = self.instanced(device, &sc.hover_instanced, donor.as_deref(), &mut kept, arena.as_deref());
+            self.selected_instanced = self.instanced(device, &sc.selected_instanced, donor.as_deref(), &mut kept, arena.as_deref());
             self.hover_face_instanced = if sc.hover_face_instanced.is_empty() {
                 Vec::new()
             } else {
-                self.instanced(device, &sc.hover_face_instanced, model, arena.as_deref())
+                self.instanced(device, &sc.hover_face_instanced, model, &mut kept, arena.as_deref())
             };
             self.selected_face_instanced = if sc.selected_face_instanced.is_empty() {
                 Vec::new()
             } else {
-                self.instanced(device, &sc.selected_face_instanced, model, arena.as_deref())
+                self.instanced(device, &sc.selected_face_instanced, model, &mut kept, arena.as_deref())
             };
+            drop(kept);
             let mut kept = std::mem::take(&mut self.blocks);
             let mut order = Vec::with_capacity(sc.blocks.len());
             let mut geometry = 0;
@@ -2641,6 +2674,15 @@ impl Batches {
                 order.push(block.key);
             }
             self.block_order = order;
+            let (pages, vertices) = self.graphs.take(device, queue, &sc.graphs);
+            self.uploads.material_pages = pages;
+            self.uploads.material_vertices = vertices;
+            self.graphs.clear_placed();
+            for draw in &mut self.instanced {
+                let Some(record) = draw.graph.and_then(|graph| self.graphs.place(&sc.graphs, graph)) else { continue };
+                let bytes: Vec<u8> = std::iter::repeat_n(record.to_le_bytes(), draw.placements.len() / INSTANCE_SIZE).flatten().collect();
+                draw.records = buffer_init(device, "sc_placed_records", &bytes, wgpu::BufferUsages::VERTEX);
+            }
             let mut own = |label: &str, data: &[u8], stride: usize| {
                 geometry += data.len() as u64;
                 upload(device, label, data, stride)
@@ -2725,9 +2767,9 @@ impl Batches {
         device: &wgpu::Device,
         meshes: &[InstancedMesh],
         donor: Option<&Batches>,
+        kept: &mut std::collections::HashMap<usize, (Arc<SharedTris>, Arc<SharedGpu>)>,
         arena: Option<&indirect::Arena>,
     ) -> Vec<InstancedDraw> {
-        let mut kept = std::mem::take(&mut self.instanced_tris);
         let mut out = Vec::with_capacity(meshes.len());
         for m in meshes {
             let count = u32::try_from(m.count()).unwrap_or(u32::MAX);
@@ -2779,6 +2821,8 @@ impl Batches {
             if !levels.is_empty() {
                 out.push(InstancedDraw {
                     look: m.look,
+                    graph: m.graph,
+                    records: None,
                     closed: m.closed,
                     levels,
                     bounds: m.tris.bounds,
@@ -3194,6 +3238,8 @@ pub struct Renderer {
     ss_filter_look: wgpu::RenderPipeline,
     /// The product look's studios, the PBR pipeline's group [`pbr::STUDIO_GROUP`].
     studios: ibl::Studios,
+    /// Appearance-graph pipelines by shape, and their fallback.
+    materials: crate::appearance::cache::AppearancePipelines,
     /// The frame drawn offscreen at the viewport's own size (for the see-through surfaces' order-
     /// independent transparency), copied as it is.
     copy_blit: wgpu::RenderPipeline,
@@ -3481,13 +3527,14 @@ fn tri_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout { array_stride: TRI_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
-/// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
-/// at [`crate::NORMAL_OFFSET`] (each padded to four floats).
+/// A plain PBR vertex ([`PBR_SIZE`]): position, normal, base colour, optical parameters.
 fn pbr_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3];
     wgpu::VertexBufferLayout { array_stride: PBR_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
+/// A planned body's vertices as the GPU evaluation writes them: the position, then the normal
+/// at [`crate::NORMAL_OFFSET`] (each padded to four floats).
 fn planned_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 2] = [
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
@@ -3497,13 +3544,13 @@ fn planned_layout() -> wgpu::VertexBufferLayout<'static> {
 }
 
 /// An instanced mesh's vertices ([`SHARED_SIZE`]).
-fn shared_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn shared_layout() -> wgpu::VertexBufferLayout<'static> {
     const A: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
     wgpu::VertexBufferLayout { array_stride: SHARED_SIZE as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A }
 }
 
 /// An instanced mesh's placements ([`INSTANCE_SIZE`]), one per instance.
-fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
+pub(crate) fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
     // The edge indices (52 and 56) are the edge shaders' (`edges::instance_layout`); the motion
     // slot after them, at location 9 there too.
     const A: [wgpu::VertexAttribute; 5] = [
@@ -4187,6 +4234,8 @@ impl Renderer {
                 pbr_pipeline("sc_pbr_instanced", "vs_pbr_inst", &[Some(shared_layout()), Some(instance_layout())]),
             )
         };
+        let materials =
+            crate::appearance::cache::AppearancePipelines::new(device, [&bgl, &access_bgl, &ao_layout], t.format, t.samples, overlay_depth(t.depth));
         let lines = || {
             (
                 pipeline("sc_lines", "vs_line", "fs_line", line_layout(), depth(wgpu::CompareFunction::LessEqual, false), alpha),
@@ -4327,6 +4376,7 @@ impl Renderer {
                 ss_blit_look,
                 ss_filter_look,
                 studios,
+                materials,
                 copy_blit,
                 oit,
                 timer: None,
@@ -4426,6 +4476,24 @@ fn highlight_depth(format: Option<wgpu::TextureFormat>) -> Option<wgpu::DepthSte
         bias: depth_bias(reversed, HIGHLIGHT_BIAS),
     })
 }
+
+/// Appearance-graph surfaces (`GpuScene::graphs`) shade faces the scene also draws as opaque
+/// triangles: they test against those faces' depth without writing it, pushed back half as far
+/// ([`OVERLAY_BIAS`]), so f32 differences between the two (planned bodies are evaluated on the GPU)
+/// never let the face show through, while edges, hover and selection tints still draw over them.
+fn overlay_depth(format: Option<wgpu::TextureFormat>) -> Option<wgpu::DepthStencilState> {
+    let reversed = reversed_depth(format);
+    format.map(|format| wgpu::DepthStencilState {
+        format,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(depth_compare(reversed, wgpu::CompareFunction::LessEqual)),
+        stencil: Default::default(),
+        bias: depth_bias(reversed, OVERLAY_BIAS),
+    })
+}
+
+/// Half of [`FACE_BIAS`]: in front of the faces, behind the edges drawn on them.
+const OVERLAY_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: FACE_STEPS / 2, slope_scale: FACE_SLOPE / 2.0, clamp: 0.0 };
 
 /// See [`highlight_depth`]. Negative: toward the eye (depth grows away from it).
 const HIGHLIGHT_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: -8, slope_scale: -1.0, clamp: 0.0 };
@@ -4935,6 +5003,7 @@ impl Renderer {
     }
 
     fn prepare_frame(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, frame: &Frame, isolated: bool) {
+        let started = web_time::Instant::now();
         let res = self;
         let cb = frame;
         res.pic.isolated = isolated;
@@ -4957,13 +5026,18 @@ impl Renderer {
             return;
         }
         res.pic.cached = None;
+        // The product look's studio is never baked here (it would stall the window): until a
+        // client installs it (`set_studio_environment`), the look draws without it.
         if cb.product {
             let _ = res.prepare_product_geometry(device, queue, cb);
             res.product.sort_glass(queue, cb.back);
+            res.materials.prepare(device, queue, &res.product.graphs, started);
+            res.product.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.
             res.pic.ss_ready = (isolated || res.window_differs() || cb.ssaa != 1.0) && res.supersample(device, encoder, cb, false);
-            res.pic.ss_key = (res.pic.ss_ready && res.refused_upload.is_none()).then_some(key);
+            // A picture with shapes still compiling is not kept: the next frame draws them.
+            res.pic.ss_key = (res.pic.ss_ready && res.refused_upload.is_none()).then_some(key).filter(|_| !res.materials.wants_redraw());
             return;
         }
         res.take_ready_tessellation();
@@ -5041,6 +5115,8 @@ impl Renderer {
         uploads.push(res.preview.take(device, queue, &res.uniform, &res.uniform_bgl, cb.pv_key, &cb.pv_slot, None, oit));
         // A refused scene leaves the previous picture; a capture must not pass it off as the new one.
         res.refused_upload = uploads.into_iter().find_map(Result::err);
+        res.materials.prepare(&res.pic.model.graphs, started);
+        res.pic.model.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
         // See-through surfaces are drawn without sorting where the device can (order-independent
         // transparency, in an offscreen frame); else their triangles are sorted for the view.
         // The dragged bodies' own (their blocks' glass is drawn only there with it) count too.
@@ -5135,7 +5211,7 @@ impl Renderer {
         }
         res.clouds.prepare(device, queue, &res.cloud_pipes, &cb.clouds);
         res.pic.ss_ready = (isolated || cb.ssaa != 1.0 || see_through || res.window_differs()) && res.supersample(device, encoder, cb, see_through);
-        res.pic.ss_key = (res.pic.ss_ready && res.refused_upload.is_none()).then_some(key);
+        res.pic.ss_key = (res.pic.ss_ready && res.refused_upload.is_none()).then_some(key).filter(|_| !res.materials.wants_redraw());
     }
 
     /// Draw the frame into `pass` within `viewport` (x, y, width, height in physical pixels):
@@ -5189,6 +5265,30 @@ impl Renderer {
     }
 
     /// What the last frame drew; the handle stays current as later frames are drawn.
+    /// What appearance-graph drawing did in the last frame: shapes compiled, waiting and failed, and
+    /// draws that showed a base response (docs/appearance-graph.md §5.2, §5.6).
+    pub fn appearance_stats(&self) -> crate::appearance::AppearanceStats {
+        self.materials.stats()
+    }
+
+    /// Appearance-graph shapes are still compiling, so the next frame draws more than the last: a
+    /// client asks for another frame (the kept picture is not reused meanwhile).
+    pub fn wants_redraw(&self) -> bool {
+        self.materials.wants_redraw()
+    }
+
+    /// Wait, at most `timeout`, for the appearance-graph pipelines that compile off the frame
+    /// (docs/appearance-graph.md §5.2): the next frame draws them. For a client that renders until
+    /// [`Self::wants_redraw`] is false and must not spin meanwhile, such as an offscreen image.
+    pub fn wait_for_appearances(&self, timeout: std::time::Duration) {
+        self.materials.wait(timeout);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn appearance_pipelines_mut(&mut self) -> &mut crate::appearance::cache::AppearancePipelines {
+        &mut self.materials
+    }
+
     pub fn stats(&self) -> DrawStatsHandle {
         self.stats.clone()
     }
@@ -5206,7 +5306,14 @@ impl Renderer {
     fn publish(&self, drawn: DrawStats) {
         if let Ok(mut s) = self.stats.lock() {
             let gpu = if s.time_passes { self.timer.as_ref().and_then(|t| t.last) } else { None };
-            *s = DrawStats { lowered: self.lowered, installed_studios: s.installed_studios, time_passes: s.time_passes, gpu, ..drawn };
+            *s = DrawStats {
+                lowered: self.lowered,
+                appearances_pending: self.materials.wants_redraw(),
+                installed_studios: self.studios.installed(),
+                time_passes: s.time_passes,
+                gpu,
+                ..drawn
+            };
         }
     }
 
@@ -5241,14 +5348,14 @@ impl Renderer {
 
     /// The look `frame` is drawn in: its product look, except that a look with nothing to light
     /// it, no product lights and its studio not installed yet, draws the standard picture until
-    /// the studio is.
+    /// the studio is (the Realistic view of a modelling viewport: docs/appearance-graph.md §6.3).
     fn drawn_look(&self, frame: &Frame) -> Option<ProductLook> {
         product_look(frame).filter(|look| frame.product_lights.is_some() || self.studios.has(look.studio))
     }
 
     /// Whether a supersampled frame is filtered down with the product look's ±1 LSB re-dither.
     /// Only the product preview's: in a modelling view's Realistic look the selection, edges and
-    /// sketches keep their exact theme colours, as in the standard look.
+    /// sketches keep their exact theme colours, as in the standard look (§6.2).
     fn redithers(&self, frame: &Frame) -> bool {
         frame.product && self.drawn_look(frame).is_some()
     }
@@ -5469,6 +5576,18 @@ impl Renderer {
         }
         pass.set_bind_group(0, scene_bind(m, &res.bind), &[]);
         tris(pass, &res.pbr, &m.pbr);
+        m.graphs.draw(pass, &res.materials, tally);
+        for d in m.instanced.iter().filter(|d| d.look == InstanceLook::Opaque) {
+            let (Some(graph), Some(records)) = (d.graph, &d.records) else { continue };
+            if m.graphs.begin_placed(pass, &res.materials, graph) {
+                pass.set_vertex_buffer(2, records.slice(..));
+                for level in &d.levels {
+                    level.draw(pass, tally);
+                }
+            }
+        }
+        // The material draws set group 3 to their own layout; the pipelines below read the studio's.
+        pass.set_bind_group(pbr::STUDIO_GROUP, res.studios.bind(res.drawn_look(cb).map(|look| look.studio)), &[]);
         if !cb.product {
             res.clouds.paint(pass, &res.cloud_pipes, tally);
         }
@@ -6085,7 +6204,7 @@ fn uniform_bytes_placing(cb: &Frame, look: Option<ProductLook>, w: f32, h: f32, 
     // The product look ([`ProductLook::uniform`]; all zero without it).
     v.extend(look.map_or([0.0; 4], |look| look.uniform()));
     // The look's room ([`ProductLook::room_uniform`]; all zero without the look or a room).
-    v.extend(look.map_or([0.0; 8], |look| look.room_uniform()));
+    v.extend(product_look(cb).map_or([0.0; 8], |look| look.room_uniform()));
     // The view-projection's inverse, to find a pixel's point in the world from its depth
     // (`fs_ao_term_screen`).
     v.extend(inverse(gpu_vp).iter().flatten());
@@ -6975,7 +7094,30 @@ mod tests {
 mod realistic_tests;
 
 #[cfg(test)]
-mod glass_tests {
+pub(crate) mod glass_tests {
+    pub(crate) fn inner_pixels(bytes: &[u8]) -> Vec<[u8; 3]> {
+        const SIZE: usize = 64;
+        let mut out = Vec::new();
+        for y in 8..SIZE - 8 {
+            for x in 8..SIZE - 8 {
+                let i = (y * SIZE + x) * 4;
+                if let Some(p) = bytes.get(i..i + 3) {
+                    out.push([p[0], p[1], p[2]]);
+                }
+            }
+        }
+        out
+    }
+    pub(crate) fn studio(preset: StudioPreset) -> StudioEnvironment {
+        static BAKED: std::sync::Mutex<Vec<StudioEnvironment>> = std::sync::Mutex::new(Vec::new());
+        let mut baked = BAKED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = baked.iter().find(|env| env.preset() == preset) {
+            return env.clone();
+        }
+        let env = StudioEnvironment::bake(preset);
+        baked.push(env.clone());
+        env
+    }
     use super::*;
 
     /// Intel UHD 620 OpenGL collapsed long line quads or expanded short ones across the
@@ -7510,7 +7652,7 @@ mod glass_tests {
     }
 
     /// Render `frame` through `r` into a fresh 64 × 64 target and read the pixels back.
-    pub(super) fn render_frame(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame, with_depth: bool) -> Vec<u8> {
+    pub(crate) fn render_frame(r: &mut Renderer, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Frame, with_depth: bool) -> Vec<u8> {
         render_frame_kind(r, device, queue, frame, with_depth, false, wgpu::Color::WHITE)
     }
 
@@ -7600,7 +7742,7 @@ mod glass_tests {
     }
 
     /// A frame showing `scene` at a fixed view, `ssaa` times the viewport's pixels each way.
-    pub(super) fn test_frame(scene: GpuScene, ssaa: f32) -> Frame {
+    pub(crate) fn test_frame(scene: GpuScene, ssaa: f32) -> Frame {
         const SIZE: u32 = 64;
         let none = || Arc::new(Mutex::new(None));
         Frame {
@@ -7683,6 +7825,7 @@ mod glass_tests {
                 ..Default::default()
             };
             let mut instance = InstancedMesh {
+                graph: None,
                 key: 1,
                 tris: Arc::new(SharedTris::new(&mesh)),
                 instances: Vec::new(),
@@ -7836,6 +7979,7 @@ mod glass_tests {
                         let rear = control.color([255, 0, 0, 255]);
                         let ignored_color = control.color([0, 0, 255, 255]);
                         let mut instances = InstancedMesh {
+                            graph: None,
                             key: 1,
                             tris: shared,
                             instances: Vec::new(),
@@ -8544,6 +8688,7 @@ mod glass_tests {
             ..Default::default()
         });
         let mut instanced = InstancedMesh {
+            graph: None,
             key: 7,
             tris: Arc::new(SharedTris::new(&mesh)),
             instances: Vec::new(),
@@ -8572,6 +8717,7 @@ mod glass_tests {
             ..Default::default()
         };
         let mut m = InstancedMesh {
+            graph: None,
             key: 1,
             tris: Arc::new(SharedTris::default()),
             instances: Vec::new(),

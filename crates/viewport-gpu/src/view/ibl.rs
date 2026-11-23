@@ -59,8 +59,8 @@ impl StudioPreset {
     }
 }
 
-/// The built-in studios' rigs for tests: exported by `tools/render-library/generate.py`
-/// from the application catalog.
+/// The built-in studios' rigs for tests: a copy of the app's `assets/render/catalog/studios.json`
+/// (the app's GPU crate checks the copy stays identical).
 #[cfg(test)]
 pub(crate) fn test_rig(name: &str) -> StudioRig {
     let text = include_str!("../../tests/fixtures/studios.json");
@@ -481,12 +481,13 @@ impl StudioResources {
 
     fn bind(self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, dfg: &wgpu::TextureView) -> EnvGpu {
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("sc_studio"), layout, entries: &self.entries(sampler, dfg) });
-        EnvGpu { bind }
+        EnvGpu { resources: self, bind }
     }
 }
 
 struct EnvGpu {
     bind: wgpu::BindGroup,
+    resources: StudioResources,
 }
 
 /// Empty textures for a view awaiting its chosen studio.
@@ -527,6 +528,23 @@ fn upload(
         .bind(device, layout, sampler, dfg)
 }
 
+/// Appearance graphs share the studio group and add a uniform page.
+pub(crate) fn appearance_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let visibility = wgpu::ShaderStages::FRAGMENT;
+    let mut entries = studio_layout(visibility).to_vec();
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(crate::appearance::PAGE_BYTES),
+        },
+        count: None,
+    });
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("sc_studio_material"), entries: &entries })
+}
+
 /// Most studios the renderer keeps on the GPU at once.
 pub(super) const MAX_INSTALLED: usize = 8;
 
@@ -538,13 +556,15 @@ pub(crate) struct Studios {
     dfg: wgpu::TextureView,
     placeholder: EnvGpu,
     baked: Vec<(StudioPreset, EnvGpu)>,
+    /// Counts installations, so binds made from an older studio are known stale.
+    generation: u64,
 }
 
 impl Studios {
     pub(crate) fn new(device: &wgpu::Device, environment: &Environment) -> Self {
         let layout = layout(device, wgpu::ShaderStages::FRAGMENT);
         let placeholder = placeholder(device, &layout, environment);
-        Studios { layout, sampler: environment.sampler.clone(), dfg: environment.dfg.clone(), placeholder, baked: Vec::new() }
+        Studios { layout, sampler: environment.sampler.clone(), dfg: environment.dfg.clone(), placeholder, baked: Vec::new(), generation: 0 }
     }
 
     pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
@@ -569,6 +589,30 @@ impl Studios {
             self.baked.remove(0);
         }
         self.baked.push((env.preset(), gpu));
+        self.generation += 1;
+    }
+
+    /// How many studios have been installed: binds of an older generation are stale.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// An appearance-graph group 3 ([`appearance_layout`]): the frame's studio (as [`Studios::bind`]
+    /// picks it), and a uniform `page`.
+    pub(crate) fn appearance_bind(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        preset: Option<StudioPreset>,
+        page: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        let env = preset.and_then(|preset| self.baked.iter().find(|(p, _)| *p == preset)).map_or(&self.placeholder, |(_, gpu)| gpu);
+        let [specular, studio_sampler, rig, diffuse, dfg] = env.resources.entries(&self.sampler, &self.dfg);
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sc_studio_material"),
+            layout,
+            entries: &[specular, studio_sampler, rig, diffuse, dfg, wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() }],
+        })
     }
 
     /// The bind group for a frame's look (the stand-in without one, or before its studio is up).

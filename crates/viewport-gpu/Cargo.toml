@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+naga = { workspace = true, features = ["wgsl-in"] }
+web-time = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 solidcore-record = { workspace = true }

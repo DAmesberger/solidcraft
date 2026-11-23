@@ -910,6 +910,7 @@ mod tests {
             assert_eq!(tris.flat, k == 0);
             let placed_at = |[x, y, z]: [f32; 3]| {
                 let mut inst = crate::view::InstancedMesh {
+                    graph: None,
                     key: 1,
                     tris: tris.clone(),
                     instances: Vec::new(),
@@ -1052,6 +1053,7 @@ mod tests {
             let (c, s) = ((-30f32).to_radians().cos(), (-30f32).to_radians().sin());
             let placed = |rows: [[f32; 4]; 3], slot: u32| {
                 let mut inst = crate::view::InstancedMesh {
+                    graph: None,
                     key: 1,
                     tris: tris.clone(),
                     instances: Vec::new(),
@@ -1100,6 +1102,7 @@ mod tests {
         let at = |x: f32| [[1.0, 0.0, 0.0, x], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
         let scene = |placements: &[([[f32; 4]; 3], u32)]| {
             let mut inst = crate::view::InstancedMesh {
+                graph: None,
                 key: 1,
                 tris: tris.clone(),
                 instances: Vec::new(),

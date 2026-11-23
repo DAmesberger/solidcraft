@@ -6584,6 +6584,7 @@ dependencies = [
  "solidcraft-color",
  "solidcraft-viewport",
  "thiserror 2.0.21",
+ "web-time",
  "wgpu",
 ]
 
