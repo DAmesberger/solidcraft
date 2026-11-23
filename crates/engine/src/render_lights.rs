@@ -470,6 +470,7 @@ pub fn write(setup: &mut RenderSetup, lights: &[Light]) -> Result<(), String> {
                         u: edge_u_mm.map(|v| v * 0.5),
                         v: edge_v_mm.map(|v| v * 0.5),
                         radiance: l.colour.map(|c| c * l.intensity),
+                        grade: 0.0,
                     })),
                     _ => None,
                 })

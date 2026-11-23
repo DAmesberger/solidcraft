@@ -201,9 +201,14 @@ fn optical_line_fixture(case: OpticalLineCase) -> (ProductScene, ImageRequest, J
     match case.endpoint {
         OpticalLineEndpoint::None => {}
         OpticalLineEndpoint::Emitter(z) => {
-            lighting.area_lights =
-                AreaLights::new(&[AreaLight { center: [0.0, 0.0, z], u: [1000.0, 0.0, 0.0], v: [0.0, 1000.0, 0.0], radiance: [2.0, 3.0, 5.0] }])
-                    .unwrap();
+            lighting.area_lights = AreaLights::new(&[AreaLight {
+                center: [0.0, 0.0, z],
+                u: [1000.0, 0.0, 0.0],
+                v: [0.0, 1000.0, 0.0],
+                radiance: [2.0, 3.0, 5.0],
+                grade: 0.0,
+            }])
+            .unwrap();
         }
         OpticalLineEndpoint::Surface(z) => {
             let mesh = solidcraft_geom::Mesh {

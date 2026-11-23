@@ -141,7 +141,7 @@ impl JsonSchema for PresentationParam {
                 "tone_map": {
                     "description": "The tone response. Default: `reinhard`.",
                     "type": "string",
-                    "enum": ["reinhard", "aces_fitted"],
+                    "enum": ["reinhard", "aces_fitted", "pbr_neutral"],
                     "default": "reinhard",
                 },
                 "finishing": {

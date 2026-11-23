@@ -1241,7 +1241,14 @@ pub(crate) fn output_child_summary(app: &SolveApp, kind: &str) -> String {
         "effects" => solidcraft_ui_text::format(
             "render.children.look_summary",
             &[
-                ("tone", if view.studio.tone_map == solidcraft_engine::render::job::ToneMap::AcesFitted { "ACES" } else { "Reinhard" }),
+                (
+                    "tone",
+                    match view.studio.tone_map {
+                        solidcraft_engine::render::job::ToneMap::AcesFitted => "ACES",
+                        solidcraft_engine::render::job::ToneMap::PbrNeutral => "PBR Neutral",
+                        solidcraft_engine::render::job::ToneMap::Reinhard => "Reinhard",
+                    },
+                ),
                 ("count", &view.studio.finishing.looks.len().to_string()),
             ],
         ),

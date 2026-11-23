@@ -4129,7 +4129,8 @@ fn clicked_setup_save_reload_and_switch_keep_gpu_numeric_intent_without_a_host()
     // beyond it must still refuse before a setup that cannot reopen is created.
     for x in [-2e9, 2e9, 1e9_f64.next_up()] {
         assert!(
-            AreaLights::new(&[AreaLight { center: [x, 0.0, 100.0], u: [2.0, 0.0, 0.0], v: [0.0, -3.0, 0.0], radiance: [3.0, 5.0, 7.0] }]).is_err()
+            AreaLights::new(&[AreaLight { center: [x, 0.0, 100.0], u: [2.0, 0.0, 0.0], v: [0.0, -3.0, 0.0], radiance: [3.0, 5.0, 7.0], grade: 0.0 }])
+                .is_err()
         );
     }
     let expected = RenderSetup {
@@ -4167,6 +4168,7 @@ fn clicked_setup_save_reload_and_switch_keep_gpu_numeric_intent_without_a_host()
                 denoise_diagnostics: false,
                 supersampling: 1,
                 lens: Some(ThinLens { aperture_radius_mm: 0.5, focus_distance_mm: 123.0 }),
+                studio: None,
                 lighting: Some(StudioLighting {
                     punctual_lights: Default::default(),
                     directional_lights: solidcraft_engine::render::job::DirectionalLights::new(&[
@@ -4189,6 +4191,7 @@ fn clicked_setup_save_reload_and_switch_keep_gpu_numeric_intent_without_a_host()
                         u: [2.0, 0.0, 0.0],
                         v: [0.0, -3.0, 0.0],
                         radiance: [3.0, 5.0, 7.0],
+                        grade: 0.0,
                     }])
                     .unwrap(),
                 }),

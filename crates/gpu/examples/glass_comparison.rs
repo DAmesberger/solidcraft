@@ -38,7 +38,7 @@ const CASES: &[&str] = &[
     "scattering_caustics",
 ];
 const ENVIRONMENT: [f64; 3] = [0.7, 0.8, 1.0];
-const LIGHT: AreaLight = AreaLight { center: [-22.0, -30.0, 28.0], u: [9.0, 0.0, 0.0], v: [0.0, 0.0, -13.0], radiance: [4.0, 4.0, 4.0] };
+const LIGHT: AreaLight = AreaLight { center: [-22.0, -30.0, 28.0], u: [9.0, 0.0, 0.0], v: [0.0, 0.0, -13.0], radiance: [4.0, 4.0, 4.0], grade: 0.0 };
 
 fn quad(mesh: &mut Mesh, vertices: [u32; 4]) {
     let [a, b, c, d] = vertices;

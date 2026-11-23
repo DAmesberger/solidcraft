@@ -37,3 +37,24 @@ pub fn builtin() -> &'static [Studio] {
 pub fn default_rig() -> Option<&'static StudioRig> {
     builtin().iter().find(|s| s.id == DEFAULT_REALISTIC)?.realistic.as_ref()
 }
+
+pub(super) fn require_rig(id: &str, command: &str) -> crate::Result<&'static StudioRig> {
+    let entry = builtin().iter().find(|s| s.id == id).ok_or_else(|| crate::params::bad(command, format!("unknown studio {id}")))?;
+    entry.realistic.as_ref().ok_or_else(|| crate::params::bad(command, format!("{id} has no lighting rig")))
+}
+
+/// A GPU job's lighting and environment for its studio `choice`, about the subject `bounds`.
+pub(super) fn job_lighting(
+    choice: &solidcraft_doc::render_job::StudioChoice,
+    bounds: solidcraft_geom::Aabb3,
+    command: &str,
+) -> crate::Result<(solidcraft_render::job::StudioLighting, std::sync::Arc<solidcraft_render::lighting::environment::EnvironmentSource>)> {
+    choice.validate().map_err(|e| crate::params::bad(command, e.to_string()))?;
+    let rig = require_rig(&choice.id, command)?;
+    if bounds.is_empty() {
+        return Err(crate::params::bad(command, "a studio needs a nonempty visible subject"));
+    }
+    let (lo, hi) = (bounds.min, bounds.max);
+    solidcraft_render::job::studio::lighting(rig, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z], choice.rotation_rad)
+        .map_err(|e| crate::params::bad(command, e.to_string()))
+}

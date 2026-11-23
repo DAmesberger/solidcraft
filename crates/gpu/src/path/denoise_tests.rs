@@ -489,7 +489,7 @@ fn gpu_denoise_optical_guides_track_branches_and_certified_snell_endpoints() {
     mirror.surface = Some(OpaqueSurface::new(Vec3::new(1.0, 1.0, 1.0), 1.0, 0.045, 1.5).unwrap());
     assert_eq!(probe(vec![mirror.clone()], options), bypass(DenoiseGuideClass::Unavailable));
     assert_eq!(probe(Vec::new(), options), bypass(DenoiseGuideClass::Background));
-    let direct_emitter = AreaLight { center: [0.0, 0.0, 2.0], u: [2.0, 0.0, 0.0], v: [0.0, 2.0, 0.0], radiance: [1.0; 3] };
+    let direct_emitter = AreaLight { center: [0.0, 0.0, 2.0], u: [2.0, 0.0, 0.0], v: [0.0, 2.0, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let direct_lighting = StudioLighting { area_lights: AreaLights::new(&[direct_emitter]).unwrap(), ..Default::default() };
     assert_eq!(probe(Vec::new(), JobOptions { lighting: Some(direct_lighting), ..options }), bypass(DenoiseGuideClass::Emitter));
     let guide = probe(vec![mirror.clone(), reflected.clone()], options);
@@ -516,7 +516,7 @@ fn gpu_denoise_optical_guides_track_branches_and_certified_snell_endpoints() {
         bypass(DenoiseGuideClass::Unavailable),
         "both weighted branches need an opaque endpoint"
     );
-    let emitter = AreaLight { center: [0.0, 2.0, 5.0], u: [2.0, 0.0, 0.0], v: [0.0, 2.0, 0.0], radiance: [1.0; 3] };
+    let emitter = AreaLight { center: [0.0, 2.0, 5.0], u: [2.0, 0.0, 0.0], v: [0.0, 2.0, 0.0], radiance: [1.0; 3], grade: 0.0 };
     let blocked = StudioLighting { area_lights: AreaLights::new(&[emitter]).unwrap(), ..Default::default() };
     assert_eq!(probe(thin_scene, JobOptions { lighting: Some(blocked), ..options }), bypass(DenoiseGuideClass::Unavailable));
     let film = GlassModel { roughness: 0.0, dispersion: None, thin_film: Some(ThinFilm { ior: 1.35, thickness_nm: 200.0 }) };

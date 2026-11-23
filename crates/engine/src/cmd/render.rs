@@ -448,6 +448,11 @@ fn patched_settings(s: &Session, name: &str, set: &Value, cmd: &str) -> Result<R
     }
     let setup: RenderSetup = serde_json::from_value(value).map_err(|e| bad(cmd, e.to_string()))?;
     setup.validate().map_err(|e| bad(cmd, e.to_string()))?;
+    if let Some(solidcraft_doc::render_settings::RenderJob::GpuPath { options, .. }) = &setup.job
+        && let Some(choice) = &options.studio
+    {
+        studios::require_rig(&choice.id, cmd)?;
+    }
     Ok(setup)
 }
 

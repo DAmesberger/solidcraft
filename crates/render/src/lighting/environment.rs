@@ -61,6 +61,8 @@ pub struct EnvironmentInfo {
 enum Source {
     Hdr(HdrSource),
     Sky(SkyGradient),
+    /// Linear radiance a renderer baked itself, in this module's equirectangular mapping.
+    Linear(Arc<Vec<[f32; 3]>>),
 }
 /// Immutable captured input. Preparation happens in the image worker, with cancellation.
 #[derive(Clone)]
@@ -130,6 +132,50 @@ impl EnvironmentSource {
         value.validate()?;
         Ok(value)
     }
+    /// A linear Rec. 709 radiance image a renderer baked, `width` × `height` texels in this
+    /// module's mapping (row 0 at +Z, column 0 at +X, azimuth counter-clockwise seen from above;
+    /// texel centres, [`Self::texel_direction`]), named `kind` (e.g. the Realistic view's studio
+    /// cyclorama). Bounded: at most 4096 × 2048 texels, each finite and within 0..1000000.
+    pub fn linear(kind: &'static str, width: u32, height: u32, pixels: Vec<[f32; 3]>, rotation_rad: f64, intensity: f64) -> Result<Self> {
+        if !(2..=4096).contains(&width) || !(1..=2048).contains(&height) || pixels.len() != width as usize * height as usize {
+            return Err(invalid("a baked environment is 2..4096 × 1..2048 texels, one value each"));
+        }
+        if pixels.iter().flatten().any(|v| !v.is_finite() || !(0.0..=1e6).contains(v)) {
+            return Err(invalid("baked environment radiance must be finite and within 0..1000000"));
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"solidcraft.baked-environment/1");
+        hash.update(kind.as_bytes());
+        hash.update(width.to_le_bytes());
+        hash.update(height.to_le_bytes());
+        for v in pixels.iter().flatten() {
+            hash.update(v.to_le_bytes());
+        }
+        let retained_bytes = (pixels.len() * std::mem::size_of::<[f32; 3]>()) as u64;
+        let value = Self {
+            source: Source::Linear(Arc::new(pixels)),
+            retained_bytes,
+            info: EnvironmentInfo {
+                kind,
+                width,
+                height,
+                encoded_bytes: 0,
+                source_sha256: format!("{:x}", hash.finalize()),
+                color_policy: "authored_linear_srgb_d65",
+                rotation_rad,
+                intensity,
+            },
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    /// The unit direction through texel (`column`, `row`)'s centre of a `width` × `height`
+    /// environment, before rotation: the mapping [`PreparedEnvironment::evaluate`] reads.
+    pub fn texel_direction(width: u32, height: u32, column: u32, row: u32) -> Vec3 {
+        let phi = TAU * (f64::from(column) + 0.5) / f64::from(width.max(1));
+        let theta = PI * (f64::from(row) + 0.5) / f64::from(height.max(1));
+        Vec3::new(theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos())
+    }
     pub fn info(&self) -> &EnvironmentInfo {
         &self.info
     }
@@ -168,6 +214,11 @@ impl EnvironmentSource {
                 };
                 let mut out = reserve(decoded.pixels().len())?;
                 out.extend_from_slice(decoded.pixels());
+                out
+            }
+            Source::Linear(pixels) => {
+                let mut out = reserve(pixels.len())?;
+                out.extend_from_slice(pixels);
                 out
             }
             Source::Sky(sky) => {
