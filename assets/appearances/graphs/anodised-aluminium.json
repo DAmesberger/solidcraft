@@ -1,0 +1,13 @@
+{
+ "name": "Anodised aluminium, blue",
+ "interface": [
+  {"name": "tint", "type": "color3", "default": [0.025, 0.18, 0.42]}
+ ],
+ "nodes": [
+  {"id": "surface", "kind": "standard_surface", "inputs": {
+   "base_color": {"interface": "tint"}, "base_metalness": 1, "specular_roughness": 0.34,
+   "coat_weight": 1, "coat_roughness": 0.24, "coat_ior": 1.6
+  }}
+ ],
+ "output": "surface"
+}
