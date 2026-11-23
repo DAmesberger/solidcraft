@@ -67,11 +67,11 @@ pub mod limits {
     pub const TEXTURES_PER_GRAPH: usize = 4;
     /// Uniform floats one look occupies (64 vec4).
     pub const UNIFORM_FLOATS: usize = 256;
-    /// Pixels per texture side a file may hold: a safety bound, not a quality cap (the largest
-    /// 2D texture any current GPU holds). Renderers choose the resident size.
-    pub const TEXTURE_SIDE: u32 = 16384;
-    /// Encoded bytes of one texture asset (the container's per-part cap).
-    pub const TEXTURE_BYTES: usize = 256 << 20;
+    /// Pixels per texture side a file may hold: a safety bound, the one the render job's texture
+    /// maps already use (`texture_input`, #813). Renderers choose the resident size.
+    pub const TEXTURE_SIDE: u32 = 2048;
+    /// Encoded bytes of one texture asset: the render job's texture-map bound (#813).
+    pub const TEXTURE_BYTES: usize = 16 << 20;
     /// Texture assets one design may hold (hostile-input bound; the starter pack's 240 maps fit).
     pub const TEXTURES_PER_DESIGN: usize = 256;
     /// Decoded bytes of all of a design's textures together, checked from the headers first.

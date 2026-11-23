@@ -183,7 +183,7 @@ bounded cost, and derivatives stay valid everywhere (§5.1).
 | Cost after expansion (§3.6) | 100,000 units (safety bound) | Not a quality limit: it stops pathological or hostile graphs that would stall the GPU until the driver resets it. Above 4,000 units a graph is only reported as heavier than typical. |
 | Texture samples after expansion | 8 | Triplanar images count three each. |
 | Distinct textures per graph | 4 | WebGL2 has 16 sampled textures per stage. |
-| Texture assets | ≤ 16384 px a side, ≤ 256 MiB encoded, ≤ 256 per design, ≤ 1 GiB decoded per design | Safety only; a renderer chooses the resident size. |
+| Texture assets | ≤ 2048 px a side, ≤ 16 MiB encoded (the render job's texture-map bounds, #813), ≤ 256 per design, ≤ 1 GiB decoded per design | Safety only; a renderer chooses the resident size. |
 | Uniform constants per graph | 256 floats (64 vec4) | With the 7-vec4 base response in front, a record is ≤ 71 vec4, so a 16 KiB uniform page holds ≥ 14 looks (§5.2). |
 
 ### 3.6 Cost model
