@@ -159,8 +159,39 @@ fn switching_the_look_uploads_nothing() {
     }
 }
 
+/// A Render preview may be the first frame on a new device. Its metal should reflect the
+/// studio exactly as it does after a Model frame has used the neutral environment.
+#[test]
+fn a_first_preview_has_the_same_metal_reflection_as_after_a_model_frame() {
+    let (_, device, queue) = match crate::open_headless(crate::test_env::policy()) {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            crate::test_env::skip_unless_required(crate::test_env::required(), &e);
+            return;
+        }
+    };
+    let env = studio(StudioPreset::product());
+    let preview = |warm: bool| {
+        let mut r = renderer(&device);
+        if warm {
+            let _ = render_frame(&mut r, &device, &queue, &modelling_frame(1.0), true);
+        }
+        r.set_studio_environment(&device, &queue, &env);
+        let scene = pbr_scene(Vec3::new(0.7, 0.7, 0.7), 1.0, 0.25, 1.5).unwrap();
+        let mut frame = test_frame(scene, 1.0);
+        frame.product = true;
+        frame.product_lights = Some(Vec::new());
+        frame.product_look = Some(ProductLook::product());
+        render_frame(&mut r, &device, &queue, &frame, true)
+    };
+    let cold = preview(false);
+    let warm = preview(true);
+    assert!(mean(&face(&warm)) > 20.0, "the studio is reflected on the metal");
+    assert!(cold == warm, "initial studio lighting is independent of a prior Model frame");
+}
+
 /// The opaque faces' entry points, which read the studio in the Realistic look, translate to
-/// WebGL2's GLSL ES 3.00 (naga's GL backend, as wgpu's on the web), the studio's cube map
+/// WebGL2's GLSL ES 3.00 (naga's GL backend, as wgpu's on the web), the studio's equirectangular maps
 /// included: Realistic exists on WebGL2 too, within its four bind groups.
 #[test]
 fn the_realistic_face_shaders_translate_for_webgl2() {
@@ -175,10 +206,18 @@ fn the_realistic_face_shaders_translate_for_webgl2() {
     for entry in ["fs_solid", "fs_solid_open", "fs_solid_flat", "fs_solid_open_flat"] {
         let pipeline = glsl::PipelineOptions { shader_stage: naga::ShaderStage::Fragment, entry_point: entry.into(), multiview: None };
         let mut out = String::new();
-        let written = glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default())
-            .and_then(|mut w| w.write().map(|_| ()));
-        assert!(written.is_ok(), "{entry}: {written:?}");
-        assert!(out.starts_with("#version 300 es") && out.contains("samplerCube"), "{entry} samples the studio's cube");
+        let written =
+            glsl::Writer::new(&mut out, &module, &info, &options, &pipeline, naga::proc::BoundsCheckPolicies::default()).and_then(|mut w| w.write());
+        let reflection = written.unwrap_or_else(|e| panic!("{entry}: {e}"));
+        assert!(out.starts_with("#version 300 es"));
+        for binding in [0, 11, 12] {
+            assert!(
+                reflection.texture_mapping.values().any(|mapping| {
+                    module.global_variables[mapping.texture].binding.as_ref().is_some_and(|b| b.group == 3 && b.binding == binding)
+                }),
+                "{entry} reads studio texture {binding}"
+            );
+        }
     }
 }
 

@@ -14,15 +14,14 @@ pub const STUDIO_GROUP: u32 = 3;
 macro_rules! shade_source {
     () => {
         r#"
-// The product look's studio (`view::ibl`, group 3): the prefiltered radiance cube (level m ≥ 1 at
-// perceptual roughness m / levels.x, level 0 at levels.z: `pbr_env_level`), its sampler, the cyclorama's irradiance polynomial over
-// (1, x, y, z, xy, yz, xz, z², x² − y²), the light count (levels.y), the room (half size, floor,
-// ceiling, in subject extents) and the rig's lights, four `vec4`s each: (centre, half width),
-// (width axis, half height), (height axis, 0), (radiance, 0). Read only while `look_on()`.
-@group(3) @binding(0) var studio_cube: texture_cube<f32>;
+// The selected studio shares the neutral room's map format and GGX table.
+// The rig uniform supplies the mip schedule, room bounds and four light rectangles.
+@group(3) @binding(0) var rig_specular: texture_2d<f32>;
 @group(3) @binding(1) var studio_smp: sampler;
-struct Studio { irradiance: array<vec4<f32>, 9>, levels: vec4<f32>, room: vec4<f32>, lights: array<vec4<f32>, 16>, };
+struct Studio { levels: vec4<f32>, room: vec4<f32>, lights: array<vec4<f32>, 16>, };
 @group(3) @binding(2) var<uniform> studio: Studio;
+@group(3) @binding(11) var rig_diffuse: texture_2d<f32>;
+@group(3) @binding(12) var rig_dfg: texture_2d<f32>;
 fn pbr_encode(c: vec3<f32>) -> vec3<f32> {
     return select(c * 12.92, 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), c > vec3<f32>(0.0031308));
 }
@@ -33,25 +32,27 @@ fn pbr_brdf(base: vec3<f32>, parameters: vec3<f32>, n: vec3<f32>, v: vec3<f32>, 
     return sc_base_brdf(base, parameters, n, v, l);
 }
 
-fn pbr_poly(c0: vec4<f32>, c1: vec4<f32>, c2: vec4<f32>, r: f32, t: vec4<f32>) -> f32 {
-    return dot(c0, t) + r * (dot(c1, t) + r * dot(c2, t));
+// World Z-up to the shared maps' Y-up frame.
+fn pbr_studio_uv(d: vec3<f32>) -> vec2<f32> {
+    let n = sc_unit(d);
+    // At a pole longitude is arbitrary. On the X meridian, the second argument
+    // of atan2 is zero and fast GPU math can select the opposite longitude.
+    if (n.y == 0.0) {
+        return vec2<f32>(0.5 + 0.25 * sign(n.x), acos(clamp(n.z, -1.0, 1.0)) / 3.141592653589793);
+    }
+    return studio_uv(vec3<f32>(n.x, n.z, -n.y));
 }
 
-// The split-sum scale and bias (x: A, y: B; albedo F0·A + F90·B) of `sc_base_brdf` in a uniform
-// environment: the viewport's own polynomial fit (`ibl::ENV_BRDF_A`, `ibl::ENV_BRDF_B`).
-fn pbr_env_brdf(cosine: f32, r: f32) -> vec2<f32> {
-    let nv = clamp(cosine, 0.0001, 1.0);
-    let a2 = (r * r) * (r * r);
-    let q = 1.0 - 2.0 * nv / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
-    let s = 1.0 - nv;
-    let t = vec4<f32>(1.0, s, s * s, s * s * s);
-    let a = pbr_poly(vec4<f32>(1.00560, -0.56397, 2.50123, -2.93657), vec4<f32>(0.32333, -0.09745, -2.44274, 2.89048), vec4<f32>(-1.07421, 4.87385, -9.53132, 5.20517), r, t)
-        + q * pbr_poly(vec4<f32>(-27.45309, 62.21089, -24.05595, -10.77288), vec4<f32>(10.98918, 41.63909, -157.76627, 106.99327), vec4<f32>(9.57360, -85.17991, 167.93185, -93.69565), r, t);
-    let b = pbr_poly(vec4<f32>(-0.02603, 0.65203, -2.71929, 3.09764), vec4<f32>(0.09148, -3.19509, 11.52730, -9.30966), vec4<f32>(-0.07161, 5.26964, -16.16043, 8.05334), r, t)
-        + q * pbr_poly(vec4<f32>(-30.15892, 134.44678, -183.67455, 78.98073), vec4<f32>(44.85160, -207.80167, 299.57468, -136.87570), vec4<f32>(-20.09456, 90.78933, -127.08962, 59.86296), r, t);
-    let ab = clamp(vec2<f32>(a, b), vec2<f32>(0.0), vec2<f32>(1.0));
-    // A surface reflects no more than it receives: the fit's albedo stays at or below one.
-    return ab / max(ab.x + ab.y, 1.0);
+fn pbr_studio_radiance(d: vec3<f32>, level: f32) -> vec3<f32> {
+    return textureSampleLevel(rig_specular, studio_smp, pbr_studio_uv(d), level).rgb;
+}
+
+fn pbr_dfg(cosine: f32, roughness: f32) -> vec2<f32> {
+    let half_texel = 0.5 / vec2<f32>(textureDimensions(rig_dfg));
+    let uv = clamp(vec2<f32>(cosine, roughness), half_texel, 1.0 - half_texel);
+    let ab = textureSampleLevel(rig_dfg, studio_smp, uv, 0.0).rg;
+    // Finite quadrature can put a lossless lobe just above unit reflectance.
+    return ab / max(1.0, ab.x + ab.y);
 }
 
 // Where to look in a studio turned by `rotation` about +Z.
@@ -62,10 +63,7 @@ fn pbr_turn(d: vec3<f32>, rotation: f32) -> vec3<f32> {
 }
 
 fn pbr_irradiance(n: vec3<f32>) -> vec3<f32> {
-    let k = studio.irradiance;
-    let e = k[0].xyz + k[1].xyz * n.x + k[2].xyz * n.y + k[3].xyz * n.z + k[4].xyz * (n.x * n.y) + k[5].xyz * (n.y * n.z)
-        + k[6].xyz * (n.x * n.z) + k[7].xyz * (n.z * n.z) + k[8].xyz * (n.x * n.x - n.y * n.y);
-    return max(e, vec3<f32>(0.0));
+    return 3.141592653589793 * textureSampleLevel(rig_diffuse, studio_smp, pbr_studio_uv(n), 0.0).rgb;
 }
 
 // Whether the frame places the studio around the scene (`ibl::StudioRoom`).
@@ -167,7 +165,7 @@ const PBR_STRETCH_SCALE: f32 = 1.28;
 // therefore that much wider than its minor axis, though still sharper than the isotropic one.
 const PBR_STRETCH_FLOOR: f32 = 0.36;
 
-// The prefiltered level to read for perceptual `roughness` (`ibl::roughness_level`): level m ≥ 1
+// The prefiltered level to read for perceptual `roughness`: level m ≥ 1
 // holds m / levels.x, level 0 holds levels.z (a lobe about one of its texels wide), and a
 // smoother lobe reads level 0 alone.
 fn pbr_env_level(roughness: f32) -> f32 {
@@ -194,7 +192,7 @@ fn pbr_stretched_studio(lookup: vec3<f32>, tangent: vec3<f32>, roughness: f32, a
     let d = sc_unit(lookup);
     let side = tangent - d * dot(tangent, d);
     if (dot(side, side) < 0.000001) {
-        return textureSampleLevel(studio_cube, studio_smp, d, pbr_env_level(roughness)).rgb;
+        return pbr_studio_radiance(d, pbr_env_level(roughness));
     }
     let across = sc_unit(side);
     let alpha = sc_aniso_alpha(roughness, anisotropy);
@@ -207,7 +205,7 @@ fn pbr_stretched_studio(lookup: vec3<f32>, tangent: vec3<f32>, roughness: f32, a
         let o = (f32(k) - 2.0) * 0.75;
         let w = exp(-0.5 * o * o);
         let a = clamp(o * spread, -1.5, 1.5);
-        sum += w * textureSampleLevel(studio_cube, studio_smp, d * cos(a) + across * sin(a), level).rgb;
+        sum += w * pbr_studio_radiance(d * cos(a) + across * sin(a), level);
         total += w;
     }
     return sum / total;
@@ -215,7 +213,7 @@ fn pbr_stretched_studio(lookup: vec3<f32>, tangent: vec3<f32>, roughness: f32, a
 
 // The studio's light reflected toward `v`, in parts: the base's specular, the coat's specular
 // and the diffuse layer. Split-sum specular with multiple-scattering compensation; diffuse from
-// the irradiance polynomial weighted by what the specular lobe leaves; a coat reflects its own
+// the irradiance map weighted by what the specular lobe leaves; a coat reflects its own
 // single-scattering albedo w·(F0·A + B) at its roughness and passes the rest to the base
 // (`ibl::reference::shade` on the CPU).
 struct PbrIbl { specular: vec3<f32>, coat: vec3<f32>, diffuse: vec3<f32>, };
@@ -276,7 +274,7 @@ fn pbr_bent(r: vec3<f32>, n: vec3<f32>, v: vec3<f32>) -> bool {
     return any(r != 2.0 * max(dot(n, v), 0.0001) * n - v);
 }
 
-// The studio's parts given where the reflection looks in the cube (`lookup`, studio frame), the
+// The studio's parts given where the reflection looks in the studio (`lookup`, studio frame), the
 // diffuse irradiance and the reflection's floor contact.
 fn pbr_studio_parts(base: vec3<f32>, parameters: vec3<f32>, coat: vec3<f32>, n: vec3<f32>, v: vec3<f32>, lookup: vec3<f32>, irradiance: vec3<f32>, contact: f32) -> PbrIbl {
     return pbr_studio_layers(base, parameters, vec4<f32>(1.0), coat, vec3<f32>(1.0), n, n, v, lookup, lookup, irradiance, contact, contact, vec4<f32>(0.0));
@@ -294,7 +292,7 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, co
     let ratio = (parameters.z - 1.0) / (parameters.z + 1.0);
     let f0 = mix(vec3<f32>(ratio * ratio), base, metallic);
     let f90 = select(1.0, metallic, parameters.z == 1.0);
-    let ab = pbr_env_brdf(nv, roughness);
+    let ab = pbr_dfg(nv, roughness);
     var single = f0 * ab.x + vec3<f32>(f90 * ab.y);
     var compensation = vec3<f32>(1.0) + f0 * (1.0 / max(ab.x + ab.y, 0.0001) - 1.0);
     // A specular tint off its default (`sc_specular_f0`, `sc_specular_f90`).
@@ -307,7 +305,7 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, co
     if (stretch.w > 0.0) {
         prefiltered = pbr_stretched_studio(lookup, stretch.xyz, roughness, stretch.w) * contact;
     } else {
-        prefiltered = textureSampleLevel(studio_cube, studio_smp, lookup, pbr_env_level(roughness)).rgb * contact;
+        prefiltered = pbr_studio_radiance(lookup, pbr_env_level(roughness)) * contact;
     }
     // The diffuse layer takes what the specular lobe does not reflect, so a white lossless
     // surface reflects exactly what it receives.
@@ -317,9 +315,9 @@ fn pbr_studio_layers(base: vec3<f32>, parameters: vec3<f32>, tint: vec4<f32>, co
     if (coat.x > 0.0 && coat.z != 1.0) {
         let cv = max(dot(coat_n, v), 0.0001);
         let coat_ratio = (coat.z - 1.0) / (coat.z + 1.0);
-        let cab = pbr_env_brdf(cv, coat.y);
+        let cab = pbr_dfg(cv, coat.y);
         let albedo = coat.x * (coat_ratio * coat_ratio * cab.x + cab.y);
-        let seen = textureSampleLevel(studio_cube, studio_smp, coat_lookup, pbr_env_level(coat.y)).rgb * coat_contact;
+        let seen = pbr_studio_radiance(coat_lookup, pbr_env_level(coat.y)) * coat_contact;
         out = PbrIbl(out.specular * (1.0 - albedo), seen * albedo, out.diffuse * (1.0 - albedo));
     }
     if (coat.x > 0.0 && any(coat_color != vec3<f32>(1.0))) {
@@ -338,7 +336,7 @@ fn pbr_ibl(base: vec3<f32>, parameters: vec3<f32>, n: vec3<f32>, v: vec3<f32>, r
 fn pbr_coat_keep(coat: vec3<f32>, cosine: f32) -> f32 {
     if (coat.x <= 0.0 || coat.z == 1.0) { return 1.0; }
     let ratio = (coat.z - 1.0) / (coat.z + 1.0);
-    let ab = pbr_env_brdf(max(cosine, 0.0001), coat.y);
+    let ab = pbr_dfg(max(cosine, 0.0001), coat.y);
     return 1.0 - coat.x * (ratio * ratio * ab.x + ab.y);
 }
 

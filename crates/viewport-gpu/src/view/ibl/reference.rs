@@ -3,55 +3,50 @@
 
 use std::f64::consts::PI;
 
-use super::{Rgb, StudioEnvironment, dot, env_brdf, sample};
+use super::{BaseLevel, Radiance, Rgb, StudioBake, StudioEnvironment, StudioPreset, dot, mix, unit};
+use crate::environment::{DFG_SAMPLES, DFG_SIZE, SPECULAR_LEVELS, dfg_at};
 
-/// The split-sum scale and bias (A, B) of the viewport's BRDF (GGX, separable Smith, Schlick
-/// Fresnel; `sc_base_brdf`) at `nv` and perceptual roughness `r`, by GGX importance sampling with
-/// `n` stratified samples: the white-furnace albedo is F0·A + F90·B.
-pub(crate) fn dfg(nv: f64, r: f64, n: u32) -> (f64, f64) {
-    let a2 = r.powi(4);
-    let v = [(1.0 - nv * nv).max(0.0).sqrt(), 0.0, nv];
-    let g1 = |c: f64| 2.0 * c / (c + (a2 + (1.0 - a2) * c * c).sqrt());
-    let (mut sa, mut sb) = (0.0, 0.0);
-    for i in 0..n {
-        let (u1, u2) = super::hammersley(i, n);
-        let phi = 2.0 * PI * u2;
-        let ct = ((1.0 - u1) / (1.0 + (a2 - 1.0) * u1)).sqrt();
-        let st = (1.0 - ct * ct).max(0.0).sqrt();
-        let h = [st * phi.cos(), st * phi.sin(), ct];
-        let vh = dot(v, h);
-        let l = [2.0 * vh * h[0] - v[0], 2.0 * vh * h[1] - v[1], 2.0 * vh * h[2] - v[2]];
-        if l[2] <= 0.0 || vh <= 0.0 {
-            continue;
-        }
-        let w = g1(nv) * g1(l[2]) * vh / (nv * ct);
-        let fc = (1.0 - vh).powi(5);
-        sa += w * (1.0 - fc);
-        sb += w * fc;
-    }
-    (sa / f64::from(n), sb / f64::from(n))
+/// Evaluate the same four entries the shader interpolates in the shared BRDF lookup table.
+pub(super) fn brdf(nv: f64, r: f64) -> [f64; 2] {
+    let size = DFG_SIZE as f64;
+    let texel = |t: f64| (t * size - 0.5).clamp(0.0, size - 1.0);
+    let (x, y) = (texel(nv), texel(r));
+    let at = |x: f64, y: f64| {
+        let uv = |t: f64| ((t.min(size - 1.0) + 0.5) / size) as f32;
+        dfg_at(uv(x), uv(y), DFG_SAMPLES).map(f64::from)
+    };
+    let (x0, y0) = (x.floor(), y.floor());
+    let [a, b, c, d] = [at(x0, y0), at(x0 + 1.0, y0), at(x0, y0 + 1.0), at(x0 + 1.0, y0 + 1.0)];
+    let (u, v) = (x.fract(), y.fract());
+    let ab: [f64; 2] = std::array::from_fn(|i| (1.0 - v) * (a[i] * (1.0 - u) + b[i] * u) + v * (c[i] * (1.0 - u) + d[i] * u));
+    ab.map(|c| c / (ab[0] + ab[1]).max(1.0))
 }
 
 impl StudioEnvironment {
-    /// The baked irradiance at unit normal `n` (unrotated).
+    /// Physical irradiance. The shared map stores irradiance divided by π.
     pub(crate) fn irradiance_at(&self, n: Rgb) -> Rgb {
-        let [x, y, z] = n;
-        let p = [1.0, x, y, z, x * y, y * z, x * z, z * z, x * x - y * y];
-        let mut e = [0.0; 3];
-        for (term, pi) in self.irradiance.iter().zip(p) {
-            super::add(&mut e, *term, pi);
-        }
-        e
+        self.diffuse.sample_world(unit(n).map(|c| c as f32)).map(|v| f64::from(v) * PI)
     }
 
-    /// The prefiltered radiance along `d` at level `lod`.
     pub(crate) fn prefiltered(&self, d: Rgb, lod: f64) -> Rgb {
-        sample(&self.levels, super::unit(d), lod)
+        let top = self.levels.len() - 1;
+        let lod = lod.clamp(0.0, top as f64);
+        let d = unit(d).map(|c| c as f32);
+        let sample = |level: usize| self.levels[level.min(top)].sample_world(d).map(f64::from);
+        mix(sample(lod.floor() as usize), sample(lod.ceil() as usize), lod.fract())
     }
 
-    /// A studio of constant radiance `c` everywhere (the white furnace).
+    pub(super) fn level_at(&self, roughness: f64) -> f64 {
+        let top = f64::from(SPECULAR_LEVELS - 1);
+        let base = f64::from(self.base.roughness());
+        if roughness >= 1.0 / top { roughness * top } else { ((roughness - base) / (1.0 / top - base)).max(0.0) }
+    }
+
+    /// A studio of constant radiance in every direction.
     pub(crate) fn furnace(c: f64) -> Self {
-        Self::constant(c)
+        let mut bake = StudioBake::with_base(StudioPreset::NONE, BaseLevel::Preblurred);
+        bake.radiance = Radiance::Constant(c);
+        bake.bake()
     }
 
     /// The studio's own (unbaked) radiance along `d`, at its calibrated scale.
@@ -72,18 +67,13 @@ impl StudioEnvironment {
     /// Mean radiance of a level over the sphere (solid-angle weighted).
     pub(crate) fn level_mean(&self, level: usize) -> Rgb {
         let Some(l) = self.levels.get(level) else { return [0.0; 3] };
-        let n = l.size as f64;
+        let height = l.height() as f64;
         let (mut sum, mut total) = ([0.0; 3], 0.0);
-        for face in 0..6 {
-            for y in 0..l.size {
-                for x in 0..l.size {
-                    let s = 2.0 * (x as f64 + 0.5) / n - 1.0;
-                    let t = 2.0 * (y as f64 + 0.5) / n - 1.0;
-                    let w = 1.0 / (1.0 + s * s + t * t).powf(1.5);
-                    let c = l.texel(face, x, y);
-                    super::add(&mut sum, c, w);
-                    total += w;
-                }
+        for (y, row) in l.rgb.chunks_exact(l.width).enumerate() {
+            let weight = ((y as f64 + 0.5) / height * PI).sin();
+            for pixel in row {
+                super::add(&mut sum, pixel.map(f64::from), weight);
+                total += weight;
             }
         }
         sum.map(|v| v / total)
@@ -123,12 +113,10 @@ pub(crate) fn shade_parts(
     let ratio = (ior - 1.0) / (ior + 1.0);
     let f0: Rgb = std::array::from_fn(|k| ratio * ratio + (base[k] - ratio * ratio) * metallic);
     let f90 = if ior == 1.0 { metallic } else { 1.0 };
-    let (a, b) = env_brdf(nv as f32, roughness as f32);
-    let (a, b) = (f64::from(a), f64::from(b));
+    let [a, b] = brdf(nv, roughness);
     let ess = (a + b).max(1e-4);
     let r = [2.0 * nv * n[0] - v[0], 2.0 * nv * n[1] - v[1], 2.0 * nv * n[2] - v[2]];
-    let top = env.level_count().saturating_sub(1) as f64;
-    let prefiltered = env.prefiltered(unturn(r, rotation), super::roughness_level(roughness, top));
+    let prefiltered = env.prefiltered(unturn(r, rotation), env.level_at(roughness));
     let irradiance = env.irradiance_at(unturn(n, rotation)).map(|e| e.max(0.0));
     let mut specular = [0.0; 3];
     let mut diffuse = [0.0; 3];
@@ -142,8 +130,8 @@ pub(crate) fn shade_parts(
         return [specular, [0.0; 3], diffuse];
     }
     let coat_ratio = (coat_ior - 1.0) / (coat_ior + 1.0);
-    let (ca, cb) = env_brdf(nv as f32, coat_roughness as f32);
-    let albedo = weight * (coat_ratio * coat_ratio * f64::from(ca) + f64::from(cb));
-    let seen = env.prefiltered(unturn(r, rotation), super::roughness_level(coat_roughness, top));
+    let [ca, cb] = brdf(nv, coat_roughness);
+    let albedo = weight * (coat_ratio * coat_ratio * ca + cb);
+    let seen = env.prefiltered(unturn(r, rotation), env.level_at(coat_roughness));
     [specular.map(|s| s * (1.0 - albedo)), seen.map(|c| c * albedo), diffuse.map(|d| d * (1.0 - albedo))]
 }

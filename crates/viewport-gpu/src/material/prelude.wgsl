@@ -1,8 +1,7 @@
 // The raster back end's part of every generated shape module (crates/viewport-gpu/src/material/mod.rs):
 // the material page, the base-response reader and the fragment entry. The context, the surface
-// and the helpers generated code calls are the shared library's (`sc_GraphCtx`, `sc_Surface`). Group 3 is "studio + material" (`ibl::material_layout`): the studio's cube,
-// sampler and uniform (bindings 0–2), the uniform page (3), the material textures (4–7) and their
-// samplers by wrap mode (8–10).
+// and the helpers generated code calls are the shared library's. Group 3 binds the studio's
+// environment and rig (0–2, 11–12), the page (3), four images (4–7) and their samplers (8–10).
 
 // One uniform page: 16 KiB, WebGL2's uniform-block limit. A material's record starts at the
 // vec4 its vertices carry: the base response (`codegen::BASE_VEC4` vec4s), then its slots.

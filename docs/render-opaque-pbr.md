@@ -271,19 +271,19 @@ With the look, the PBR shader:
 - reflects it with box-projected split-sum specular: the reflected ray is intersected with
   the room before the lookup (one ray-box test, WebGL2-safe), so a flat face sweeps across
   the studio and shows a gradient instead of one colour. Where a reflection meets the floor
-  under the subject it is darkened like the ground shadow's ellipse. The cube is a
-  prefiltered Rgba16Float cube map, 128 × 128 texels a face at perceptual roughness 0 and
-  five more levels: level 1 at roughness 0.1 (a lobe about one of its texels wide), then evenly
-  to 1. A roughness reads between the two levels around it (`pbr_env_level`), so a glossy coat
-  (0.12) is not 40 % the unfiltered mirror, as `roughness × 5` made it. Times an analytic
-  environment-BRDF fit, with single-to-multiple-scattering compensation
+  under the subject it is darkened like the ground shadow's ellipse. A 256 × 128
+  equirectangular map holds the reflections at six roughness levels. The neutral room
+  starts with a mirror. The Realistic studio starts with a GGX lobe at roughness 0.1
+  to soften the reflections on finely textured coats. The other five levels have
+  roughness 0.2 through 1.0 in steps of 0.2. A coat at 0.12 samples 80% of the
+  first level and 20% of the second. The shared GGX lookup supplies the scale A and
+  bias B for specular reflection with multiple-scattering compensation
   `1 + F0 (1 / (A + B) − 1)`;
 - lights the diffuse layer from the rig's lights directly (each rectangle's exact,
-  horizon-clipped polygon irradiance at the shaded point, from its emitting side) plus nine
-  spherical-harmonic irradiance terms of the cyclorama, weighted by what the specular lobe
-  does not reflect, so a white lossless surface reflects exactly the light it receives.
-  Each light has one energy owner per lobe: reflections read it from the cube, diffuse
-  shading from the direct term, so nothing is counted twice;
+  horizon-clipped polygon irradiance at the shaded point, from its emitting side)
+  and a 32 × 16 irradiance map of the cyclorama. The map contains only ambient light,
+  so each rectangle illuminates the diffuse surface once. The diffuse weight uses the
+  fraction of light the specular lobe transmits;
 - scales the radiance by `exposure`, tone maps it with Khronos PBR Neutral instead of
   per-channel Reinhard, encodes it once and adds a ±1 LSB triangular dither (two
   interleaved-gradient noise values) before the 8-bit store. For an sRGB attachment
@@ -297,33 +297,16 @@ are lit by the frame's product lights alone, through the same exposure, PBR Neut
 dither. A look frame with no product lights therefore draws non-PBR faces black; a client
 that wants them lit gives them PBR surfaces or product lights.
 
-The studio is baked on the CPU, so it also works on WebGL2 (no compute shaders): 2 × 2
-radiance samples per texel of the sharpest level, a box pyramid of it, and 64 GGX
-samples per texel of each rougher level with filtered importance sampling; the
-irradiance terms are projected from the 32 × 32 level. A bake takes about 75–110 ms in
-an optimised build on an Apple M-series laptop (measured, three presets) and about
-1 MB of texels. The renderer never bakes (that would stall the window thread): until a
-client installs a preset's studio with `Renderer::set_studio_environment`, the look
-draws without it (a stand-in black cube). `StudioEnvironment::bake(preset)` is plain
-CPU work for another thread; where there are no threads (the web), `StudioBake` bakes
-in bounded steps, a frame's share at a time: `StudioBake::FRAME_WORK` is 152 steps a
-studio, each at most 1.8 ms in an optimised native build (measured, three presets),
-with the same result as the whole bake. The PBR pipelines gain bind group 3 (the cube,
-its sampler and the irradiance uniform); the stand-in is bound without a look. Groups 1
-and 2 of their layout are the solid pipelines' (accessibility, occlusion). Group 3 is
-the last group WebGL2's limit of four allows.
+The neutral room and selected studio use one CPU baker on desktop and WebGL2. It
+samples four directions per source texel, builds successively smaller source images,
+and integrates 128 GGX samples per filtered output texel. A 128 × 128 table stores the
+split-sum BRDF evaluated at texel centres with 1024 samples. Both studios read the
+same GPU texture for that table.
 
-The environment-BRDF fit is SolidCraft's own: polynomials in perceptual roughness and
-`1 − n·v` plus a Smith-masking term, least-squares fitted to the split-sum scale and bias
-integrated numerically from the viewport's own GGX/separable-Smith/Schlick BRDF. Its
-largest error over n·v in [0.02, 1] and roughness in [0.045, 1] is 0.046 (scale) and
-0.023 (bias); RMS 0.006 and 0.004. The sum is kept at or below one.
-
-Mathematics only, from public sources: split-sum prefiltering (Karis 2013, *Real Shading
-in Unreal Engine 4*), filtered importance sampling (Křivánek and Colbert 2008, *GPU Gems
-3*, ch. 20), nine-term irradiance (Ramamoorthi and Hanrahan 2001), multiple-scattering
-compensation (Fdez-Agüera 2019; Filament documentation). The PBR Neutral curve is
-adapted from the Khronos Group's reference (Apache-2.0; ATTRIBUTION.md).
+A native worker can bake a selected rig with `StudioEnvironment::bake`. On the web,
+`StudioBake::step` splits every stage into whole rows. The renderer uses empty maps
+while it waits for the finished rig. Its last WebGL2 bind group (group 3) holds the
+studio textures, sampler and light rectangles alongside any appearance graph inputs.
 
 The look also draws things the default preview leaves out:
 
@@ -359,15 +342,15 @@ Procedural patterns (a glass weave, orange peel, ink grain) are no longer fixed 
 the renderer: they become pattern nodes of [appearance graphs](appearance-graph.md) (§3.3).
 
 Still out of reach with the look: cast shadows, image textures,
-true subsurface or absorption in a coat, crisp rectangular highlights (the cube's
+true subsurface or absorption in a coat, crisp rectangular highlights (the map's
 resolution limits the sharpest reflections), and any parity with the CPU hosts, which keep
 the fixed studio and draw no coat in the viewport sense above.
 
-Tests (`crates/gpu/src/view/ibl/tests.rs`, `view.rs`): white furnace (every level,
+Tests (`crates/viewport-gpu/src/view/ibl/tests.rs`, `view.rs`): white furnace (every level,
 irradiance π, white metal, white diffuse and white dielectric reflect 1 at every
 roughness and angle), energy conservation of each prefiltered level (mean within 5 %),
-irradiance against a direct cosine integral, the fit against the numerical split sum
-and the shader's coefficients against the fit, the actual WGSL environment term and cube
+irradiance against a direct cosine integral, the shared BRDF table against numerical
+integration, the actual WGSL environment term and equirectangular
 lookups on a native GPU against the CPU reference, the tone curve, the dither's
 distribution, the look's sanitising, its uniform, the frame key, a stepped bake against
 the whole bake, and GPU frames
@@ -382,7 +365,7 @@ surface draws uncoated and an occlusion radius changes no pixel, while with it a
 darkens the floor beside it only in the studio's light. The derivatives guard scans
 `pbr::SOURCE` and also stops at unparenthesised branches, loops and `continue`. The PBR
 entry points (`vs_pbr`, `fs_pbr` and the prepass's) translate to WebGL2's GLSL ES 3.00
-through naga's GL backend, with the studio's cube; the GPU frames themselves run on a
+through naga's GL backend, with the studio's maps; the GPU frames themselves run on a
 native adapter only (Metal here), and no browser has drawn a look frame yet. In
 `solidcraft-ui-egui`, a GPU test checks that the paint callback bakes the studio off the
 window thread and installs it on a later frame.

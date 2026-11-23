@@ -1,74 +1,17 @@
-//! The opt-in *product look* of the real-time PBR preview (`pbr::SOURCE`): a studio built from one
-//! of upstream's starter lighting rigs ([`rig`]: graded area lights in a finite room sized to the
-//! scene, over a cyclorama) baked on the CPU into a small prefiltered cube map, with nine
-//! spherical-harmonic irradiance terms of the cyclorama and the rig's lights as direct lights;
-//! box-projected split-sum specular with an analytic environment-BRDF fit and multiple-scattering
-//! compensation, a calibrated exposure per studio, Khronos PBR Neutral tone mapping and a ±1 LSB
-//! triangular dither.
-//!
-//! Nothing changes unless a frame names a [`ProductLook`] (`Frame::product_look`): the fixed
-//! studio and the per-channel Reinhard preview stay the default (docs/render-opaque-pbr.md). The
-//! bake needs no compute shaders, so it runs on WebGL2 too; it never runs inside the renderer
-//! ([`StudioBake`]).
-//!
-//! Sources (mathematics only; no code or data copied): split-sum prefiltering (Karis 2013, "Real
-//! Shading in Unreal Engine 4"), filtered importance sampling (Křivánek and Colbert 2008, GPU Gems
-//! 3 ch. 20), irradiance from nine spherical-harmonic terms (Ramamoorthi and Hanrahan 2001),
-//! single-to-multiple scattering compensation (Fdez-Agüera 2019; Filament documentation). The
-//! environment-BRDF polynomial is the viewport's own least-squares fit to the numerically integrated
-//! split-sum terms of the viewport's own BRDF ([`env_brdf`] and its test).
+//! The studio lighting for Realistic views. The selected rig supplies world-space radiance to
+//! the shared environment baker. Its area lights are reflected in the specular levels and light
+//! diffuse surfaces directly. The ambient map contains the cyclorama alone.
 
-use std::f64::consts::PI;
 use std::sync::Arc;
 
 use solidcraft_viewport::studio::{self as rig, Room, StudioLight, StudioRig};
 
 use wgpu::util::DeviceExt;
 
-/// Side of the prefiltered cube map's sharpest level, in texels.
-pub(crate) const ENV_SIZE: u32 = 128;
-/// Levels of the prefiltered cube map: level `m` holds perceptual roughness [`level_roughness`]`(m)`.
-pub(crate) const ENV_MIPS: u32 = 6;
-/// The perceptual roughness level 0 holds: a GGX lobe about one of its texels wide (128 a face),
-/// so it shows the studio as sharply as the level can. Level 0 was the unfiltered studio, and a
-/// glossy coat (roughness 0.12, between levels 0 and 1 at 0.2) read 40 % of that mirror: its sharp
-/// edges, which a slight orange peel then dragged into ragged blotches. A lobe this narrow or
-/// narrower reads level 0 alone.
-pub(crate) const LEVEL_ZERO_ROUGHNESS: f64 = 0.1;
+use crate::environment::{self, BaseLevel, Environment, Equirect, MapBake};
 
-/// The perceptual roughness prefiltered level `m` holds: [`LEVEL_ZERO_ROUGHNESS`] at level 0, then
-/// `m / (ENV_MIPS − 1)` up to 1 at the top level.
-pub(crate) fn level_roughness(m: usize) -> f64 {
-    match m {
-        0 => LEVEL_ZERO_ROUGHNESS,
-        m => m as f64 / f64::from(ENV_MIPS - 1),
-    }
-}
-
-/// The (fractional) level to read for perceptual `roughness` on a map whose top level is `top`:
-/// the inverse of [`level_roughness`] between levels, level 0 below its own roughness
-/// (`pbr_env_level` in the shader; this copy is the CPU reference's).
-#[cfg(test)]
-pub(crate) fn roughness_level(roughness: f64, top: f64) -> f64 {
-    let r = roughness.clamp(0.0, 1.0);
-    if top < 1.0 {
-        return 0.0;
-    }
-    let one = 1.0 / top;
-    if r >= one {
-        return r * top;
-    }
-    ((r - LEVEL_ZERO_ROUGHNESS) / (one - LEVEL_ZERO_ROUGHNESS)).max(0.0)
-}
-/// GGX samples per texel of each rough level (filtered importance sampling keeps them smooth).
-const SPECULAR_SAMPLES: u32 = 64;
-/// The irradiance terms are projected from the cyclorama at this level's size (32 × 32 texels a
-/// face).
-const SH_LEVEL: usize = 2;
-/// The environment uniform: nine irradiance terms, (largest level, light count, level 0's
-/// roughness, 0), the room
-/// (half size, floor, ceiling, 0) and four lights of four `vec4`s ([`StudioEnvironment::uniform_bytes`]).
-const ENV_UNIFORM_SIZE: u64 = (11 + 4 * rig::MAX_LIGHTS as u64) * 16;
+/// Two room parameters followed by four vectors per light.
+const ENV_UNIFORM_SIZE: u64 = (2 + 4 * rig::MAX_LIGHTS as u64) * 16;
 
 /// A studio the product look lights with: a handle to a studio's rig (`solidcraft_viewport::studio`,
 /// an entry of the app's studio library, data the user can manage), registered with
@@ -263,26 +206,26 @@ impl ProductLook {
 
 type Rgb = [f64; 3];
 
+#[cfg(test)]
 fn dot(a: Rgb, b: Rgb) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn cross(a: Rgb, b: Rgb) -> Rgb {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-
+#[cfg(test)]
 fn unit(a: Rgb) -> Rgb {
     let l = dot(a, a).sqrt();
     if l > 0.0 { [a[0] / l, a[1] / l, a[2] / l] } else { [0.0, 0.0, 1.0] }
 }
 
 /// `acc += c × w`.
+#[cfg(test)]
 fn add(acc: &mut Rgb, c: Rgb, w: f64) {
     for (a, c) in acc.iter_mut().zip(c) {
         *a += c * w;
     }
 }
 
+#[cfg(test)]
 fn mix(a: Rgb, b: Rgb, t: f64) -> Rgb {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
@@ -291,114 +234,15 @@ fn studio(preset: StudioPreset) -> Option<Arc<StudioRig>> {
     preset.rig()
 }
 
-/// The unit direction through cube face `face` (+X, −X, +Y, −Y, +Z, −Z) at face coordinates
-/// `s`, `t` in [−1, 1] (`t` down the rows): the cube-map convention every wgpu backend samples.
-fn face_direction(face: usize, s: f64, t: f64) -> Rgb {
-    unit(match face {
-        0 => [1.0, -t, -s],
-        1 => [-1.0, -t, s],
-        2 => [s, 1.0, t],
-        3 => [s, -1.0, -t],
-        4 => [s, -t, 1.0],
-        _ => [-s, -t, -1.0],
-    })
-}
-
-/// The face and face coordinates (`s`, `t` in [−1, 1]) a direction meets.
-fn direction_face(d: Rgb) -> (usize, f64, f64) {
-    let [x, y, z] = d;
-    let (ax, ay, az) = (x.abs(), y.abs(), z.abs());
-    let (face, sc, tc, ma) = if ax >= ay && ax >= az {
-        if x >= 0.0 { (0, -z, -y, ax) } else { (1, z, -y, ax) }
-    } else if ay >= az {
-        if y >= 0.0 { (2, x, z, ay) } else { (3, x, -z, ay) }
-    } else if z >= 0.0 {
-        (4, x, -y, az)
-    } else {
-        (5, -x, -y, az)
-    };
-    let ma = ma.max(1e-12);
-    (face, (sc / ma).clamp(-1.0, 1.0), (tc / ma).clamp(-1.0, 1.0))
-}
-
-/// One cube level: six faces of `size` × `size` linear RGB texels, rows from the top.
-#[derive(Clone)]
-struct Level {
-    size: usize,
-    texels: Vec<[f32; 3]>,
-}
-
-impl Level {
-    fn texel(&self, face: usize, x: usize, y: usize) -> Rgb {
-        let i = (face * self.size + y.min(self.size - 1)) * self.size + x.min(self.size - 1);
-        self.texels.get(i).map_or([0.0; 3], |c| c.map(f64::from))
-    }
-
-    /// Bilinear within the face the direction meets (clamped at its edges).
-    fn bilinear(&self, d: Rgb) -> Rgb {
-        let (face, s, t) = direction_face(d);
-        let n = self.size as f64;
-        let x = ((s + 1.0) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
-        let y = ((t + 1.0) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
-        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-        let (fx, fy) = (x - x0 as f64, y - y0 as f64);
-        let a = mix(self.texel(face, x0, y0), self.texel(face, x0 + 1, y0), fx);
-        let b = mix(self.texel(face, x0, y0 + 1), self.texel(face, x0 + 1, y0 + 1), fx);
-        mix(a, b, fy)
-    }
-
-    /// The next level down: each texel the mean of the 2 × 2 under it.
-    fn halved(&self) -> Level {
-        let size = (self.size / 2).max(1);
-        let mut texels = Vec::with_capacity(6 * size * size);
-        for face in 0..6 {
-            for y in 0..size {
-                for x in 0..size {
-                    let mut c = [0.0; 3];
-                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                        let t = self.texel(face, 2 * x + dx, 2 * y + dy);
-                        add(&mut c, t, 0.25);
-                    }
-                    texels.push(c.map(|v| v as f32));
-                }
-            }
-        }
-        Level { size, texels }
-    }
-}
-
-/// Trilinear lookup in a pyramid of levels.
-fn sample(levels: &[Level], d: Rgb, lod: f64) -> Rgb {
-    let top = levels.len().saturating_sub(1) as f64;
-    let lod = lod.clamp(0.0, top);
-    let l0 = lod.floor() as usize;
-    let l1 = (l0 + 1).min(levels.len().saturating_sub(1));
-    let (Some(a), Some(b)) = (levels.get(l0), levels.get(l1)) else { return [0.0; 3] };
-    mix(a.bilinear(d), b.bilinear(d), lod - l0 as f64)
-}
-
-/// The `i`-th of `n` points of the Hammersley set.
-fn hammersley(i: u32, n: u32) -> (f64, f64) {
-    ((f64::from(i) + 0.5) / f64::from(n), f64::from(i.reverse_bits()) / 4_294_967_296.0)
-}
-
-/// A studio baked for the product look: the prefiltered cube levels (level `m` the radiance
-/// reflected at perceptual roughness `m / (levels - 1)`, the sharpest at 0) and the irradiance
-/// polynomial. Plain data, so it can be baked on any thread ([`StudioEnvironment::bake`]) and
-/// handed to [`crate::view::Renderer::set_studio_environment`].
+/// A calibrated rig and its environment maps, ready to upload.
 #[derive(Clone)]
 pub struct StudioEnvironment {
     preset: StudioPreset,
-    levels: Vec<Level>,
-    /// The rig's lights (none for a surround without a rig), at
-    /// [`StudioEnvironment::calibration`].
+    levels: Vec<Equirect>,
+    diffuse: Equirect,
+    base: BaseLevel,
     lights: Vec<StudioLight>,
-    /// The room reflections are box-projected against.
     room: Room,
-    /// The cyclorama's irradiance E(n) = Σ k_i p_i(n) over p = (1, x, y, z, xy, yz, xz, z²,
-    /// x² − y²); the rig's lights reach diffuse surfaces directly instead ([`rig`]).
-    irradiance: [Rgb; 9],
-    /// The scale the studio's radiance is baked at ([`StudioRig::calibration`]).
     calibration: f64,
 }
 
@@ -454,61 +298,32 @@ impl Radiance {
     }
 }
 
-/// A studio bake in bounded steps ([`StudioBake::step`]), for a client that cannot bake on another
-/// thread (the web has no `std::thread`) or wants to spread the work over frames. The renderer
-/// never bakes: a client bakes (all at once off the window thread with
-/// [`StudioEnvironment::bake`], or step by step here) and installs the result with
-/// `Renderer::set_studio_environment`.
+/// Bake a studio off-thread, or advance by a bounded number of samples per frame on the web.
 pub struct StudioBake {
     preset: StudioPreset,
     radiance: Radiance,
-    /// The sharpest level's texels so far, while it is being drawn.
-    sharp: Vec<[f32; 3]>,
-    /// The source pyramid (the sharpest level halved down), once the sharpest level is drawn.
-    source: Vec<Level>,
-    irradiance: [Rgb; 9],
-    /// The prefiltered levels done so far, and the texels of the one in progress.
-    levels: Vec<Level>,
-    current: Vec<[f32; 3]>,
-    /// The GGX samples (cos θ, φ, source lod) of the level in progress.
-    samples: Vec<(f64, f64, f64)>,
-    /// The next row of the level in progress, counted over its six faces.
-    row: usize,
+    base: BaseLevel,
+    maps: MapBake,
 }
 
 impl StudioBake {
-    /// Work units per row: the sharpest level evaluates the radiance 4 times a texel, a rough
-    /// level takes [`SPECULAR_SAMPLES`] samples a texel.
-    const SHARP_SAMPLES: usize = 4;
-    /// A step size that keeps a frame's share of the bake short: at most 1.8 ms in an optimised
-    /// native build (measured, docs/render-opaque-pbr.md; a debug or wasm build is slower), 152
-    /// steps a studio.
+    /// Approximate number of samples in one web frame's share of the bake.
     pub const FRAME_WORK: usize = 16_384;
 
     pub fn new(preset: StudioPreset) -> Self {
+        Self::with_base(preset, BaseLevel::Preblurred)
+    }
+
+    pub fn with_base(preset: StudioPreset, base: BaseLevel) -> Self {
         let radiance = match studio(preset) {
             Some(rig) => {
-                let (calibration, white) = (rig.calibration(), rig.key_white());
+                let calibration = rig.calibration();
+                let white = rig.key_white();
                 Radiance::Studio(rig, calibration, white)
             }
             None => Radiance::Constant(SURROUND),
         };
-        Self::with_radiance(preset, radiance)
-    }
-
-    fn with_radiance(preset: StudioPreset, radiance: Radiance) -> Self {
-        let size = ENV_SIZE as usize;
-        StudioBake {
-            preset,
-            radiance,
-            sharp: Vec::with_capacity(6 * size * size),
-            source: Vec::new(),
-            irradiance: [[0.0; 3]; 9],
-            levels: Vec::new(),
-            current: Vec::new(),
-            samples: Vec::new(),
-            row: 0,
-        }
+        Self { preset, radiance, base, maps: MapBake::new(base) }
     }
 
     /// The studio being baked.
@@ -516,237 +331,54 @@ impl StudioBake {
         self.preset
     }
 
-    /// Whether every level is baked.
     pub fn is_done(&self) -> bool {
-        !self.source.is_empty() && self.levels.len() >= self.source.len()
+        self.maps.is_done()
     }
 
-    /// Bake whole rows until about `work` units are done (at least one row; a unit is one
-    /// radiance or GGX sample). Returns whether the bake is done.
+    /// Bake whole rows until approximately `work` samples have been evaluated.
     pub fn step(&mut self, work: usize) -> bool {
-        let mut done = 0;
-        while !self.is_done() {
-            done += self.row_step();
-            if done >= work {
-                break;
-            }
-        }
-        self.is_done()
+        self.maps.step(work, |d| self.radiance.specular(d), |d| self.radiance.diffuse(d))
     }
 
-    /// The baked studio, once [`StudioBake::is_done`] (`None` before).
+    /// Take the result once all rows have been baked.
     pub fn finish(self) -> Option<StudioEnvironment> {
-        let (preset, calibration, lights, room) = (self.preset, self.radiance.calibration(), self.radiance.lights(), self.radiance.room());
-        self.is_done().then_some(StudioEnvironment { preset, levels: self.levels, irradiance: self.irradiance, calibration, lights, room })
+        let (levels, diffuse) = self.maps.finish()?;
+        Some(StudioEnvironment::from_maps(self.preset, &self.radiance, self.base, levels, diffuse))
     }
 
-    /// One row of the level in progress; its work units.
-    fn row_step(&mut self) -> usize {
-        if self.source.is_empty() {
-            return self.sharp_row();
-        }
-        let m = self.levels.len();
-        let Some(size) = self.source.get(m).map(|l| l.size) else { return 1 };
-        if self.row == 0 {
-            self.samples = specular_samples(m);
-            self.current = Vec::with_capacity(6 * size * size);
-        }
-        let (face, y) = (self.row / size, self.row % size);
-        for x in 0..size {
-            let c = prefilter(&self.source, &self.samples, face, x, y, size);
-            self.current.push(c);
-        }
-        self.row += 1;
-        if self.row >= 6 * size {
-            self.levels.push(Level { size, texels: std::mem::take(&mut self.current) });
-            self.row = 0;
-        }
-        size * SPECULAR_SAMPLES as usize
-    }
-
-    /// One row of the sharpest level: the radiance at 2 × 2 points in each texel. After its last
-    /// row, the source pyramid and the irradiance terms.
-    fn sharp_row(&mut self) -> usize {
-        let size = ENV_SIZE as usize;
-        let n = size as f64;
-        let (face, y) = (self.row / size, self.row % size);
-        for x in 0..size {
-            let mut c = [0.0; 3];
-            for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                let d = face_direction(face, 2.0 * (x as f64 + ox) / n - 1.0, 2.0 * (y as f64 + oy) / n - 1.0);
-                add(&mut c, self.radiance.at(d), 0.25);
-            }
-            self.sharp.push(c.map(|v| v as f32));
-        }
-        self.row += 1;
-        if self.row >= 6 * size {
-            let mut source = vec![Level { size, texels: std::mem::take(&mut self.sharp) }];
-            while source.len() < ENV_MIPS as usize {
-                let Some(last) = source.last() else { break };
-                let next = last.halved();
-                source.push(next);
-            }
-            self.irradiance = StudioEnvironment::project(Some(&self.ambient_level()));
-            self.source = source;
-            self.row = 0;
-        }
-        size * Self::SHARP_SAMPLES
+    fn bake(self) -> StudioEnvironment {
+        let (levels, diffuse) = self.maps.bake(|d| self.radiance.specular(d), |d| self.radiance.diffuse(d));
+        StudioEnvironment::from_maps(self.preset, &self.radiance, self.base, levels, diffuse)
     }
 }
 
-impl StudioBake {
-    /// The radiance without the rig's lights at the irradiance level's resolution, one sample at
-    /// each texel's centre: what the irradiance terms are projected from.
-    fn ambient_level(&self) -> Level {
-        let size = (ENV_SIZE as usize >> SH_LEVEL).max(1);
-        let n = size as f64;
-        let mut texels = Vec::with_capacity(6 * size * size);
-        for face in 0..6 {
-            for y in 0..size {
-                for x in 0..size {
-                    let d = face_direction(face, 2.0 * (x as f64 + 0.5) / n - 1.0, 2.0 * (y as f64 + 0.5) / n - 1.0);
-                    texels.push(self.radiance.ambient(d).map(|v| v as f32));
-                }
-            }
-        }
-        Level { size, texels }
+impl Radiance {
+    fn specular(&self, d: [f32; 3]) -> [f32; 3] {
+        self.at(d.map(f64::from)).map(|v| v as f32)
     }
-}
 
-/// The GGX samples (cos θ, φ, source lod) prefiltering level `m` takes, with the source level
-/// each reads (filtered importance sampling).
-fn specular_samples(m: usize) -> Vec<(f64, f64, f64)> {
-    let n = ENV_SIZE as f64;
-    // One texel's solid angle at the sharpest level.
-    let texel_angle = 4.0 * PI / (6.0 * n * n);
-    let roughness = level_roughness(m);
-    let a2 = roughness.powi(4);
-    (0..SPECULAR_SAMPLES)
-        .map(|i| {
-            let (u1, u2) = hammersley(i, SPECULAR_SAMPLES);
-            let cos_t = ((1.0 - u1) / (1.0 + (a2 - 1.0) * u1)).sqrt();
-            let denominator = cos_t * cos_t * (a2 - 1.0) + 1.0;
-            let pdf = a2 / (PI * denominator * denominator) / 4.0;
-            let lod = 0.5 * (1.0 / (f64::from(SPECULAR_SAMPLES) * pdf.max(1e-12) * texel_angle)).log2() + 1.0;
-            (cos_t, 2.0 * PI * u2, lod)
-        })
-        .collect()
-}
-
-/// One prefiltered texel (`x`, `y` of `face` at a level of `size`) from the source pyramid.
-fn prefilter(source: &[Level], samples: &[(f64, f64, f64)], face: usize, x: usize, y: usize, size: usize) -> [f32; 3] {
-    let s = 2.0 * (x as f64 + 0.5) / size as f64 - 1.0;
-    let t = 2.0 * (y as f64 + 0.5) / size as f64 - 1.0;
-    let normal = face_direction(face, s, t);
-    let helper = if normal[2].abs() < 0.999 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
-    let tx = unit(cross(helper, normal));
-    let ty = cross(normal, tx);
-    let (mut sum, mut weight) = ([0.0; 3], 0.0);
-    for &(cos_t, phi, lod) in samples {
-        let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
-        let (sp, cp) = phi.sin_cos();
-        let h = [
-            tx[0] * sin_t * cp + ty[0] * sin_t * sp + normal[0] * cos_t,
-            tx[1] * sin_t * cp + ty[1] * sin_t * sp + normal[1] * cos_t,
-            tx[2] * sin_t * cp + ty[2] * sin_t * sp + normal[2] * cos_t,
-        ];
-        let nh = dot(normal, h);
-        let l = [2.0 * nh * h[0] - normal[0], 2.0 * nh * h[1] - normal[1], 2.0 * nh * h[2] - normal[2]];
-        let nl = dot(normal, l);
-        if nl <= 0.0 {
-            continue;
-        }
-        let c = sample(source, unit(l), lod);
-        add(&mut sum, c, nl);
-        weight += nl;
+    fn diffuse(&self, d: [f32; 3]) -> [f32; 3] {
+        self.ambient(d.map(f64::from)).map(|v| v as f32)
     }
-    let w = if weight > 0.0 { 1.0 / weight } else { 0.0 };
-    sum.map(|v| (v * w) as f32)
 }
 
 impl StudioEnvironment {
-    /// Bake `preset` all at once (about 1 MB of texels; tens of milliseconds in an optimised
-    /// build). Pure CPU work with no GPU or I/O: run it off the window thread, or bake in steps
-    /// with [`StudioBake`] where there are no threads.
+    /// Bake a studio in one pass on a worker thread.
     pub fn bake(preset: StudioPreset) -> Self {
-        Self::run(StudioBake::new(preset))
+        StudioBake::new(preset).bake()
     }
 
-    fn run(mut bake: StudioBake) -> Self {
-        let preset = bake.preset;
-        while !bake.step(usize::MAX) {}
-        bake.finish().unwrap_or(StudioEnvironment {
-            preset,
-            levels: Vec::new(),
-            irradiance: [[0.0; 3]; 9],
-            calibration: 1.0,
-            lights: Vec::new(),
-            room: Room::default(),
-        })
+    /// Bake a studio using the chosen reflection roughness at level zero.
+    pub fn bake_with_base(preset: StudioPreset, base: BaseLevel) -> Self {
+        StudioBake::with_base(preset, base).bake()
     }
 
-    /// The studio this was baked from.
+    fn from_maps(preset: StudioPreset, radiance: &Radiance, base: BaseLevel, levels: Vec<Equirect>, diffuse: Equirect) -> Self {
+        Self { preset, levels, diffuse, base, lights: radiance.lights(), room: radiance.room(), calibration: radiance.calibration() }
+    }
+
     pub fn preset(&self) -> StudioPreset {
         self.preset
-    }
-
-    /// A studio of constant radiance `c` everywhere.
-    #[cfg(test)]
-    fn constant(c: f64) -> Self {
-        Self::run(StudioBake::with_radiance(StudioPreset::default(), Radiance::Constant(c)))
-    }
-
-    /// The irradiance polynomial of a level's radiance: its nine spherical-harmonic terms, each
-    /// convolved with the clamped cosine (Ramamoorthi and Hanrahan 2001, equations 12–13).
-    fn project(level: Option<&Level>) -> [Rgb; 9] {
-        let Some(level) = level else { return [[0.0; 3]; 9] };
-        let n = level.size as f64;
-        let mut l = [[0.0; 3]; 9];
-        let mut total = 0.0;
-        for face in 0..6 {
-            for y in 0..level.size {
-                for x in 0..level.size {
-                    let s = 2.0 * (x as f64 + 0.5) / n - 1.0;
-                    let t = 2.0 * (y as f64 + 0.5) / n - 1.0;
-                    let d = face_direction(face, s, t);
-                    let angle = (2.0 / n) * (2.0 / n) / (1.0 + s * s + t * t).powf(1.5);
-                    total += angle;
-                    let [dx, dy, dz] = d;
-                    let basis = [
-                        0.282095,
-                        0.488603 * dy,
-                        0.488603 * dz,
-                        0.488603 * dx,
-                        1.092548 * dx * dy,
-                        1.092548 * dy * dz,
-                        0.315392 * (3.0 * dz * dz - 1.0),
-                        1.092548 * dx * dz,
-                        0.546274 * (dx * dx - dy * dy),
-                    ];
-                    let c = level.texel(face, x, y);
-                    for (term, b) in l.iter_mut().zip(basis) {
-                        add(term, c, b * angle);
-                    }
-                }
-            }
-        }
-        // The texels' solid angles sum to a little off 4π: rescale so a constant is exact.
-        let fix = if total > 0.0 { 4.0 * PI / total } else { 0.0 };
-        let l = l.map(|t| t.map(|v| v * fix));
-        let (c1, c2, c3, c4, c5) = (0.429043, 0.511664, 0.743125, 0.886227, 0.247708);
-        let [l00, l1m1, l10, l11, l2m2, l2m1, l20, l21, l22] = l;
-        let term = |f: &dyn Fn(usize) -> f64| [f(0), f(1), f(2)];
-        [
-            term(&|k| c4 * l00[k] - c5 * l20[k]),
-            term(&|k| 2.0 * c2 * l11[k]),
-            term(&|k| 2.0 * c2 * l1m1[k]),
-            term(&|k| 2.0 * c2 * l10[k]),
-            term(&|k| 2.0 * c1 * l2m2[k]),
-            term(&|k| 2.0 * c1 * l2m1[k]),
-            term(&|k| 2.0 * c1 * l21[k]),
-            term(&|k| c3 * l20[k]),
-            term(&|k| c1 * l22[k]),
-        ]
     }
 
     /// The scale the studio's radiance is baked at: its exposure calibration
@@ -755,13 +387,10 @@ impl StudioEnvironment {
         self.calibration
     }
 
-    /// The uniform the shader reads: the nine irradiance terms, (largest level, light count, 0,
-    /// 0), the room (half size, floor, ceiling, 0), then each light's (centre, half width),
-    /// (width axis, half height), (height axis, 0) and (calibrated radiance, 0).
+    /// The level range, light count, base roughness, room bounds and calibrated light rectangles.
     fn uniform_bytes(&self) -> Vec<u8> {
-        let mut v: Vec<f32> = self.irradiance.iter().flat_map(|t| [t[0] as f32, t[1] as f32, t[2] as f32, 0.0]).collect();
         let lights = &self.lights[..self.lights.len().min(rig::MAX_LIGHTS)];
-        v.extend([self.levels.len().saturating_sub(1) as f32, lights.len() as f32, LEVEL_ZERO_ROUGHNESS as f32, 0.0]);
+        let mut v = vec![self.levels.len().saturating_sub(1) as f32, lights.len() as f32, self.base.roughness(), 0.0];
         v.extend([self.room.half, self.room.floor, self.room.ceiling, 0.0].map(|x| x as f32));
         for slot in 0..rig::MAX_LIGHTS {
             match lights.get(slot) {
@@ -796,173 +425,8 @@ impl StudioEnvironment {
     }
 }
 
-/// The nearest half-precision float to a finite, non-negative `x` (larger values: the largest
-/// half, 65504; NaN and negatives: 0).
-fn half(x: f32) -> u16 {
-    if !(x > 0.0) {
-        return 0;
-    }
-    if x >= 65504.0 {
-        return 0x7bff;
-    }
-    let bits = x.to_bits();
-    let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
-    let mantissa = bits & 0x7f_ffff;
-    if exponent <= 0 {
-        // Subnormal: the implicit one shifted in, rounded to nearest.
-        if exponent < -10 {
-            return 0;
-        }
-        let m = mantissa | 0x80_0000;
-        let shift = (14 - exponent) as u32;
-        let rounded = (m + (1 << (shift - 1))) >> shift;
-        return rounded as u16;
-    }
-    let rounded = (((exponent as u32) << 10) | (mantissa >> 13)) + ((mantissa >> 12) & 1);
-    rounded.min(0x7bff) as u16
-}
-
-/// The environment's bind group (group 3 of the PBR pipeline): the prefiltered cube, its sampler
-/// and the irradiance uniform.
-pub(crate) fn layout(device: &wgpu::Device, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("sc_studio"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry { binding: 1, visibility, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-                count: None,
-            },
-        ],
-    })
-}
-
-pub(crate) fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
-    device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("sc_studio"),
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Linear,
-        ..Default::default()
-    })
-}
-
-/// A studio on the GPU.
-pub(crate) struct EnvGpu {
-    pub(crate) bind: wgpu::BindGroup,
-    /// Its cube and uniform, which the appearance-graph pipelines' group 3 binds again.
-    view: wgpu::TextureView,
-    _texture: wgpu::Texture,
-    uniform: wgpu::Buffer,
-}
-
-fn bind(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, texture: wgpu::Texture, uniform: wgpu::Buffer) -> EnvGpu {
-    let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
-    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("sc_studio"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
-            wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
-        ],
-    });
-    EnvGpu { bind, view, _texture: texture, uniform }
-}
-
-fn cube(device: &wgpu::Device, size: u32, mips: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("sc_studio"),
-        size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 6 },
-        mip_level_count: mips,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba16Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    })
-}
-
-/// The stand-in bound while no studio is (an all-black 1 × 1 cube): the pipeline always has its
-/// group, and a frame without the look never reads it.
-pub(crate) fn placeholder(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler) -> EnvGpu {
-    let texture = cube(device, 1, 1);
-    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("sc_studio"),
-        contents: &[0; ENV_UNIFORM_SIZE as usize],
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    bind(device, layout, sampler, texture, uniform)
-}
-
-/// Upload a baked studio.
-pub(crate) fn upload(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
-    env: &StudioEnvironment,
-) -> EnvGpu {
-    let mips = env.levels.len().max(1) as u32;
-    let size = env.levels.first().map_or(1, |l| l.size.max(1)) as u32;
-    let texture = cube(device, size, mips);
-    for (mip, level) in env.levels.iter().enumerate() {
-        let side = level.size as u32;
-        let face_texels = level.size * level.size;
-        for face in 0..6 {
-            let bytes: Vec<u8> = level
-                .texels
-                .iter()
-                .skip(face * face_texels)
-                .take(face_texels)
-                .flat_map(|c| [half(c[0]), half(c[1]), half(c[2]), 0x3c00])
-                .flat_map(u16::to_le_bytes)
-                .collect();
-            if bytes.len() != face_texels * 8 {
-                continue;
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: mip as u32,
-                    origin: wgpu::Origin3d { x: 0, y: 0, z: face as u32 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &bytes,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(side * 8), rows_per_image: Some(side) },
-                wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
-            );
-        }
-    }
-    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("sc_studio"),
-        contents: &env.uniform_bytes(),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    bind(device, layout, sampler, texture, uniform)
-}
-
-/// Group 3 of the appearance-graph pipelines, "studio + material" (docs/appearance-graph.md §5.3):
-/// WebGL2 allows four bind groups and the viewport uses all four, so the material page and its
-/// textures join the studio. Bindings 0–2 are [`layout`]'s; 3 is the uniform page
-/// (`material::PAGE_BYTES`, WebGL2's block limit); 4–7 the material's textures (at most
-/// `limits::TEXTURES_PER_GRAPH`, so with the studio cube and the AO maps a stage samples well
-/// under WebGL2's 16 textures); 8–10 their samplers by wrap mode (repeat, clamp, mirror).
-pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let visibility = wgpu::ShaderStages::FRAGMENT;
-    let texture = |binding| wgpu::BindGroupLayoutEntry {
+fn texture_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
         ty: wgpu::BindingType::Texture {
@@ -971,52 +435,116 @@ pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             multisampled: false,
         },
         count: None,
-    };
-    let sampler = |binding| wgpu::BindGroupLayoutEntry {
-        binding,
+    }
+}
+
+fn sampler_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry { binding, visibility, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }
+}
+
+fn studio_layout(visibility: wgpu::ShaderStages) -> [wgpu::BindGroupLayoutEntry; 5] {
+    [
+        texture_entry(0, visibility),
+        sampler_entry(1, visibility),
+        wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        },
+        texture_entry(11, visibility),
+        texture_entry(12, visibility),
+    ]
+}
+
+pub(crate) fn layout(device: &wgpu::Device, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("sc_studio"), entries: &studio_layout(visibility) })
+}
+
+/// The images and rig uniform of one studio. Every studio uses the same BRDF table and sampler.
+struct StudioResources {
+    specular: wgpu::TextureView,
+    diffuse: wgpu::TextureView,
+    uniform: wgpu::Buffer,
+}
+
+impl StudioResources {
+    fn entries<'a>(&'a self, sampler: &'a wgpu::Sampler, dfg: &'a wgpu::TextureView) -> [wgpu::BindGroupEntry<'a>; 5] {
+        [
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.specular) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 2, resource: self.uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(&self.diffuse) },
+            wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(dfg) },
+        ]
+    }
+
+    fn bind(self, device: &wgpu::Device, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, dfg: &wgpu::TextureView) -> EnvGpu {
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("sc_studio"), layout, entries: &self.entries(sampler, dfg) });
+        EnvGpu { resources: self, bind }
+    }
+}
+
+struct EnvGpu {
+    bind: wgpu::BindGroup,
+    resources: StudioResources,
+}
+
+/// Empty textures for a view awaiting its chosen studio.
+fn placeholder(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, environment: &Environment) -> EnvGpu {
+    let blank = environment::map_texture(device, "sc_empty_studio", 1, 1, 1).create_view(&Default::default());
+    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("sc_studio"),
+        contents: &[0; ENV_UNIFORM_SIZE as usize],
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    StudioResources { specular: blank.clone(), diffuse: blank, uniform }.bind(device, layout, &environment.sampler, &environment.dfg)
+}
+
+/// Upload the selected rig's two maps. The GGX lookup table is independent of the studio.
+fn upload(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    dfg: &wgpu::TextureView,
+    env: &StudioEnvironment,
+) -> EnvGpu {
+    let mip_count = env.levels.len() as u32;
+    let width = env.levels.first().map_or(2, |l| l.width);
+    let specular = environment::map_texture(device, "sc_realistic_specular", width, width / 2, mip_count);
+    for (mip, level) in env.levels.iter().enumerate() {
+        environment::write_map(queue, &specular, mip as u32, level);
+    }
+    let width = env.diffuse.width;
+    let diffuse = environment::map_texture(device, "sc_realistic_diffuse", width, width / 2, 1);
+    environment::write_map(queue, &diffuse, 0, &env.diffuse);
+    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("sc_studio"),
+        contents: &env.uniform_bytes(),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    StudioResources { specular: specular.create_view(&Default::default()), diffuse: diffuse.create_view(&Default::default()), uniform }
+        .bind(device, layout, sampler, dfg)
+}
+
+/// Appearance graphs share the studio group and add a page, four textures and three wrap modes.
+pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let visibility = wgpu::ShaderStages::FRAGMENT;
+    let mut entries = studio_layout(visibility).to_vec();
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 3,
         visibility,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(crate::material::PAGE_BYTES),
+        },
         count: None,
-    };
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("sc_studio_material"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::Cube,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            sampler(1),
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(crate::material::PAGE_BYTES),
-                },
-                count: None,
-            },
-            texture(4),
-            texture(5),
-            texture(6),
-            texture(7),
-            sampler(8),
-            sampler(9),
-            sampler(10),
-        ],
-    })
+    });
+    entries.extend((4..8).map(|binding| texture_entry(binding, visibility)));
+    entries.extend((8..11).map(|binding| sampler_entry(binding, visibility)));
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("sc_studio_material"), entries: &entries })
 }
 
 /// Most studios the renderer keeps on the GPU at once.
@@ -1027,6 +555,7 @@ const MAX_INSTALLED: usize = 8;
 pub(crate) struct Studios {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    dfg: wgpu::TextureView,
     placeholder: EnvGpu,
     baked: Vec<(StudioPreset, EnvGpu)>,
     /// Counts installations, so binds made from an older studio are known stale.
@@ -1034,11 +563,10 @@ pub(crate) struct Studios {
 }
 
 impl Studios {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, environment: &Environment) -> Self {
         let layout = layout(device, wgpu::ShaderStages::FRAGMENT);
-        let sampler = sampler(device);
-        let placeholder = placeholder(device, &layout, &sampler);
-        Studios { layout, sampler, placeholder, baked: Vec::new(), generation: 0 }
+        let placeholder = placeholder(device, &layout, environment);
+        Studios { layout, sampler: environment.sampler.clone(), dfg: environment.dfg.clone(), placeholder, baked: Vec::new(), generation: 0 }
     }
 
     pub(crate) fn layout(&self) -> &wgpu::BindGroupLayout {
@@ -1052,7 +580,7 @@ impl Studios {
 
     /// Upload `env`, replacing the same preset's studio.
     pub(crate) fn install(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, env: &StudioEnvironment) {
-        let gpu = upload(device, queue, &self.layout, &self.sampler, env);
+        let gpu = upload(device, queue, &self.layout, &self.sampler, &self.dfg, env);
         self.baked.retain(|(p, _)| *p != env.preset());
         // At most a few studios stay on the GPU; the oldest goes first.
         if self.baked.len() >= MAX_INSTALLED {
@@ -1081,13 +609,16 @@ impl Studios {
         let env = preset.and_then(|preset| self.baked.iter().find(|(p, _)| *p == preset)).map_or(&self.placeholder, |(_, gpu)| gpu);
         let [t0, t1, t2, t3] = textures;
         let [s0, s1, s2] = samplers;
+        let [specular, studio_sampler, rig, diffuse, dfg] = env.resources.entries(&self.sampler, &self.dfg);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sc_studio_material"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&env.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: env.uniform.as_entire_binding() },
+                specular,
+                studio_sampler,
+                rig,
+                diffuse,
+                dfg,
                 wgpu::BindGroupEntry { binding: 3, resource: page.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(t0) },
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(t1) },
@@ -1106,50 +637,7 @@ impl Studios {
     }
 }
 
-/// The environment-BRDF fit the shader evaluates (`pbr_env_brdf` in `pbr::SOURCE`): the split-sum
-/// scale `A` and bias `B` (E = F0·A + F90·B) of the viewport's GGX/Smith BRDF, as polynomials in
-/// perceptual roughness `r` and `t = 1 − n·v`: P(r, t) + (1 − G1(n·v)) Q(r, t). Rows are r⁰, r¹,
-/// r²; columns t⁰ … t³. The viewport's own least-squares fit to [`reference::dfg`] over n·v in
-/// [0.02, 1] and r in [0.045, 1]: largest error 0.046 (A) and 0.023 (B), RMS 0.006 and 0.004.
-#[cfg(test)]
-pub(crate) const ENV_BRDF_A: [[[f32; 4]; 3]; 2] = [
-    [[1.00560, -0.56397, 2.50123, -2.93657], [0.32333, -0.09745, -2.44274, 2.89048], [-1.07421, 4.87385, -9.53132, 5.20517]],
-    [[-27.45309, 62.21089, -24.05595, -10.77288], [10.98918, 41.63909, -157.76626, 106.99327], [9.57360, -85.17991, 167.93185, -93.69565]],
-];
-#[cfg(test)]
-pub(crate) const ENV_BRDF_B: [[[f32; 4]; 3]; 2] = [
-    [[-0.02603, 0.65203, -2.71929, 3.09764], [0.09148, -3.19509, 11.5273, -9.30966], [-0.07161, 5.26964, -16.16043, 8.05334]],
-    [[-30.15892, 134.44678, -183.67455, 78.98073], [44.8516, -207.80166, 299.57468, -136.8757], [-20.09456, 90.78933, -127.08962, 59.86296]],
-];
-
-/// [`ENV_BRDF_A`] and [`ENV_BRDF_B`] at `n·v` and perceptual roughness `r`, each in [0, 1] and
-/// their sum (the white-furnace albedo of F0 = 1) at most one.
-#[cfg(test)]
-pub(crate) fn env_brdf(nv: f32, r: f32) -> (f32, f32) {
-    let nv = nv.clamp(1e-4, 1.0);
-    let a2 = (r * r) * (r * r);
-    let g = 2.0 * nv / (nv + (a2 + (1.0 - a2) * nv * nv).sqrt());
-    let t = 1.0 - nv;
-    let poly = |c: &[[f32; 4]; 3]| {
-        let mut rj = 1.0;
-        let mut sum = 0.0;
-        for row in c {
-            sum += rj * (row[0] + t * (row[1] + t * (row[2] + t * row[3])));
-            rj *= r;
-        }
-        sum
-    };
-    let a = poly(&ENV_BRDF_A[0]) + (1.0 - g) * poly(&ENV_BRDF_A[1]);
-    let b = poly(&ENV_BRDF_B[0]) + (1.0 - g) * poly(&ENV_BRDF_B[1]);
-    let (a, b) = (a.clamp(0.0, 1.0), b.clamp(0.0, 1.0));
-    // A surface reflects no more than it receives: the fit's albedo stays at or below one.
-    let total = (a + b).max(1.0);
-    (a / total, b / total)
-}
-
-/// Khronos PBR Neutral tone mapping (`look_tone` in the viewport shader): linear Rec. 709 in,
-/// [0, 1] out. Adapted from the Khronos Group's PBR Neutral reference (Apache-2.0; see
-/// ATTRIBUTION.md).
+/// Khronos PBR Neutral tone mapping on the CPU for the lighting tests.
 #[cfg(test)]
 pub(crate) fn pbr_neutral(c: [f32; 3]) -> [f32; 3] {
     const START: f32 = 0.8 - 0.04;

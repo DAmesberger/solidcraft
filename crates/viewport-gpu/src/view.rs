@@ -35,6 +35,7 @@ mod pass_times;
 pub use pass_times::PassTimes;
 mod product_highlights;
 
+pub use crate::environment::BaseLevel as StudioBaseLevel;
 pub use ibl::{ProductLook, StudioBake, StudioEnvironment, StudioPreset, StudioRoom};
 #[cfg(not(target_arch = "wasm32"))]
 pub use msaa_check::MsaaCheck;
@@ -3962,7 +3963,7 @@ impl Renderer {
         let ao = || ao::Resources::new(device, &ao_layout, &bgl, &module, reversed);
         // The product look's studios (group 3): read by the PBR pipeline and, in the Realistic
         // look, by the opaque faces' `face_lit`, so the solid pipelines take the group too.
-        let studios = ibl::Studios::new(device);
+        let studios = ibl::Studios::new(device, &environment);
         let solid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sc_solid"),
             bind_group_layouts: &[Some(&bgl), Some(&access_bgl), Some(&ao_layout), Some(studios.layout())],
@@ -5375,6 +5376,8 @@ impl Renderer {
     /// steps over frames with [`StudioBake`] where there are no threads (the web). Until it is
     /// installed, the look draws without its studio (the frame's product lights only).
     pub fn set_studio_environment(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, env: &StudioEnvironment) {
+        // The shared BRDF table must also be ready when a Render preview is the first frame.
+        self.uniform_bgl.environment.upload(queue);
         self.studios.install(device, queue, env);
         // A picture kept from before shows the old studio.
         self.pic.ss_key = None;

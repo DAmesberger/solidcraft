@@ -160,10 +160,16 @@ fn specular_tint_coat_colour_and_anisotropy_reach_the_picture() {
         inputs["geometry_tangent"] = json!({"from": "uv.tangent"});
         surface(uv.clone(), inputs)
     };
-    // Seen obliquely (head-on, the bent reflection is the mirror one) under a key light.
-    let key = [0.3, -0.2, 0.93, 0.0, 2.0, 1.8, 1.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let Some(round) = draw_tilted(&brushed(0.0), 26, 0.8, Some(vec![key])) else { return };
-    let Some(long) = draw_tilted(&brushed(0.9), 27, 0.8, Some(vec![key])) else { return };
+    // Aim the key at the side of the specular lobe. The half vector is the
+    // tilted normal plus one isotropic roughness width along the brushing axis.
+    // Reflect the eye direction about that half vector to place the key.
+    let slope = 0.8_f32;
+    let nz = (1.0 + slope * slope).sqrt().recip();
+    let alpha = 0.4_f32.powi(2);
+    let h = [alpha, -slope * nz, nz].map(|v| v / (1.0 + alpha * alpha).sqrt());
+    let key = [2.0 * h[2] * h[0], 2.0 * h[2] * h[1], 2.0 * h[2] * h[2] - 1.0, 0.0, 0.25, 0.25, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let Some(round) = draw_tilted(&brushed(0.0), 26, slope, Some(vec![key])) else { return };
+    let Some(long) = draw_tilted(&brushed(0.9), 27, slope, Some(vec![key])) else { return };
     let changed = round.chunks(4).zip(long.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2)).count();
     assert!(changed > SIZE * SIZE / 4, "anisotropy changes the picture ({changed} pixels)");
     assert_eq!(middle(&round)[3], 255.0);
