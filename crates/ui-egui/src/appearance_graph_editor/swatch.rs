@@ -302,7 +302,7 @@ impl egui_wgpu::CallbackTrait for SwatchCallback {
             self.ctx.request_repaint();
         }
         #[cfg(test)]
-        self.ctx.data_mut(|data| data.insert_temp(egui::Id::new(SETTLED), settled));
+        self.ctx.data_mut(|data| data.insert_temp(egui::Id::unique(SETTLED), settled));
         Vec::new()
     }
 

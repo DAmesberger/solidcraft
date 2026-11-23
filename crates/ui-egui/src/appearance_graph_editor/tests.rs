@@ -752,7 +752,9 @@ fn swatch_bindings_follow_the_linked_look_and_change_the_upload_key() {
     let stored = fake.texture(PNG_2X1);
     let absent = "f".repeat(64);
     let value = |sha: &str| Constant::Texture(solidcraft_viewport::appearance_graph::graph::TextureRef { texture: sha.into() });
-    let swatch = |graph, values| super::swatch::Sample::Graph(std::sync::Arc::new(super::swatch::GraphSwatch::new(graph, values).unwrap()));
+    fn swatch(graph: &AppearanceGraph, values: &std::collections::BTreeMap<String, Constant>) -> super::swatch::Sample {
+        super::swatch::Sample::Graph(std::sync::Arc::new(super::swatch::GraphSwatch::new(graph, values).unwrap()))
+    }
     let empty = swatch(&fake.graph, &Default::default());
     assert!(super::swatch::scene(&empty, |_| None).graphs.textures().is_empty());
     fake.graph.interface.iter_mut().find(|port| port.name == "mark").unwrap().default = Some(value(&stored));
@@ -824,7 +826,7 @@ fn capture_editor_flow() {
                 if screen.contains(desired) && desired.y < footer - 35.0 && desired.y > 135.0 {
                     if handle == "appearance:graph_swatch" {
                         let mut ready_frame = pixels;
-                        let settled = || ctx.data(|data| data.get_temp::<bool>(egui::Id::new(super::swatch::SETTLED)).unwrap_or_default());
+                        let settled = || ctx.data(|data| data.get_temp::<bool>(egui::Id::unique(super::swatch::SETTLED)).unwrap_or_default());
                         let start = std::time::Instant::now();
                         while !settled() && start.elapsed() < std::time::Duration::from_secs(60) {
                             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -859,7 +861,13 @@ fn capture_editor_flow() {
                     app,
                     vec![
                         egui::Event::PointerMoved(pos),
-                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, dy), modifiers: Default::default() },
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, dy),
+                            modifiers: Default::default(),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                        },
                     ],
                 );
             }

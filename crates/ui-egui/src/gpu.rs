@@ -1254,7 +1254,8 @@ mod tests {
             let window = GpuTarget { format, depth: None, samples: 1, tess: false, oit: false, edges: false };
             let scene = GpuTarget { depth: Some(solidcraft_viewport_gpu::depth_format(&device, true)), ..window };
             let view = Renderer::with_window_target(&device, scene, window, None);
-            app.viewport.gpu = Some(view.target());
+            let installed = view.target();
+            app.viewport.gpu = Some(installed);
             app.viewport.draw_stats = Some(view.stats());
             renderer.write().callback_resources.insert(view);
             renderer.write().callback_resources.insert(crate::appearance_graph_editor::SwatchTargets { scene: installed, window });
