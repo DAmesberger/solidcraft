@@ -1,5 +1,5 @@
 // Shared shading library: bsdf (shading/mod.rs). Pure functions, `sc_` names,
-// WebGL2-safe. The opaque surface of `solidcraft_render::surface` and its clear coat
+// WebGL2-safe. The opaque surface of `solidcraft_viewport::surface` and its clear coat
 // (`clear_coat.rs`), extracted from the path tracer's expressions: a GGX specular lobe with
 // separable Smith shadowing and Schlick Fresnel, a Fresnel-weighted Lambert diffuse layer, and an
 // optional single-scattering GGX dielectric coat that attenuates the base at entry and exit by an

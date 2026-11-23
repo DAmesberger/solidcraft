@@ -16,5 +16,6 @@ pub(crate) use library_source;
 /// Shared surface response, periodic noise and texture projections in dependency order.
 pub const SOURCE: &str = library_source!();
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests;
