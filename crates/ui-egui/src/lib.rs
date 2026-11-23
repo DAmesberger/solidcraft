@@ -14,6 +14,7 @@ pub mod agent_chat;
 pub mod agent_cursor;
 pub mod agent_label;
 pub mod ai_connect;
+mod appearance_graph_editor;
 pub use solidcraft_ui_kit::app_bar;
 pub use solidcraft_ui_kit::blur;
 pub mod bom_panel;
@@ -651,6 +652,8 @@ pub struct WgpuBuilt {
     blur: bool,
     /// The anti-aliasing check failed at the asked samples and passed at 1x.
     msaa_fallback: bool,
+    /// The pass shared by egui paint callbacks.
+    window: crate::gpu::GpuTarget,
 }
 
 pub struct SolveApp {
@@ -1333,7 +1336,7 @@ impl SolveApp {
                 Err(error) => eprintln!("SolidCraft graphics: anti-aliasing check error; keeping {}x: {error}", scene.samples),
             }
         }
-        WgpuBuilt { built, blur: scene.depth.is_some() && window.depth.is_none() && window.samples == 1, msaa_fallback }
+        WgpuBuilt { built, blur: scene.depth.is_some() && window.depth.is_none() && window.samples == 1, msaa_fallback, window }
     }
 
     /// The view's pipelines could not be built (the thread compiling them failed, #1210): the view
@@ -1355,6 +1358,7 @@ impl SolveApp {
             self.msaa_compatibility = true;
         }
         let (installed, stats, tess_ready) = solidcraft_viewport_egui::adopt(rs, built.built);
+        rs.renderer.write().callback_resources.insert(crate::appearance_graph_editor::SwatchTargets { scene: installed, window: built.window });
         self.viewport.gpu = Some(installed);
         self.viewport.gpu_preparing = false;
         self.viewport.tess_ready = tess_ready;
