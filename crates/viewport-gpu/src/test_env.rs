@@ -42,6 +42,16 @@ pub(crate) fn skip_unless_required(required: bool, why: &dyn std::fmt::Display) 
     true
 }
 
+/// `module` with its pipeline-overridable constants (`FACE_PUSH`) at their defaults, as a pipeline
+/// made without constants has them: naga's GLSL writer translates only such a module, as wgpu
+/// gives it one when it makes a WebGL2 pipeline.
+pub(crate) fn without_overrides(module: &naga::Module, info: &naga::valid::ModuleInfo) -> (naga::Module, naga::valid::ModuleInfo) {
+    match naga::back::pipeline_constants::process_overrides(module, info, None, &Default::default()) {
+        Ok((module, info)) => (module.into_owned(), info.into_owned()),
+        Err(e) => panic!("pipeline constants: {e:?}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,15 +79,5 @@ mod tests {
     #[should_panic(expected = "a GPU is required here (VIEWPORT_TEST_REQUIRE_GPU): no adapter")]
     fn a_missing_adapter_fails_when_a_gpu_is_required() {
         skip_unless_required(true, &"no adapter");
-    }
-}
-
-/// `module` with its pipeline-overridable constants (`FACE_PUSH`) at their defaults, as a pipeline
-/// made without constants has them: naga's GLSL writer translates only such a module, as wgpu
-/// gives it one when it makes a WebGL2 pipeline.
-pub(crate) fn without_overrides(module: &naga::Module, info: &naga::valid::ModuleInfo) -> (naga::Module, naga::valid::ModuleInfo) {
-    match naga::back::pipeline_constants::process_overrides(module, info, None, &Default::default()) {
-        Ok((module, info)) => (module.into_owned(), info.into_owned()),
-        Err(e) => panic!("pipeline constants: {e:?}"),
     }
 }

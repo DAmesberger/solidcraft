@@ -1,6 +1,13 @@
 // Shared shading library: projection (crates/viewport-gpu/src/shading/mod.rs). Pure functions, `sc_`
 // names, WebGL2-safe. Bodies have no UVs, so every texture coordinate is projected from a point.
 
+// A zero vector and the identity matrix for generated gradients (`material::codegen`): private
+// variables rather than constant expressions, so a gradient built from them is never folded to a
+// constant. naga's pipeline-constant pass mishandles a `let` bound to a constant expression when
+// an equal constant appears elsewhere in the function (`ExpressionAlreadyInScope`).
+var<private> sc_zero3: vec3<f32>;
+var<private> sc_identity3: mat3x3<f32> = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+
 // Planar coordinates of `p`: its offset from `origin` along `u` and `v`, the axes' directions
 // divided by their repeat lengths (as the runtime planar maps store them), so one repeat is one
 // unit of uv.

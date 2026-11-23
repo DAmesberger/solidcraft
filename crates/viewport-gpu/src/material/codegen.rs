@@ -105,7 +105,14 @@ fn lit(x: f64) -> String {
     if s.contains('.') || s.contains('e') { s } else { format!("{s}.0") }
 }
 
-const ZERO3: &str = "vec3<f32>(0.0)";
+/// A zero gradient. It and [`IDENTITY3`] are the shared library's private variables (`shading/projection.wgsl`), not constant
+/// expressions: naga's pipeline-constant pass (wgpu runs it on every pipeline of a module with more
+/// than one entry point or an `override`) folds a `let` bound to a constant expression, and when an
+/// equal constant appears elsewhere in the function the result fails validation as
+/// `ExpressionAlreadyInScope`.
+const ZERO3: &str = "sc_zero3";
+/// The Jacobian of a position with respect to itself.
+const IDENTITY3: &str = "sc_identity3";
 
 /// An `image` node's shape params.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -309,7 +316,7 @@ impl Gen<'_> {
             let Some(end) = after.find('@') else { break };
             let token = after.get(..end).unwrap_or("");
             let column = match token {
-                "P" => format!("mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0))[{lane}]"),
+                "P" => format!("{IDENTITY3}[{lane}]"),
                 "O" => format!("transpose(c.frame.to_object)[{lane}]"),
                 v => match v.parse::<usize>() {
                     Ok(i) if self.mgrads.get(i).copied().unwrap_or(false) && self.kinds.get(i) != Some(&Kind::F) => format!("q{i}[{lane}]"),
@@ -338,9 +345,7 @@ impl Gen<'_> {
                     None
                 }
             }
-            Operand::Geometry(GeometryInput::WorldPosition) => {
-                Some("mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0))".to_owned())
-            }
+            Operand::Geometry(GeometryInput::WorldPosition) => Some(IDENTITY3.to_owned()),
             Operand::Geometry(GeometryInput::ObjectPosition) => Some("transpose(c.frame.to_object)".to_owned()),
             _ => None,
         }
