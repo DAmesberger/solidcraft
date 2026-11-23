@@ -714,7 +714,7 @@ fn the_ambient_occlusion_radius_follows_what_is_drawn() {
 
 /// Material-graph looks in the model view: in the Realistic view (with a GPU), a body whose look
 /// names a graph puts its faces into the scene's material stream, over the faces it still draws;
-/// a face's own graph look wins over the body's; the Standard view, or a look without a graph,
+/// a face's own graph look wins over the body's; a view with Realistic off, or a look without a graph,
 /// adds nothing; and a value edit changes only the uniform page, not the vertices.
 #[test]
 fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
@@ -740,7 +740,7 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
         (draws, vertices, sc.graphs.pages().to_vec(), sc.tris.len() + sc.blocks.len())
     };
     let (draws, vertices, _, _) = counts(&app);
-    assert!(draws.is_empty() && vertices == 0, "the Standard view draws no graph");
+    assert!(draws.is_empty() && vertices == 0, "a view with Realistic off draws no graph");
     app.viewport.gpu = Some(crate::gpu::GpuTarget {
         format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
         depth: None,
@@ -749,7 +749,7 @@ fn graph_looks_feed_the_material_stream_in_the_realistic_view() {
         oit: false,
         edges: false,
     });
-    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let (draws, vertices, pages, faces_drawn) = counts(&app);
     assert_eq!(draws.len(), 2, "two shapes: the body's graph and the top face's");
     assert!(faces_drawn > 0, "the faces are still drawn as the scene's own triangles");
@@ -791,7 +791,7 @@ fn a_graph_look_waits_for_its_shape_in_its_own_colour() {
         oit: false,
         edges: false,
     });
-    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let sc = build_scene(&app);
     let page = sc.graphs.pages().first().map(|p| p.words.clone()).unwrap_or_default();
     let head: Vec<f32> = page.iter().take(20).map(|w| f32::from_bits(*w)).collect();
@@ -823,11 +823,11 @@ fn a_see_through_graph_look_is_drawn_blended() {
         oit: false,
         edges: false,
     });
-    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let sc = build_scene(&app);
     assert!(!sc.graphs.draws().is_empty() && sc.graphs.draws().iter().all(|d| d.blended), "drawn blended");
     assert!(sc.palette.entries().contains(&[0, 0, 0, 0]), "the standard faces show nothing");
-    app.ui.view_look = crate::view_look::STANDARD;
+    app.ui.realistic = false;
     assert!(build_scene(&app).graphs.draws().is_empty());
 }
 
@@ -868,8 +868,8 @@ fn screenshot_graph_looks_in_the_realistic_view() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE as f32, SIZE as f32));
     let (yaw, pitch) = solidcraft_viewport::StandardView::Iso.angles();
     for (name, distance) in [("iso", 200.0), ("close", 45.0)] {
-        for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
-            app.ui.view_look = look;
+        for (look_name, look) in [("standard", false), ("realistic", true)] {
+            app.ui.realistic = look;
             app.cam = crate::Camera {
                 target: Vec3::new(if name == "close" { 20.0 } else { 70.0 }, 15.0, 10.0),
                 yaw,
@@ -881,9 +881,9 @@ fn screenshot_graph_looks_in_the_realistic_view() {
             };
             let proj = super::projection(&app, rect);
             let e = proj.cam.eye().to_f32();
-            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            let product = crate::realistic_view::product_look_around(&app, &super::shown_body_bounds(&app));
             let scene = build_scene(&app).merged();
-            if look == crate::view_look::REALISTIC {
+            if look {
                 assert!(!scene.graphs.draws().is_empty(), "the graph looks are in the scene");
             }
             let Some(bytes) =
@@ -944,11 +944,11 @@ fn screenshot_a_design_in_both_looks() {
     for (view, factor) in [(solidcraft_viewport::StandardView::Iso, 1.3), (solidcraft_viewport::StandardView::Front, 1.1)] {
         let (yaw, pitch) = view.angles();
         app.cam = crate::Camera { target: center, yaw, pitch: pitch.max(0.35), roll: 0.0, distance: size * factor, fov: 0.0, ..Default::default() };
-        for (name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
-            app.ui.view_look = look;
+        for (name, look) in [("standard", false), ("realistic", true)] {
+            app.ui.realistic = look;
             let proj = super::projection(&app, rect);
             let e = proj.cam.eye().to_f32();
-            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            let product = crate::realistic_view::product_look_around(&app, &super::shown_body_bounds(&app));
             let scene = build_scene(&app).merged();
             eprintln!("{name}: {} graph draws", scene.graphs.draws().len());
             let Some(bytes) =
@@ -966,7 +966,7 @@ fn screenshot_a_design_in_both_looks() {
 /// `pbr` looks in the Realistic view go through the material stream as their one-node constant
 /// graphs (decision O9): every `pbr` look shares one shape, a metal reflects the studio unlike
 /// the same colour as a dielectric, and it draws exactly as the explicit constant graph does.
-/// The Standard view is unchanged.
+/// A view with Realistic off skips graph shading.
 #[test]
 fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
     let mut app = SolveApp::new(Session::default(), Services::default());
@@ -980,7 +980,7 @@ fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
         json!({"bodies": [names[1]], "color": [180, 60, 40], "pbr": {"metallic": 0.0, "roughness": 0.6, "dielectric_ior": 1.5}}),
     )
     .unwrap();
-    assert!(build_scene(&app).graphs.draws().is_empty(), "the Standard view draws no graph");
+    assert!(build_scene(&app).graphs.draws().is_empty(), "a view with Realistic off draws no graph");
     app.viewport.gpu = Some(crate::gpu::GpuTarget {
         format: egui_wgpu::wgpu::TextureFormat::Rgba8Unorm,
         depth: None,
@@ -989,7 +989,7 @@ fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
         oit: false,
         edges: false,
     });
-    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     app.ui.ground_shadow = false;
     let scene = build_scene(&app);
     let shapes: std::collections::BTreeSet<_> = scene.graphs.draws().iter().map(|d| d.shape).collect();
@@ -1004,7 +1004,7 @@ fn pbr_looks_are_constant_graphs_in_the_realistic_view() {
     let render = |app: &SolveApp| {
         let proj = super::projection(app, rect);
         let e = proj.cam.eye().to_f32();
-        let look = crate::view_look::product_look_around(app, "model", &super::shown_body_bounds(app));
+        let look = crate::realistic_view::product_look_around(app, &super::shown_body_bounds(app));
         crate::gpu::render_realistic_offscreen(
             build_scene(app).merged(),
             proj.vp.to_f32(),

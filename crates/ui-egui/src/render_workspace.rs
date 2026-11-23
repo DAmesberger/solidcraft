@@ -3824,10 +3824,13 @@ fn paint_product_kind(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, c
             }
             app.viewport.hl_key = highlight_key;
         }
-        // The preview's own look (`view.look` with `view: render_preview`); the window repaints
+        // The preview uses its own Realistic setting. The window repaints
         // until the studio is baked.
-        let product_look = crate::view_look::product_look_around(app, "render_preview", &scene.bounds);
-        if product_look.is_some() && !solidcraft_viewport_egui::studio_ready() {
+        let product_look = crate::realistic_view::product_look_around(app, &scene.bounds);
+        if let Some(look) = product_look.filter(|_| !feedback)
+            && let Some(stats) = &app.viewport.draw_stats
+            && !solidcraft_viewport_egui::studio_ready(stats, look.studio)
+        {
             ui.ctx().request_repaint();
         }
         let slot = app.render_workspace.slot.clone();

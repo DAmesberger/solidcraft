@@ -17,6 +17,59 @@ fn with_gpu(app: &mut SolveApp) {
     });
 }
 
+#[test]
+fn model_tiles_and_render_keep_their_own_display_options() {
+    use crate::documents::{focus_view, view_close, view_duplicate, view_layout, view_open, view_reopen, with_view_look};
+    use solidcraft_views::{Preset, ViewKind};
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
+    with_gpu(&mut app);
+    let model = app.docs.views.active().id;
+    assert_eq!(app.run("view.realistic", json!({})).unwrap()["on"], true);
+    let copy = view_duplicate(&mut app, model).unwrap();
+    assert!(app.ui.realistic);
+    app.run("view.realistic", json!({"on":false})).unwrap();
+    assert!(with_view_look(&mut app, model, |app| app.ui.realistic));
+    assert!(view_close(&mut app, copy));
+    let other = view_open(&mut app, ViewKind::Model, None, false);
+    assert_ne!(other, model);
+    assert!(!app.ui.realistic);
+    view_layout(&mut app, Preset::SideBySide);
+    focus_view(&mut app, other);
+    app.run("view.material_finish", json!({"on":false})).unwrap();
+    let preview = view_open(&mut app, ViewKind::Render, None, false);
+    assert!(!app.ui.realistic);
+    app.run("view.realistic", json!({"on":true})).unwrap();
+    assert!(app.run("view.material_finish", json!({"on":true})).is_err());
+    assert!(focus_view(&mut app, model));
+    assert!(app.ui.realistic);
+    assert_eq!(app.ui.material_finish, None);
+    app.run("view.material_finish", json!({"on":true})).unwrap();
+    assert!(!app.ui.realistic);
+    assert!(focus_view(&mut app, preview));
+    assert!(app.ui.realistic);
+    assert!(view_close(&mut app, preview));
+    assert_eq!(view_reopen(&mut app), Some(preview));
+    assert!(app.ui.realistic);
+    assert!(focus_view(&mut app, other));
+    assert!(!app.ui.realistic);
+    assert_eq!(app.ui.material_finish, Some(false));
+}
+
+#[test]
+fn realistic_requires_full_graphics_and_has_no_default_shortcut() {
+    let mut app = SolveApp::new(Session::default(), Services::default());
+    assert!(crate::keymap::display_for(&app, "view.realistic").is_none());
+    assert!(app.run("view.realistic", json!({"on":true})).is_err());
+    assert!(!app.ui.realistic);
+    assert!(app.run("view.material_finish", json!({"on":true})).is_err());
+    with_gpu(&mut app);
+    app.safe_graphics = true;
+    assert!(app.run("view.realistic", json!({})).is_err());
+    assert_eq!(app.run("view.realistic", json!({"on":false})).unwrap()["on"], false);
+    assert!(!app.ui.realistic);
+}
+
 fn bodies(app: &SolveApp) -> Vec<String> {
     crate::open_meshing::session_world(&app.session).bodies.iter().map(|b| b.name.clone()).collect()
 }
@@ -63,7 +116,7 @@ fn own_bytes(gpu: &crate::gpu::GpuScene) -> usize {
 
 /// In the Realistic look, the preview's scene carries the material stream: graph looks and `pbr`
 /// looks alike, a see-through graph blended and left out of the preview's own triangles. The
-/// Standard look's scene is the preview's as before, with no stream.
+/// default preview builds no graph stream.
 #[test]
 fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
     let mut app = SolveApp::new(Session::default(), Services::default());
@@ -84,9 +137,9 @@ fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
     app.run("appearance.assign", json!({"bodies": [names[2]], "graph": "glass"})).unwrap_or_else(|e| panic!("{e}"));
     with_gpu(&mut app);
     let (scene, standard, _) = crate::render_workspace::preview_scene_for_evidence(&app).unwrap_or_else(|e| panic!("{e}"));
-    assert!(standard.graphs.draws().is_empty(), "Standard: no stream");
+    assert!(standard.graphs.draws().is_empty(), "Realistic off: no stream");
     let triangles: Vec<usize> = scene.meshes.iter().map(|m| m.mesh.triangles.len()).collect();
-    app.ui.render_preview_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let (_, realistic, _) = crate::render_workspace::preview_scene_for_evidence(&app).unwrap_or_else(|e| panic!("{e}"));
     let draws = realistic.graphs.draws();
     let vertices = |blended: bool| -> usize {
@@ -101,9 +154,8 @@ fn the_realistic_preview_feeds_graph_and_pbr_looks_to_the_material_stream() {
     // The see-through body's triangles are the stream's alone; the others stay in the scene.
     let per_vertex = (own_bytes(&standard) / (3 * triangles.iter().sum::<usize>())).max(1);
     assert_eq!(own_bytes(&realistic) / per_vertex, 3 * (triangles[0] + triangles[1]));
-    // The modelling view's look is a setting of its own.
-    app.ui.render_preview_look = crate::view_look::STANDARD;
-    app.ui.view_look = crate::view_look::REALISTIC;
+    // Disabling Realistic restores the original preview stream.
+    app.ui.realistic = false;
     let (_, again, _) = crate::render_workspace::preview_scene_for_evidence(&app).unwrap_or_else(|e| panic!("{e}"));
     assert!(again.graphs.draws().is_empty() && own_bytes(&again) == own_bytes(&standard));
 }
@@ -124,7 +176,7 @@ fn top_view(app: &mut SolveApp, size: u32) -> (crate::viewport::Proj, [f32; 3], 
 /// The preview drawn offscreen as `paint_product` draws it, in the preview's own look.
 fn draw_preview(app: &SolveApp, proj: &crate::viewport::Proj, back: [f32; 3], eye: [f32; 4], size: u32) -> Option<Vec<u8>> {
     let (scene, gpu, lights) = crate::render_workspace::preview_scene_for_evidence(app).unwrap_or_else(|e| panic!("{e}"));
-    let look = crate::view_look::product_look_around(app, "render_preview", &scene.bounds);
+    let look = crate::realistic_view::product_look_around(app, &scene.bounds);
     crate::gpu::render_look_offscreen(gpu, proj.vp.to_f32(), back, eye, size, look, Some(lights))
 }
 
@@ -151,7 +203,7 @@ fn spread(px: &[[u8; 3]]) -> f64 {
 }
 
 /// A graph look that reads an image draws the image in the Realistic preview: the checker shows as
-/// dark and light squares on the box's top. The Standard preview draws its base response, flat.
+/// dark and light squares on the box's top. The default preview draws its base response, flat.
 #[test]
 fn a_graph_image_draws_its_pattern_in_the_preview() {
     const SIZE: u32 = 512;
@@ -162,7 +214,7 @@ fn a_graph_image_draws_its_pattern_in_the_preview() {
     let (proj, back, eye) = top_view(&mut app, SIZE);
     let top = Vec3::new(20.0, 15.0, 20.0);
     let Some(standard) = draw_preview(&app, &proj, back, eye, SIZE) else { return };
-    app.ui.render_preview_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let Some(realistic) = draw_preview(&app, &proj, back, eye, SIZE) else { return };
     let (flat, pattern) = (spread(&around(&standard, &proj, top, 30, SIZE)), spread(&around(&realistic, &proj, top, 30, SIZE)));
     eprintln!("top face spread: standard {flat:.1}, realistic {pattern:.1}");
@@ -171,7 +223,7 @@ fn a_graph_image_draws_its_pattern_in_the_preview() {
 }
 
 /// The see-through dome blends in the Realistic preview: a glass box in front of a red one lets the
-/// red through, where the Standard preview draws the glass's base response, opaque.
+/// red through, where the default preview draws the glass's base response, opaque.
 #[test]
 fn a_see_through_graph_blends_in_the_preview() {
     const SIZE: u32 = 512;
@@ -201,7 +253,7 @@ fn a_see_through_graph_blends_in_the_preview() {
         [0, 1, 2].map(|c| px.iter().map(|p| f64::from(p[c])).sum::<f64>() / n)
     };
     let Some(standard) = draw_preview(&app, &proj, back, eye, SIZE) else { return };
-    app.ui.render_preview_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     let Some(realistic) = draw_preview(&app, &proj, back, eye, SIZE) else { return };
     let (s, r) = (mean(&around(&standard, &proj, probe, 3, SIZE)), mean(&around(&realistic, &proj, probe, 3, SIZE)));
     eprintln!("through the glass: standard {s:?}, realistic {r:?}");

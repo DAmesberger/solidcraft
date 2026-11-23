@@ -1187,18 +1187,21 @@ mod tests {
         resources.insert(super::Renderer::new(&device, target, None));
         solidcraft_viewport_egui::bake_studio(&device, &queue, &mut resources, None);
         assert!(resources.get::<solidcraft_viewport_egui::StudioBaking>().is_none(), "no look, no bake");
-        let look = Some(super::ProductLook::default());
-        let installed = |resources: &egui_wgpu::CallbackResources| {
-            resources.get::<super::Renderer>().is_some_and(|r| r.has_studio_environment(super::StudioPreset::default()))
-        };
+        let preset = super::StudioPreset::default();
+        let look = Some(super::ProductLook { studio: preset, ..Default::default() });
+        let stats = resources.get::<super::Renderer>().unwrap().stats();
+        let other = super::DrawStatsHandle::default();
+        let installed =
+            |resources: &egui_wgpu::CallbackResources| resources.get::<super::Renderer>().is_some_and(|r| r.has_studio_environment(preset));
         solidcraft_viewport_egui::bake_studio(&device, &queue, &mut resources, look);
-        assert!(!installed(&resources) && !solidcraft_viewport_egui::studio_ready(), "the first frame only starts the bake");
+        assert!(!installed(&resources) && !solidcraft_viewport_egui::studio_ready(&stats, preset), "the first frame only starts the bake");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while !installed(&resources) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
             solidcraft_viewport_egui::bake_studio(&device, &queue, &mut resources, look);
         }
-        assert!(installed(&resources) && solidcraft_viewport_egui::studio_ready());
+        assert!(installed(&resources) && solidcraft_viewport_egui::studio_ready(&stats, preset));
+        assert!(!solidcraft_viewport_egui::studio_ready(&other, preset), "another renderer still needs the studio");
     }
 
     /// The web app drew its scene at 1x whatever Graphics said (#11622). It now takes its sample

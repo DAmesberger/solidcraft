@@ -275,6 +275,7 @@ pub(crate) mod quick_measure;
 #[cfg(test)]
 mod quick_measure_tests;
 pub(crate) mod quick_menu;
+pub(crate) mod realistic_view;
 pub mod recovery_ui;
 pub mod ref_images;
 pub(crate) mod refused_part;
@@ -394,7 +395,6 @@ pub(crate) mod view_angles;
 pub use solidcraft_ui_kit::view_compass;
 mod view_confirm;
 pub mod view_gizmo;
-pub(crate) mod view_look;
 mod view_memory;
 pub mod view_pick;
 mod view_setups;
@@ -478,11 +478,10 @@ pub struct UiState {
     pub pick_mode: solidcraft_engine::PickMode,
     /// 0: shaded with edges, 1: shaded, 2: wireframe, 3: shaded with hidden edges.
     pub visual_style: u8,
-    /// The modelling view's look (`view.look`): 0 Standard (the default), 1 Realistic. A view
-    /// setting kept with the preferences, never in the design ([`view_look`]).
-    pub view_look: u8,
-    /// The Render workspace preview's own look, as [`UiState::view_look`].
-    pub render_preview_look: u8,
+    /// Studio lighting and appearance graphs in the view being drawn.
+    pub realistic: bool,
+    /// Per-view override of the modeling viewport's neutral studio preference.
+    pub material_finish: Option<bool>,
     /// The user's studios and the Realistic studio, kept with the preferences under their own key
     /// ([`studio_library`]).
     #[serde(skip)]
@@ -529,8 +528,8 @@ impl Default for UiState {
             lasso_select: false,
             pick_mode: Default::default(),
             visual_style: 0,
-            view_look: 0,
-            render_preview_look: 0,
+            realistic: false,
+            material_finish: None,
             studios: Default::default(),
             studio_edit: Default::default(),
             studio_message: None,
@@ -1488,7 +1487,6 @@ impl SolveApp {
             "gpu_path_setup_seconds": self.render_workspace.setup_seconds,
         });
         if let Some(obj) = v.as_object_mut() {
-            obj.extend(view_look::prefs(self).map(|(key, value)| (key.to_owned(), value)));
             obj.insert(studio_library::KEY.into(), studio_library::prefs(self));
         }
         if let Some(layout) = panel_layout
@@ -1551,7 +1549,6 @@ impl SolveApp {
         if let Some(s) = v.get("visual_style").and_then(Value::as_u64) {
             self.ui.visual_style = u8::try_from(s.min(3)).unwrap_or(0);
         }
-        view_look::load(self, &v);
         studio_library::load(self, &v);
         // Browser folders the user opened or closed.
         let keys = |k: &str| -> std::collections::BTreeSet<String> {
@@ -1701,8 +1698,6 @@ impl SolveApp {
             render_workspace::light::validate_visibility(self, &params)?;
         }
         let params = if matches!(id, "render.start" | "render.preflight") { render_workspace::light::filter_request(self, params)? } else { params };
-        // The look is the window's: a toggle or a missing view is resolved here, against it.
-        let params = if id == "view.look" { view_look::resolve(self, params)? } else { params };
         studio_library::before(self, id);
         let selected_before = self.session.selection.clone();
         // File commands may also arrive through shortcuts, scripts, or the control
@@ -1802,6 +1797,30 @@ impl SolveApp {
             Some("component.edit_in_place") => r.and_then(|v| edit_in_place::command_ran(self, &v).map(|queued| with_queued(v, queued))),
             Some("component.finish_edit") => r.and_then(|v| edit_in_place::finish_command(self).map(|queued| with_queued(v, queued))),
             Some(layout) if layout.starts_with("tab.layout.") => r.and_then(|v| view_setups::command(self, layout, v)),
+            Some("view.realistic") => r.and_then(|mut v| {
+                let on = v["on"].as_bool().unwrap_or(!self.ui.realistic);
+                if on && !realistic_view::available(self) {
+                    return Err(self.tr("view.studio.full_graphics").to_owned());
+                }
+                self.ui.realistic = on;
+                v["on"] = json!(on);
+                Ok(v)
+            }),
+            Some("view.material_finish") => r.and_then(|mut v| {
+                if render_workspace::active(self) {
+                    return Err(self.tr("view.material_finish.model_only").to_owned());
+                }
+                let on = v["on"].as_bool().unwrap_or(self.ui.realistic || !safe_graphics::material_finish(self));
+                if on && !realistic_view::available(self) {
+                    return Err(self.tr("view.studio.full_graphics").to_owned());
+                }
+                self.ui.material_finish = Some(on);
+                if on {
+                    self.ui.realistic = false;
+                }
+                v["on"] = json!(on);
+                Ok(v)
+            }),
             Some("view.set_compass") => r.and_then(|v| documents::set_compass(self, v)),
             Some(view) if view.starts_with("tab.view.") => r.and_then(|v| documents::view_command(self, view, v)),
             Some(window) if window.starts_with("tab.window.") || window == "window.options.use_as_default" => {
@@ -1874,7 +1893,6 @@ impl SolveApp {
                         self.ui.visual_style = index;
                     }
                 }
-                "view.look" => view_look::apply(self, v),
                 // The command and the preference are one setting.
                 "diagnostics.validation" => self.preferences.validation = self.session.validation(),
                 "view.grid" => self.ui.show_grid = v.get("on").and_then(Value::as_bool).unwrap_or(!self.ui.show_grid),
@@ -2550,7 +2568,7 @@ impl SolveApp {
             let _ = self.run(id, json!({}));
             return;
         }
-        if id == "view.look" {
+        if matches!(id, "view.realistic" | "view.material_finish") {
             if let Err(why) = self.run(id, json!({})) {
                 self.set_status(why, true);
             }

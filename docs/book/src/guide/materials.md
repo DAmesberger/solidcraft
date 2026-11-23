@@ -1,36 +1,17 @@
 # Materials and the Realistic view
 
-SolidCraft draws a design in one of two ways:
+To see how a surface catches the light, open **Display** in the navigation bar and turn on
+**Realistic**. The selected studio lights the faces. An appearance graph can give them a
+brushed metal finish, a glossy coat or a pattern. Edges, highlights, dimensions and sketches
+keep their modelling colours. In Wireframe, the finish becomes visible when you show faces again.
 
-- **Standard**, the default, shows each appearance's colour under even modelling light. It
-  keeps shapes easy to read while you model.
-- **Realistic** lights the faces in a studio: the materials' reflections, coats, patterns and
-  images show.
+In a Model view, **Material Finish** beside **Realistic** selects the neutral studio finish.
+Each Model view and Render preview has its own Realistic setting. New views start with
+Realistic off. Changes apply to the current view for this session.
 
-The design is the same in both views; only the lighting of the faces changes. A
-**appearance graph** describes how a surface looks in the Realistic view: brushed metal, a
-glossy coat, a woven glass fibre, a printed mark.
-
-## The Realistic view
-
-- Press **Shift+P**, or pick **Realistic** at the bottom of the visual-style menu in the
-  navigation bar. Do the same again to return to Standard. While Realistic is on, the
-  visual-style button shows a small badge.
-- Realistic works with every visual style. Edges follow the style as usual. In Wireframe
-  there are no faces, so it has no visible effect until faces return.
-- What you use to model is drawn exactly as in Standard: selection and hover highlights,
-  edges, sketches, dimensions, the grid, construction geometry, gizmos and section caps.
-  Selecting something never changes a material.
-- The choice belongs to you, not to the design: it is remembered between runs and never saved
-  in a design. Opening someone else's design never switches you into Realistic.
-- The Render workspace preview has its own setting, also Standard by default.
-- The first switch prepares the studio and the materials in the background. Standard stays on
-  screen until they are ready; later switches are immediate.
-- Realistic needs the GPU viewport. A window drawn without one says so and stays Standard.
-
-The command is `view.look` (`{"look": "realistic"}` or `"standard"`; without `look` it
-toggles), for scripts and agents as well. Shift+P can be rebound in File › Keyboard
-Shortcuts.
+The first time you turn Realistic on, the GPU prepares the studio and surfaces in the
+background. The option is available when the GPU viewport is using full graphics.
+Scripts can set it with `view.realistic` and `{"on": true}` or `{"on": false}`.
 
 Appearances without an appearance graph look sensible in Realistic too: a plain colour is lit
 as a satin surface (roughness 0.5, refractive index 1.5), and an appearance with metalness
@@ -132,7 +113,7 @@ A library that holds images is saved as a `.sclib` file rather than `.json`.
   the materials.
 - **Appearances with metalness and roughness (PBR)** are never rewritten into graphs. Only
   **Convert to appearance graph** makes one, when you ask for it.
-- The Standard view, exports (STEP and 3MF colours) and older tools show each appearance's
+- Views with Realistic off, exports (STEP and 3MF colours) and older tools show each appearance's
   colour. For an appearance with a graph, that colour is the graph's base colour, kept up to
   date whenever the graph changes.
 

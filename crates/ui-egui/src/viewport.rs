@@ -7710,10 +7710,13 @@ fn show_view(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ssaa = supersampling(app, ui.ctx(), paint_vp.to_f32(), size_px);
         let ao_samples = ao_samples(app, ui.ctx(), paint_vp.to_f32(), size_px);
         let (clip, clip_hatch) = section_clip(app);
-        // The Realistic view (`view.look`): the same scenes, lit by the studio. The standard
+        // The Realistic option lights this view with the studio. The default
         // picture shows until the studio, baked off the window thread, is installed.
-        let product_look = crate::view_look::product_look_around(app, "model", &shown_body_bounds(app));
-        if product_look.is_some() && !solidcraft_viewport_egui::studio_ready() {
+        let product_look = crate::realistic_view::product_look_around(app, &shown_body_bounds(app));
+        if let Some(look) = product_look
+            && let Some(stats) = &app.viewport.draw_stats
+            && !solidcraft_viewport_egui::studio_ready(stats, look.studio)
+        {
             ui.ctx().request_repaint();
         }
         let frame = Frame {

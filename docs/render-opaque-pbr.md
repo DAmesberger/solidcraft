@@ -187,11 +187,10 @@ remain in effect. Invalid/nonfinite geometry or zero input normals refuse.
 ## Opt-in product look
 
 The GPU viewport has a second, opt-in shading path, the product look. It is the
-renderer underneath the **Realistic** view mode ([appearance graphs](appearance-graph.md) §6):
-`view.look` (Shift+P, or **Realistic** in the navigation bar's visual-style menu) sets it
-for the modelling viewport or, with `view: "render_preview"`, for the Render preview. Each
-view's look is a preference remembered like the visual style, Standard by default and never
-saved in the design; without a GPU viewport the command refuses. In the Realistic look
+renderer underneath the **Realistic** display option ([appearance graphs](appearance-graph.md) §6).
+The Display menu and `view.realistic` set it for the active Model view or Render preview.
+Each new view starts with Realistic off. Turning it on requires the GPU viewport with full
+graphics enabled. With Realistic on,
 opaque faces with a scalar look are lit as a dielectric (their colour, roughness 0.5,
 IOR 1.5) through the same shading as PBR surfaces; selection and hover highlights, edges,
 sketches, faded and see-through surfaces keep the standard drawing, in theme colours. Until

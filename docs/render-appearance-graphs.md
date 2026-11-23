@@ -13,7 +13,7 @@ The library is the catalog v3 `solidcraft-materials` ("SolidCraft materials"). E
 reads a library reads it from the path `builtin:materials`: `library.inspect`,
 `library.apply`, `appearance.graph.update_from_library`, and the Appearance dialog's **Built-in
 materials** button. It is assembled from `assets/appearances/graphs/` when it is read:
-`library.rs` lists each graph's id, the colour its look shows in the standard view, and its
+`library.rs` lists each graph's id, the colour its look shows with Realistic off, and its
 JSON file. Entry ids and revisions follow from the content (`Catalog::builtin`), as for any
 exported library, so a changed graph is a new revision that `library.apply` asks for
 explicitly and `update_from_library` previews. A test applies every entry through
@@ -137,7 +137,7 @@ eight of the built-in graphs by `library.apply` from `builtin:materials`, two of
 their own interface colour through `appearance.assign`, and a brushed Selene housing
 (`SELENE-AP-007`) through `render.library.appearance.apply`, which shows the binding table's
 anisotropy. The label stands on the origin, the axis of its cylindrical projection. Open the
-result and press Shift+P to see it in the Realistic view.
+result and turn on **Display › Realistic** to see it in the Realistic view.
 
 The script names each entry by its id and revision, which follow from the graph's content: a
 changed built-in graph changes them. `the_appearance_graphs_example_builds` (engine tests) runs

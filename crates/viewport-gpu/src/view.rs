@@ -373,6 +373,8 @@ pub struct DrawStats {
     /// The device refused the memory for a frame (#7296): the view is drawn at a lower
     /// resolution, or with its see-through surfaces sorted.
     pub lowered: bool,
+    /// The studio environments currently installed on this renderer.
+    pub installed_studios: [Option<StudioPreset>; ibl::MAX_INSTALLED],
     /// Material-graph shapes or textures were still being prepared (off the frame): the next
     /// frame draws more, so a client asks for another ([`Renderer::wants_redraw`]).
     pub materials_pending: bool,
@@ -5361,7 +5363,14 @@ impl Renderer {
     fn publish(&self, drawn: DrawStats) {
         if let Ok(mut s) = self.stats.lock() {
             let gpu = if s.time_passes { self.timer.as_ref().and_then(|t| t.last) } else { None };
-            *s = DrawStats { lowered: self.lowered, materials_pending: self.materials.wants_redraw(), time_passes: s.time_passes, gpu, ..drawn };
+            *s = DrawStats {
+                lowered: self.lowered,
+                installed_studios: s.installed_studios,
+                materials_pending: self.materials.wants_redraw(),
+                time_passes: s.time_passes,
+                gpu,
+                ..drawn
+            };
         }
     }
 
@@ -5379,9 +5388,14 @@ impl Renderer {
         // The shared BRDF table must also be ready when a Render preview is the first frame.
         self.uniform_bgl.environment.upload(queue);
         self.studios.install(device, queue, env);
-        // A picture kept from before shows the old studio.
-        self.pic.ss_key = None;
-        self.pic.cached = None;
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.installed_studios = self.studios.installed();
+        }
+        // Tiles may already have cached a picture while this studio was baking.
+        for picture in std::iter::once(&mut self.pic).chain(self.parked.values_mut()) {
+            picture.ss_key = None;
+            picture.cached = None;
+        }
     }
 
     /// Whether `preset`'s studio is installed.

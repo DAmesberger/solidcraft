@@ -470,14 +470,13 @@ fn golden_frames() {
         // The window moves to the camera `view.apply` asks for on its next frame; at once here.
         app.follow_view_request(false);
         let view_slug = slug(view.trim_start_matches("Showcase:"));
-        for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
-            app.ui.view_look = look;
-            app.ui.render_preview_look = look;
+        for (look_name, look) in [("standard", false), ("realistic", true)] {
+            app.ui.realistic = look;
             // The modelling view, as `viewport::show` draws it.
             let proj = super::projection(&app, rect);
             let e = proj.cam.eye().to_f32();
             let eye = [e[0], e[1], e[2], if proj.cam.fov > 0.0 { 1.0 } else { 0.0 }];
-            let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app)).map(|l| ProductLook {
+            let product = crate::realistic_view::product_look_around(&app, &super::shown_body_bounds(&app)).map(|l| ProductLook {
                 studio: studio.unwrap_or(l.studio),
                 intensity: intensity.unwrap_or(l.intensity),
                 ..l
@@ -500,7 +499,7 @@ fn golden_frames() {
             let pvp = camera.view_proj(f64::from(size[0]) / f64::from(size[1]), radius).to_f32();
             let ce = camera.eye().to_f32();
             let peye = [ce[0], ce[1], ce[2], if camera.fov > 0.0 { 1.0 } else { 0.0 }];
-            let preview_look = crate::view_look::product_look_around(&app, "render_preview", &scene.bounds).map(|l| ProductLook {
+            let preview_look = crate::realistic_view::product_look_around(&app, &scene.bounds).map(|l| ProductLook {
                 studio: studio.unwrap_or(l.studio),
                 intensity: intensity.unwrap_or(l.intensity),
                 ..l
@@ -571,14 +570,14 @@ fn the_realistic_model_view_draws_the_ground_shadow() {
     app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap_or_else(|e| panic!("{e}"));
     app.viewport.gpu =
         Some(GpuTarget { format: wgpu::TextureFormat::Rgba8UnormSrgb, depth: None, samples: 1, tess: false, oit: false, edges: false });
-    app.ui.view_look = crate::view_look::REALISTIC;
+    app.ui.realistic = true;
     app.fit_view();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0] as f32, size[1] as f32));
     let proj = super::projection(&app, rect);
     let e = proj.cam.eye().to_f32();
     let eye = [e[0], e[1], e[2], if proj.cam.fov > 0.0 { 1.0 } else { 0.0 }];
     let studio = crate::studio_library::builtin_preset("product");
-    let look = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app))
+    let look = crate::realistic_view::product_look_around(&app, &super::shown_body_bounds(&app))
         .map(|l| ProductLook { studio: studio.unwrap_or(l.studio), ..l });
     assert!(look.is_some(), "the Realistic look");
     let clear = {

@@ -288,3 +288,28 @@ fn an_instanced_highlight_draws_after_material_surfaces() {
     let (inside, beside) = (at(&picture, 16, 32), at(&picture, 48, 32));
     assert!(red(&inside) > red(&beside), "the highlight shows: {inside:?} against {beside:?}");
 }
+
+#[test]
+fn installing_a_studio_invalidates_parked_tiles_waiting_for_it() {
+    let (_, device, queue) = match crate::open_headless(crate::test_env::policy()) {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            crate::test_env::skip_unless_required(crate::test_env::required(), &error);
+            return;
+        }
+    };
+    let mut renderer = renderer(&device);
+    let preset = StudioPreset::soft();
+    let mut frame = modelling_frame(1.0);
+    frame.product_look = Some(ProductLook { studio: preset, ..Default::default() });
+    renderer.prepare_view(1, &device, &queue, &frame);
+    let mut other = modelling_frame(1.0);
+    other.product_look = frame.product_look;
+    renderer.prepare_view(2, &device, &queue, &other);
+    assert!(renderer.picture(1).is_some_and(|picture| picture.ss_key.is_some()));
+    assert!(renderer.picture(2).is_some_and(|picture| picture.ss_key.is_some()));
+    renderer.set_studio_environment(&device, &queue, &studio(preset));
+    assert!(renderer.stats().lock().unwrap().installed_studios.contains(&Some(preset)));
+    assert!(renderer.picture(1).is_some_and(|picture| picture.ss_key.is_none()));
+    assert!(renderer.picture(2).is_some_and(|picture| picture.ss_key.is_none()));
+}

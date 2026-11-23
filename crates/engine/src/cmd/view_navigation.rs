@@ -58,7 +58,6 @@ struct RenderBrowserControls {
 }
 
 const RENDER_SELECT: TypedContract<RenderSelect> = TypedContract::new();
-const VIEW_LOOK_CONTRACT: TypedContract<crate::schema::view_navigation::ViewLookParams> = TypedContract::new();
 const STATUS_ITEMS_CONTRACT: TypedContract<crate::schema::view_navigation::StatusItemsParams> = TypedContract::new();
 
 pub static COMMANDS: &[CommandSpec] = &[
@@ -90,10 +89,14 @@ CommandSpec::new("view.visual_style", "Visual Style", crate::checked!("view.visu
     .icon("style").noundo().doc_only()
     .contract(&VISUAL_STYLE_CONTRACT).output(output_schema_for::<VisualStyleResult>)
     .params("style: shaded_with_edges|shaded|wireframe|shaded_with_hidden_edges → style, index (0..3 in that order)"),
-CommandSpec::new("view.look", "Realistic View", crate::checked!("view.look", view_look))
-    .icon("style").key("Shift+P").noundo().doc_only()
-    .contract(&VIEW_LOOK_CONTRACT).output(output_schema_for::<crate::schema::view_navigation::ViewLookResult>)
-    .params("look?: standard|realistic (omitted: toggle the view's look; needs a window), view?: model|render_preview (omitted: the active view) → look, view; a view setting remembered with the preferences, never saved in the design; refused without a GPU viewport"),
+CommandSpec::new("view.realistic", "Realistic View", crate::checked!("view.realistic", realistic))
+    .icon("style").noundo().doc_only()
+    .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
+    .params("on?: bool (omitted: toggle) → on?; draw this view with the selected studio and appearance graphs"),
+CommandSpec::new("view.material_finish", "Material Finish", crate::checked!("view.material_finish", material_finish))
+    .icon("style").noundo().doc_only()
+    .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
+    .params("on?: bool (omitted: toggle) → on?; show the neutral studio finish in this modeling view"),
 CommandSpec::new("view.grid", "Grid", crate::checked!("view.grid", grid))
     .icon("style").noundo().doc_only()
     .contract(&DISPLAY_TOGGLE_CONTRACT).output(output_schema_for::<DisplayToggleResult>)
@@ -364,17 +367,12 @@ fn visual_style(_s: &mut Session, p: &Value) -> Result<Value> {
     typed_reply(cmd, VisualStyleResult { style, index: style.index(), param_warnings: Vec::new() })
 }
 
-fn view_look(_s: &mut Session, p: &Value) -> Result<Value> {
-    use crate::schema::view_navigation::{ViewLookParams, ViewLookResult};
-    let cmd = "view.look";
-    let request: ViewLookParams = serde_json::from_value(p.clone()).map_err(|e| bad(cmd, e.to_string()))?;
-    // The look is the window's: the UI resolves a toggle against the view's current look and
-    // the active view before it runs this. A session without a window has no view to toggle.
-    let Some(look) = request.look else {
-        return Err(bad(cmd, "toggling needs a view whose look it changes; name the look (standard or realistic)"));
-    };
-    let reply = ViewLookResult { look, view: request.view.unwrap_or_default(), param_warnings: Vec::new() };
-    serde_json::to_value(reply).map_err(|e| bad(cmd, e.to_string()))
+fn realistic(_s: &mut Session, p: &Value) -> Result<Value> {
+    view_toggle(p, "view.realistic", "on")
+}
+
+fn material_finish(_s: &mut Session, p: &Value) -> Result<Value> {
+    view_toggle(p, "view.material_finish", "on")
 }
 
 fn view_toggle(p: &Value, cmd: &str, key: &str) -> Result<Value> {

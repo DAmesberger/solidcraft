@@ -1,30 +1,51 @@
 {
-  "en": {
-    "navbar.realistic": "Realistic",
-    "view.look.no_gpu": "The Realistic view needs a GPU viewport; this window draws without one."
+  "ar": {
+    "cmd.view_material_finish": "تشطيب السطح",
+    "cmd.view_realistic": "عرض واقعي",
+    "navbar.realistic": "واقعي",
+    "view.material_finish.model_only": "يتوفر تشطيب السطح في عروض النموذج.",
+    "view.studio.full_graphics": "تتطلب إضاءة الاستوديو منفذ عرض GPU مع تفعيل الرسومات الكاملة."
   },
   "de": {
+    "cmd.view_material_finish": "Oberflächenfinish",
+    "cmd.view_realistic": "Realistische Ansicht",
     "navbar.realistic": "Realistisch",
-    "view.look.no_gpu": "Die realistische Ansicht braucht einen GPU-Viewport; dieses Fenster zeichnet ohne."
+    "view.material_finish.model_only": "Oberflächenfinish ist in Modellansichten verfügbar.",
+    "view.studio.full_graphics": "Studiobeleuchtung benötigt eine GPU-Ansicht mit voller Grafik."
   },
-  "ar": {
-    "navbar.realistic": "واقعي",
-    "view.look.no_gpu": "يحتاج العرض الواقعي إلى منفذ عرض يعمل بوحدة معالجة الرسومات؛ هذه النافذة ترسم بدونها."
+  "en": {
+    "cmd.view_material_finish": "Material Finish",
+    "cmd.view_realistic": "Realistic View",
+    "navbar.realistic": "Realistic",
+    "view.material_finish.model_only": "Material Finish is available in Model views.",
+    "view.studio.full_graphics": "Studio lighting requires a GPU viewport with full graphics enabled."
   },
   "he": {
+    "cmd.view_material_finish": "גימור חומר",
+    "cmd.view_realistic": "תצוגה מציאותית",
     "navbar.realistic": "מציאותי",
-    "view.look.no_gpu": "התצוגה המציאותית דורשת אזור תצוגה עם מעבד גרפי; חלון זה מצייר בלעדיו."
+    "view.material_finish.model_only": "גימור חומר זמין בתצוגות מודל.",
+    "view.studio.full_graphics": "תאורת סטודיו דורשת תצוגת GPU עם גרפיקה מלאה."
   },
   "ja": {
+    "cmd.view_material_finish": "マテリアル仕上げ",
+    "cmd.view_realistic": "リアルな表示",
     "navbar.realistic": "リアル",
-    "view.look.no_gpu": "リアルな表示には GPU ビューポートが必要です。このウィンドウは GPU なしで描画しています。"
+    "view.material_finish.model_only": "マテリアル仕上げはモデルビューで利用できます。",
+    "view.studio.full_graphics": "スタジオ照明にはフルグラフィックスを有効にした GPU ビューポートが必要です。"
   },
   "vi": {
+    "cmd.view_material_finish": "Hoàn thiện vật liệu",
+    "cmd.view_realistic": "Khung nhìn chân thực",
     "navbar.realistic": "Chân thực",
-    "view.look.no_gpu": "Khung nhìn chân thực cần khung nhìn dùng GPU; cửa sổ này đang vẽ không có GPU."
+    "view.material_finish.model_only": "Hoàn thiện vật liệu khả dụng trong khung nhìn mô hình.",
+    "view.studio.full_graphics": "Ánh sáng studio cần khung nhìn GPU với đồ họa đầy đủ."
   },
   "zh": {
+    "cmd.view_material_finish": "材质表面效果",
+    "cmd.view_realistic": "真实感视图",
     "navbar.realistic": "真实感",
-    "view.look.no_gpu": "真实感视图需要 GPU 视口；此窗口在没有 GPU 的情况下绘制。"
+    "view.material_finish.model_only": "材质表面效果可用于模型视图。",
+    "view.studio.full_graphics": "摄影棚照明需要启用完整图形功能的 GPU 视口。"
   }
 }

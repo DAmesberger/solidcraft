@@ -539,6 +539,8 @@ fn swap_in(app: &mut SolveApp, mut slot: DocSlot, presenting: bool) -> DocSlot {
     if let Some(mut look) = slot.navigation.remove(&incoming_view) {
         look.swap(app);
     } else {
+        app.ui.realistic = false;
+        app.ui.material_finish = None;
         crate::viewport::ViewScenes::default().swap(&mut app.viewport);
     }
     app.agent_chat.swap_document(&mut slot.agent_chat);
@@ -781,6 +783,8 @@ struct ViewOptions {
     up_axis: solidcraft_viewport::UpAxis,
     auto_ortho_faces: bool,
     visual_style: u8,
+    realistic: bool,
+    material_finish: Option<bool>,
     view_angles_lock_yaw: bool,
     view_angles_lock_pitch: bool,
     view_angles_lock_roll: bool,
@@ -803,6 +807,8 @@ impl ViewOptions {
             up_axis: ui.up_axis,
             auto_ortho_faces: ui.auto_ortho_faces,
             visual_style: ui.visual_style,
+            realistic: ui.realistic,
+            material_finish: ui.material_finish,
             view_angles_lock_yaw: ui.view_angles_lock_yaw,
             view_angles_lock_pitch: ui.view_angles_lock_pitch,
             view_angles_lock_roll: ui.view_angles_lock_roll,
@@ -817,6 +823,8 @@ impl ViewOptions {
         std::mem::swap(&mut self.perspective, &mut ui.perspective);
         std::mem::swap(&mut self.up_axis, &mut ui.up_axis);
         std::mem::swap(&mut self.auto_ortho_faces, &mut ui.auto_ortho_faces);
+        std::mem::swap(&mut self.realistic, &mut ui.realistic);
+        std::mem::swap(&mut self.material_finish, &mut ui.material_finish);
         std::mem::swap(&mut self.visual_style, &mut ui.visual_style);
         std::mem::swap(&mut self.view_angles_lock_yaw, &mut ui.view_angles_lock_yaw);
         std::mem::swap(&mut self.view_angles_lock_pitch, &mut ui.view_angles_lock_pitch);
@@ -825,6 +833,13 @@ impl ViewOptions {
 }
 
 impl ViewLook {
+    fn new_view(ui: &crate::UiState) -> Self {
+        let mut view = Self::from_ui(ui);
+        view.options.realistic = false;
+        view.options.material_finish = None;
+        view
+    }
+
     fn from_ui(ui: &crate::UiState) -> Self {
         Self { options: ViewOptions::from_ui(ui), motion: ViewMotion::default(), scenes: Default::default() }
     }
@@ -912,7 +927,7 @@ impl ViewMotion {
 
 fn switch_navigation(app: &mut SolveApp, before: u64, id: u64) {
     crate::select_other::close(app);
-    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::from_ui(&app.ui));
+    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::new_view(&app.ui));
     look.swap(app);
     // A single view always uploads to slot zero, regardless of which sub-tab is shown.
     if !app.docs.views.is_tiled() {
@@ -988,7 +1003,7 @@ pub(crate) fn detach_view(app: &mut SolveApp, id: u64) -> Option<ViewSet> {
 }
 
 fn park_navigation(app: &mut SolveApp, id: u64) {
-    let mut look = ViewLook::from_ui(&app.ui);
+    let mut look = ViewLook::new_view(&app.ui);
     look.swap(app);
     app.docs.navigation.insert(id, look);
 }
@@ -1093,7 +1108,7 @@ pub(crate) fn with_view_look<T>(app: &mut SolveApp, id: u64, draw: impl FnOnce(&
     }
     let Some(view) = app.docs.views.get(id).cloned() else { return draw(app) };
     let shown = (app.cam, app.session.inspect());
-    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::from_ui(&app.ui));
+    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::new_view(&app.ui));
     look.swap(app);
     show_look(app, &view);
     let previous_compass = app.viewport.compass_view.replace(id);
@@ -1116,7 +1131,7 @@ pub(crate) fn with_sketch_camera<T>(app: &mut SolveApp, id: u64, change: impl Fn
         return Some(change(app));
     }
     let shown = app.cam;
-    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::from_ui(&app.ui));
+    let mut look = app.docs.navigation.remove(&id).unwrap_or_else(|| ViewLook::new_view(&app.ui));
     look.swap(app);
     app.cam = view.spec.map_or(shown, |spec| spec.camera);
     let compass = app.viewport.compass_view.replace(id);
@@ -1213,7 +1228,7 @@ fn restore_views_in(app: &mut SolveApp, path: &str, dir: &std::path::Path) {
         .views()
         .iter()
         .map(|view| {
-            let mut look = ViewLook::from_ui(&app.ui);
+            let mut look = ViewLook::new_view(&app.ui);
             if view.kind == ViewKind::Model
                 && let Some(spec) = view.spec
             {
@@ -1327,7 +1342,8 @@ pub fn view_rename_start(app: &mut SolveApp, id: u64) -> bool {
 /// Copy the view `id` of the shown design next to it and show the copy.
 pub fn view_duplicate(app: &mut SolveApp, id: u64) -> Option<u64> {
     let state = if id == app.docs.views.active().id { Some(app.session.inspect()) } else { app.docs.inspect.get(&id).cloned() };
-    let options = app.docs.navigation.get(&id).map(|look| look.options);
+    let options =
+        if id == app.docs.views.active().id { Some(ViewOptions::from_ui(&app.ui)) } else { app.docs.navigation.get(&id).map(|look| look.options) };
     let copy = change_views(app, |views| views.duplicate(id))?;
     if let Some(mut options) = options {
         options.swap(&mut app.ui);

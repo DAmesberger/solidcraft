@@ -69,9 +69,9 @@ fn viewport_frame_costs() {
         app.follow_view_request(false);
         let base_cam = app.cam;
         for ssaa in [1.0f32, 2.0] {
-            for (look_name, look) in [("standard", crate::view_look::STANDARD), ("realistic", crate::view_look::REALISTIC)] {
-                app.ui.view_look = look;
-                let product = crate::view_look::product_look_around(&app, "model", &super::shown_body_bounds(&app));
+            for (look_name, look) in [("standard", false), ("realistic", true)] {
+                app.ui.realistic = look;
+                let product = crate::realistic_view::product_look_around(&app, &super::shown_body_bounds(&app));
                 let mut renderer = Renderer::new(&device, target, None);
                 if let Some(look) = product {
                     renderer.set_studio_environment(&device, &queue, &StudioEnvironment::bake(look.studio));

@@ -134,7 +134,7 @@ pub(crate) fn pbr_graph(color: [u8; 3], pbr: &solidcraft_engine::doc::pbr_appear
 
 /// Whether the model view draws graph looks: the Realistic view, with a GPU.
 pub(crate) fn active(app: &crate::SolveApp) -> bool {
-    app.viewport.gpu.is_some() && crate::view_look::current(app, "model") == crate::view_look::REALISTIC
+    crate::realistic_view::enabled(app)
 }
 
 /// The graph faces of body `b` into `sc.graphs`: each face `drawn(face)` keeps whose own look,

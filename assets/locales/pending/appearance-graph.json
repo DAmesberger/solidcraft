@@ -12,8 +12,7 @@
     "cmd.appearance_graph_update_from_library": "Update Appearance Graph From Library",
     "cmd.appearance_graph_validate": "Validate Appearance Graph",
     "cmd.appearance_texture_add": "Add Texture",
-    "cmd.appearance_texture_list": "List Textures",
-    "cmd.view_look": "Realistic View"
+    "cmd.appearance_texture_list": "List Textures"
   },
   "de": {
     "cmd.appearance_graph_convert": "In Materialgraph umwandeln",
@@ -28,8 +27,7 @@
     "cmd.appearance_graph_update_from_library": "Materialgraph aus Bibliothek aktualisieren",
     "cmd.appearance_graph_validate": "Materialgraph prüfen",
     "cmd.appearance_texture_add": "Textur hinzufügen",
-    "cmd.appearance_texture_list": "Texturen auflisten",
-    "cmd.view_look": "Realistische Ansicht"
+    "cmd.appearance_texture_list": "Texturen auflisten"
   },
   "ar": {
     "cmd.appearance_graph_convert": "تحويل إلى رسم بياني للمادة",
@@ -44,8 +42,7 @@
     "cmd.appearance_graph_update_from_library": "تحديث رسم المادة البياني من المكتبة",
     "cmd.appearance_graph_validate": "التحقق من رسم المادة البياني",
     "cmd.appearance_texture_add": "إضافة نسيج",
-    "cmd.appearance_texture_list": "سرد الأنسجة",
-    "cmd.view_look": "عرض واقعي"
+    "cmd.appearance_texture_list": "سرد الأنسجة"
   },
   "he": {
     "cmd.appearance_graph_convert": "המרה לגרף חומר",
@@ -60,8 +57,7 @@
     "cmd.appearance_graph_update_from_library": "עדכון גרף חומר מהספרייה",
     "cmd.appearance_graph_validate": "אימות גרף חומר",
     "cmd.appearance_texture_add": "הוספת טקסטורה",
-    "cmd.appearance_texture_list": "רשימת טקסטורות",
-    "cmd.view_look": "תצוגה מציאותית"
+    "cmd.appearance_texture_list": "רשימת טקסטורות"
   },
   "ja": {
     "cmd.appearance_graph_convert": "マテリアルグラフに変換",
@@ -76,8 +72,7 @@
     "cmd.appearance_graph_update_from_library": "ライブラリからマテリアルグラフを更新",
     "cmd.appearance_graph_validate": "マテリアルグラフを検証",
     "cmd.appearance_texture_add": "テクスチャを追加",
-    "cmd.appearance_texture_list": "テクスチャの一覧",
-    "cmd.view_look": "リアルな表示"
+    "cmd.appearance_texture_list": "テクスチャの一覧"
   },
   "vi": {
     "cmd.appearance_graph_convert": "Chuyển thành đồ thị vật liệu",
@@ -92,8 +87,7 @@
     "cmd.appearance_graph_update_from_library": "Cập nhật đồ thị vật liệu từ thư viện",
     "cmd.appearance_graph_validate": "Kiểm tra đồ thị vật liệu",
     "cmd.appearance_texture_add": "Thêm kết cấu",
-    "cmd.appearance_texture_list": "Liệt kê kết cấu",
-    "cmd.view_look": "Khung nhìn chân thực"
+    "cmd.appearance_texture_list": "Liệt kê kết cấu"
   },
   "zh": {
     "cmd.appearance_graph_convert": "转换为材质图",
@@ -108,7 +102,6 @@
     "cmd.appearance_graph_update_from_library": "从库更新材质图",
     "cmd.appearance_graph_validate": "验证材质图",
     "cmd.appearance_texture_add": "添加纹理",
-    "cmd.appearance_texture_list": "列出纹理",
-    "cmd.view_look": "真实感视图"
+    "cmd.appearance_texture_list": "列出纹理"
   }
 }

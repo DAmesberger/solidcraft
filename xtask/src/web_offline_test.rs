@@ -128,13 +128,13 @@ pub fn run_api(site: &str) -> Result<(), String> {
 /// `cargo xtask web-frame`: one real browser frame of a saved design in a web build (evidence for
 /// the WebGL2 path, not a check). The design is served next to the site and opened with `?open=`;
 /// `?webgl` forces WebGL2 unless `webgpu` is asked for. After the optional saved `view` and the
-/// `look`, it waits `settle` seconds for the studio bake and the material shapes, then writes a
+/// Realistic setting, it waits `settle` seconds for the studio bake and the material shapes, then writes a
 /// screenshot of the page and prints the adapter and the viewport's rectangle.
 pub struct FrameRequest<'a> {
     pub site: &'a str,
     pub design: &'a str,
     pub out: &'a str,
-    pub look: &'a str,
+    pub realistic: bool,
     pub view: Option<&'a str>,
     pub size: (u32, u32),
     pub settle: u64,
@@ -174,8 +174,10 @@ pub fn run_frame(r: &FrameRequest) -> Result<(), String> {
         let v = cdp.eval(&format!("window.solidcraft.execute('view.apply', {{view: {}}})", quote(view)))?;
         println!("web-frame: view.apply {v}");
     }
-    let v = cdp.eval(&format!("window.solidcraft.execute('view.look', {{look: {}, view: 'model'}})", quote(r.look)))?;
-    println!("web-frame: view.look {v}");
+    let v = cdp.eval(&format!("window.solidcraft.execute('view.realistic', {{on: {}}})", r.realistic))?;
+    if v["on"].as_bool() != Some(r.realistic) {
+        return Err(format!("web-frame: view.realistic returned {v}"));
+    }
     std::thread::sleep(Duration::from_secs(r.settle));
     let ui = cdp.eval("window.solidcraft.request('ui.inspect')")?;
     println!(

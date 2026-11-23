@@ -6,7 +6,7 @@
 //! stream shades the opaque graph and `pbr` faces over them, as in the modelling view. See-through
 //! graph faces (a transmission or an opacity below 1) are drawn only by the stream, blended, so
 //! the preview leaves them out of its own triangles. Faces the appearance-assign preview recolours
-//! keep the preview's look: the stream leaves them alone. The Standard preview builds none of this.
+//! keep the preview's look: the stream leaves them alone. The default preview skips the graph stream.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -61,11 +61,11 @@ impl PreviewGraphs {
 
 /// Whether the Render preview draws graph looks: its own look is Realistic, with a GPU.
 pub(crate) fn active(app: &SolveApp) -> bool {
-    app.viewport.gpu.is_some() && crate::view_look::current(app, "render_preview") == crate::view_look::REALISTIC
+    crate::realistic_view::enabled(app)
 }
 
 /// The stream for `scene`, the preview's product scene, in the Realistic look; `None` in the
-/// Standard look. `preview`'s bodies and faces (the appearance being tried on) are left to the
+/// default preview. `preview`'s bodies and faces (the appearance being tried on) are left to the
 /// scene's own drawing.
 pub(crate) fn build(app: &SolveApp, scene: &ProductScene, preview: Option<&crate::render_workspace::assign::Preview>) -> Option<PreviewGraphs> {
     if !active(app) {

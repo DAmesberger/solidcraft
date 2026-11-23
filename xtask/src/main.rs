@@ -147,7 +147,7 @@ commands:
                   write the web build's service worker (sw.js: offline use, updates); run by
                   Trunk after release builds of apps/solidcraft-web, or on a built site in DIR
   web-api-test [--site DIR]  Test the command API in a real browser build (default: dist/web)
-  web-frame --design FILE --out PNG [--site DIR] [--look standard|realistic] [--view NAME]
+  web-frame --design FILE --out PNG [--site DIR] [--no-realistic] [--view NAME]
             [--size WxH] [--settle SECONDS] [--webgpu]
                   one browser frame of a saved design in a web build (WebGL2 unless --webgpu)
   render-parity --base REV [--realistic-base REV] [--tolerance N] [--out DIR] [--keep]
@@ -235,7 +235,7 @@ fn main() -> ExitCode {
                     site: arg("--site").unwrap_or("dist/web"),
                     design,
                     out,
-                    look: arg("--look").unwrap_or("realistic"),
+                    realistic: !rest.contains(&"--no-realistic"),
                     view: arg("--view"),
                     size,
                     settle: arg("--settle").and_then(|s| s.parse().ok()).unwrap_or(15),

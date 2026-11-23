@@ -28,7 +28,7 @@ agent-hours.
 
 Three founder requirements bind the whole note:
 
-- the standard view stays the default;
+- each new view starts with Realistic off;
 - files without appearance graphs open and save exactly as today;
 - appearance graphs are optional, needed only for realistic rendering.
 
@@ -55,8 +55,7 @@ This note replaces that path with **one** generic, data-only material descriptio
 - It renders the same in the native and the WebGL2/wasm builds.
 - Everything is generic CAD material data. No product-specific fields, nodes or panels.
 - It is **optional**. A design without graphs is the same file as today (§4.4). Graphs
-  only show in the realistic view mode (§6). The standard view, which stays the default
-  for modelling, shows each look's colour as today.
+  show when the view's Realistic option is on (§6). With it off, the view shows each look's colour.
 
 What it is not: a general shading language, a MaterialX runtime, or a node editor in the
 first version (see §7.1). A sandboxed custom-WGSL node is a possible later extension (§3.9).
@@ -84,8 +83,8 @@ widget crate is ever considered (§7.1), its licence must be MIT/Apache/BSD, che
 | **Graph** | A design-owned, named material definition: nodes, typed connections, one output surface node, and an optional *interface*. Stored once in the design, referenced by looks. |
 | **Node** | One operation from the fixed v1 catalogue (§3). It has typed **inputs** (a constant, a connection, or an interface reference) and compile-time **params** (enums and small integers that change the generated code). |
 | **Interface** | Up to 32 named, typed inputs a graph exposes (MaterialX's nodegraph interface). A look can override them, so one "Anodised aluminium" graph serves every colour. |
-| **Look** | Today's record, plus an optional `graph` (an id) and `values` (interface overrides). The look's `color` remains the colour the standard view, exports and old consumers show. |
-| **View look** | A viewport's `standard` (default, today's renderer) or `realistic` drawing, independent of its visual style (§6). Not saved in the design. |
+| **Look** | Today's record, plus an optional `graph` (an id) and `values` (interface overrides). The look's `color` remains the display colour used in modelling, exports and older readers. |
+| **Realistic** | A per-view display option that lights faces with the studio (§6). New views start with it off. |
 | **Shape** | Everything about a graph that changes generated code: node kinds, params, topology, which inputs are connected and which are constants, texture colour spaces. Values never belong to the shape. |
 | **Base response** | A static read of the graph's output node: constant inputs as they are, driven inputs at their declared `fallback`. It is an `OpaqueSurface` (§5.7), computed without evaluating anything. It gives the display `color` and the fallback while a shape compiles. |
 
@@ -445,7 +444,7 @@ Texture assets live beside them and are stored as container blobs.
   unchanged form, read and written as today. Looks without either keep scalar shading.
 - `appearances.graphs` and `appearances.textures` are omitted when empty, so a design
   without graphs serialises exactly as today.
-- A look's `color` stays required. With a graph it is the colour the standard view shows
+- A look's `color` stays required. With a graph it is the colour shown when Realistic is off
   (the base response's base colour, sRGB8), which the assigning command computes. It is also what
   STEP/3MF colour export and older readers' tools use.
 - `source` is generic provenance (library id, entry id, revision). It is optional and
@@ -865,7 +864,7 @@ They will be measured with the existing `gpu` perf harness and recorded in
   - *Transmission:* see §5.6.
 - The graph's `Surface` carries a coat normal separate from the base normal, which today's
   look cannot express (orange peel now perturbs the base normal too).
-- **In the standard view mode** (§6, the default), nothing of this runs. A look draws its
+- **With Realistic off** (§6, the default), nothing of this runs. A look draws its
   `color` exactly as today, and the existing `cpu-product` parity tests stay valid.
   Patterns, coats and textures show only in the realistic view.
 
@@ -877,8 +876,8 @@ They will be measured with the existing `gpu` perf harness and recorded in
 | Texture not decoded yet or failed | The image node's `default` colour, with alpha 0 (§4.3). |
 | GPU path tracer | The same IR through the path back end (§5.7); unsupported inputs approximated and reported. |
 | CPU ray tracer, CPU product host (out of scope) | Today's behaviour: the display `color` for a graph look, the `pbr` values for a `pbr` look. |
-| No GPU (the CPU viewport renderer) | The realistic view is unavailable: the switch is disabled with a tooltip and `view.look` refuses with "the Realistic view needs a GPU". The standard view works as today. |
-| Standard view mode, STEP/3MF colour, Drawing | The look's `color` (for a graph, the base response's colour). |
+| CPU viewport or safe graphics | Realistic is disabled. Its tooltip explains the GPU requirement. |
+| Realistic off, STEP/3MF colour, Drawing | The look's `color` (for a graph, the base response's colour). |
 | `transmission_weight` > 0 in the real-time view | Drawn as today's see-through glass bodies, tinted by `transmission_color`; no refraction. In the Realistic view the light behind keeps only what the interface does not reflect (1 − F at the view angle), so a glossy dome's reflection does not add to an undimmed background and clip. |
 | A graph with inputs a GPU target lacks | The viewport supports every v1 input. The path tracer approximates the ones it has no lobe for, and reports each in `render.preflight` and the job result; nothing is dropped silently (O10). |
 
@@ -1152,7 +1151,7 @@ values for the founder to confirm, O15):
 | Materials distinguishable | brushed vs polished metal, coated vs uncoated plastic: mean colour difference ≥ 6/255, or a visibly different highlight footprint |
 | Sample Plate regression | top and side medians of the metal plate both in [40, 220]/255 (today: 255 and about 10) |
 | WebGL2 matches native | browser frames of the same scene: mean channel error ≤ 2/255, 99th percentile ≤ 8/255 |
-| Standard look untouched | standard-look frames bit-identical to the build before the package |
+| Realistic off | default frames bit-identical to the build before the package |
 
 **Why the two exceptions.**
 
@@ -1173,69 +1172,26 @@ check (`GOLDEN_CHECK=1`) and the lighting review set.
 are part of the completion evidence, and **nothing goes upstream before the founder approves
 them**. The numeric bar keeps them from regressing afterwards.
 
-## 6. Realistic view mode
+## 6. Realistic lighting
 
-For modelling, realistic rendering mostly distracts from the shapes. The **standard** view, which
-is today's renderer, therefore stays the default. **Realistic** is an additional way to
-view the same model, and it can be switched on and off at any time.
+### 6.1 The display option
 
-**Names.** The user-facing name is **Realistic**, following common CAD usage: the
-"Realistic" visual style in Inventor and AutoCAD, SolidWorks' RealView and Blender's
-"Material Preview". Command titles, the menu row, locale strings (`assets/locales/pending/`)
-and the docs all say "Realistic". "Photoreal" and "product look" remain only as references
-to the renderer branch's history (`upstream-photoreal-look`, `Frame::product_look`).
+The navigation bar's **Display** menu offers **Realistic** next to **Material Finish** in
+Model views. The Render preview has its own Realistic option. Each view starts with it
+off and keeps its selection while switching tabs and tiles. This is runtime view state.
+The command `view.realistic` accepts `{"on": true}` or `{"on": false}`. Omitting
+`on` toggles the active view. It has no default shortcut.
 
-The default is called **Standard**. Solidcraft's visual-style names ("Shaded with edges",
-"Shaded", "Wireframe", "Shaded with hidden edges") describe faces and edges, not lighting.
-Their natural word, "Shaded", is already a visual style, so reusing it would be ambiguous
-("Shaded" style in "Shaded" look).
-
-### 6.1 The switch
-
-- **Model.** A viewport has two independent settings:
-  - its existing **visual style**: shaded with edges, shaded, wireframe or shaded with
-    hidden edges (`view.visual_style`);
-  - its new **look**: `standard` (default) or `realistic`.
-
-  Edges follow the visual style in both looks. In Wireframe there are no faces, so the look
-  has no visible effect; it stays set for when faces return.
-- **Command.** `view.look`, with input `{look?: "standard" | "realistic", view?: "model" |
-  "render_preview"}` and output `{look, view}`.
-  - Without `look` it toggles; without `view` it acts on the active view.
-  - Like `view.visual_style`, it is `noundo` and `doc_only`, has input and output schemas,
-    and is the same command for the UI, the CLI and MCP.
-  - The view's state query reports the look alongside the visual style.
-- **Key.** **Shift+R** is taken: it is `edit.repeat` ("Repeat Last Command",
-  `crates/engine/src/cmd/edit.rs`). The default is therefore **Shift+P** (P for picture).
-  It is free in today's command table and not on
-  `keymap.rs`'s reserved list, and it can be rebound in Keyboard Shortcuts like any command.
-- **Where it lives.** It sits in the navigation bar's visual-style menu, as a "Realistic"
-  check row below the four styles. When realistic is on, the slot's icon shows a small
-  badge. It is also in the command palette. It adds no toolbar of its own.
-- **Not saved in the design.** Solidcraft's convention for view settings is the visual
-  style: a viewport UI preference in the app's preferences JSON (`SolveApp::prefs`,
-  `visual_style`), never in the design or its undo history. The look follows that
-  convention exactly:
-  - it is stored as `view_look`, remembered between runs (decision O7), and `standard` by
-    default; Restore Defaults returns it to standard;
-  - opening a design never changes it, so a file from someone else never switches a user
-    into the realistic view;
-  - one viewport serves all design tabs, as visual style does. The Render workspace preview
-    is a separate view with its own look. If Solidcraft gains split views, each view carries
-    its own look as it would its own visual style.
-- **The Render preview's Realistic look** draws graph and `pbr` looks through the same material
-  stream as the modelling view (`render_preview_graphs`, `viewport_graphs::add_body` over the
-  product scene's bodies), lit by the studio and the preview's own product lights: patterns,
-  images and coats show, and see-through graph faces (a dome of clear silicone) are drawn by the
-  stream alone, blended, so the preview leaves them out of its own blocks. Faces the
-  appearance-assign preview recolours keep the tried look. The Standard preview builds none of
-  this; its scene and key are as before.
+The visual style controls which faces and edges are visible. In Wireframe, the studio
+lighting becomes visible again when the view draws faces. With Realistic on, the Render
+preview draws patterned, coated and transparent faces through the same graph stream as
+the modelling view. Appearance-assign previews retain the appearance being tried.
 
 ### 6.2 Realistic keeps modelling clear
 
 The realistic view changes how **faces** are lit: the studio IBL, appearance graphs, coat, ambient
 occlusion, PBR Neutral tone mapping and dither of the product look. Everything used to model
-is drawn as in the standard view, composited **after** tone mapping in display space with
+uses the usual modelling colours, composited **after** tone mapping in display space with
 the theme's colour tokens, so neither exposure nor the tone curve alters it. That covers:
 
 - selection and hover highlights of faces, edges, vertices, bodies and components;
@@ -1262,30 +1218,12 @@ The tests are pixel comparisons in both looks:
 - the grid and dimensions are unchanged;
 - a face selected in the realistic view shows the token colour exactly.
 
-### 6.3 The standard view is unaffected
+### 6.3 Resource use
 
-- The standard look is today's renderer, unchanged. A look shows its `color` and opacity
-  as today, whether it has a `pbr` response, a graph or neither.
-- The standard look compiles no graph pipeline, decodes no texture, bakes no studio and
-  allocates no material page. All of that starts the first time a view switches to
-  realistic: the studio bakes off the window thread, as now, and the standard picture shows
-  until it is ready.
-- Test: a design with graphs and the same design with the graphs removed (same colours)
-  give bit-identical standard frames and equal GPU memory.
-- Switching rebuilds no geometry. Both looks draw the same tessellation. The realistic view's
-  vertex streams are built from it the first time, off the window thread, and kept. After
-  that, a switch takes one frame. A first switch on a model of one million triangles should
-  take at most 300 ms off the window thread. Both figures are targets.
-
-### 6.4 The existing graphics preference
-
-The fork's opt-in, **Preferences > Graphics > Studio lighting in the Render preview**
-(`render_studio_look`), is **replaced** by the view mode. The Render workspace preview gets
-its look from `view.look` with `view: "render_preview"`, still `standard` by default. The
-preference is not part of the upstream package. A fork user's saved `render_studio_look:
-true` becomes the render preview's `realistic` once, and the key is then dropped. The
-embedding API `Frame::product_look` remains the mechanism underneath: the view mode sets
-it, and programs that embed `solidcraft-gpu` keep using it directly.
+A view with Realistic off uses the appearance's display colour and opacity. Studio baking,
+image decoding and graph compilation begin when the first view requests them. Switching
+uses the existing tessellation. The embedding API exposes studio lighting through
+`Frame::product_look`.
 
 ## 7. Editing and commands
 

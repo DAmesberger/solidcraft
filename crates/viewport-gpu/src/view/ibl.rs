@@ -548,7 +548,7 @@ pub(crate) fn material_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 /// Most studios the renderer keeps on the GPU at once.
-const MAX_INSTALLED: usize = 8;
+pub(super) const MAX_INSTALLED: usize = 8;
 
 /// The renderer's studios: the stand-in and the studios uploaded so far (one per rig, at most
 /// [`MAX_INSTALLED`]).
@@ -576,6 +576,10 @@ impl Studios {
     /// Whether `preset` is on the GPU.
     pub(crate) fn has(&self, preset: StudioPreset) -> bool {
         self.baked.iter().any(|(p, _)| *p == preset)
+    }
+
+    pub(super) fn installed(&self) -> [Option<StudioPreset>; MAX_INSTALLED] {
+        std::array::from_fn(|i| self.baked.get(i).map(|(p, _)| *p))
     }
 
     /// Upload `env`, replacing the same preset's studio.

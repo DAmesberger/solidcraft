@@ -2270,8 +2270,6 @@ pub struct Snapshot {
     shadow: bool,
     perspective: bool,
     style: u8,
-    /// The modelling view's and the Render preview's looks (`view.look`).
-    looks: (u8, u8),
     pick_mode: solidcraft_engine::PickMode,
     agent: crate::agent_cursor::Settings,
     autosave: f64,
@@ -2302,7 +2300,6 @@ impl Snapshot {
             shadow: app.ui.ground_shadow,
             perspective: app.ui.perspective,
             style: app.ui.visual_style,
-            looks: (app.ui.view_look, app.ui.render_preview_look),
             pick_mode: app.ui.pick_mode,
             agent: app.ui.agent_cursor,
             autosave: app.autosave_minutes,
@@ -2347,7 +2344,6 @@ impl Snapshot {
         app.ui.ground_shadow = self.shadow;
         app.ui.perspective = self.perspective;
         app.ui.visual_style = self.style;
-        (app.ui.view_look, app.ui.render_preview_look) = self.looks;
         app.ui.pick_mode = self.pick_mode;
         app.ui.agent_cursor = self.agent;
         app.autosave_minutes = self.autosave;
@@ -2381,7 +2377,6 @@ impl Snapshot {
             shadow,
             perspective,
             style,
-            looks,
             pick_mode,
             agent,
             autosave,
@@ -2412,7 +2407,6 @@ impl Snapshot {
             && *shadow == app.ui.ground_shadow
             && *perspective == app.ui.perspective
             && *style == app.ui.visual_style
-            && *looks == (app.ui.view_look, app.ui.render_preview_look)
             && *pick_mode == app.ui.pick_mode
             && *agent == app.ui.agent_cursor
             && *autosave == app.autosave_minutes
@@ -2463,8 +2457,6 @@ pub(crate) fn held_overlay(app: &SolveApp) -> Option<serde_json::Map<String, ser
         ("auto_project", serde_json::json!(s.auto_project)),
         ("project_construction", serde_json::json!(s.project_construction)),
         ("visual_style", serde_json::json!(s.style)),
-        ("view_look", serde_json::json!(s.looks.0)),
-        ("render_preview_look", serde_json::json!(s.looks.1)),
         ("shortcut_box", shortcut_box),
         ("shortcuts", serde_json::Value::Object(shortcuts)),
         ("toolbar", s.toolbar.clone()),
@@ -2667,8 +2659,6 @@ pub(crate) fn defaults(app: &mut SolveApp, page: usize) {
         }
         PAGE_GRAPHICS => {
             app.ui.visual_style = 0;
-            app.ui.view_look = crate::view_look::STANDARD;
-            app.ui.render_preview_look = crate::view_look::STANDARD;
             app.ui.show_grid = true;
             app.ui.ground_shadow = true;
             app.ui.perspective = false;
