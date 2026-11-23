@@ -19,10 +19,10 @@ use std::{io::Cursor, sync::Arc};
 pub mod normalization;
 pub mod png_metadata;
 
-/// Encoded bytes of one texture (the design container's per-part cap).
-pub const MAX_TEXTURE_BYTES: usize = 256 * 1024 * 1024;
-/// Pixels a side: the largest 2D texture any current desktop GPU holds in one piece.
-pub const MAX_TEXTURE_EDGE: u32 = 16384;
+/// Encoded bytes of one texture: upstream's bound for HDRI and PBR maps (#813).
+pub const MAX_TEXTURE_BYTES: usize = 16 * 1024 * 1024;
+/// Pixels a side: upstream's bound for HDRI and PBR maps (#813).
+pub const MAX_TEXTURE_EDGE: u32 = 2048;
 /// Decoded bytes of all of one design's textures together.
 pub const MAX_DESIGN_DECODED_BYTES: u64 = 1024 * 1024 * 1024;
 /// Codec working memory allowed on top of an image's decoded size.

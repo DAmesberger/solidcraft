@@ -68,13 +68,14 @@ fn mip_chains_are_counted_through_one_texel() {
 
 #[test]
 fn the_resident_clamp_follows_the_device_and_the_budget() {
-    let native = ResidentPolicy::native(16384);
-    assert_eq!((native.max_edge, native.budget_bytes), (16384, 2 << 30));
+    // A device's edge is clamped to the largest texture admitted.
+    assert_eq!(ResidentPolicy::native(16384), ResidentPolicy { max_edge: MAX_TEXTURE_EDGE, budget_bytes: 2 << 30 });
+    let native = ResidentPolicy { max_edge: 16384, budget_bytes: NATIVE_BUDGET };
     // A full-size RGBA8 image is resident at full size (4/3 GiB with mips, within 2 GiB) …
     assert_eq!(native.levels_to_drop(16384, 16384, 4, true), 0);
     // … a half-float height map of that size is not (8 B/px: 2.7 GiB), one level down it is.
     assert_eq!(native.levels_to_drop(16384, 16384, 8, true), 1);
-    assert_eq!(ResidentPolicy::native(8192).levels_to_drop(16384, 4096, 4, true), 1);
+    assert_eq!(ResidentPolicy { max_edge: 8192, budget_bytes: NATIVE_BUDGET }.levels_to_drop(16384, 4096, 4, true), 1);
     let webgl = ResidentPolicy::for_limits(&wgpu::Limits::downlevel_webgl2_defaults());
     assert_eq!((webgl.max_edge, webgl.budget_bytes), (2048, 256 << 20));
     assert_eq!(webgl.levels_to_drop(16384, 16384, 4, true), 3);

@@ -96,9 +96,9 @@ fn the_limits_are_the_files_safety_limits() {
     assert_eq!(MAX_TEXTURE_EDGE, limits::TEXTURE_SIDE);
     assert_eq!(MAX_TEXTURE_BYTES, limits::TEXTURE_BYTES);
     assert_eq!(MAX_DESIGN_DECODED_BYTES, limits::DECODED_TEXTURE_BYTES as u64);
-    assert_eq!(MAX_MIP_LEVELS, 15);
-    // Exactly one maximum-size RGBA8 image fits a design's budget.
-    assert_eq!(u64::from(MAX_TEXTURE_EDGE).pow(2) * 4, MAX_DESIGN_DECODED_BYTES);
+    assert_eq!(MAX_MIP_LEVELS, 12);
+    // A maximum-size RGBA8 image fits a design's budget.
+    assert!(u64::from(MAX_TEXTURE_EDGE).pow(2) * 4 <= MAX_DESIGN_DECODED_BYTES);
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn a_header_that_lies_about_its_size_fails_to_decode_within_its_guard() {
     assert_eq!(source.info().decoded_bytes, 2048 * 2048 * 4);
     assert!(source.decode(|| false).is_err());
     let height = encode(image::DynamicImage::ImageLuma16(image::ImageBuffer::from_pixel(1, 1, image::Luma([7u16]))));
-    let source = TextureSource::new(lying(height, 4096, 3), MapRole::Height).unwrap();
+    let source = TextureSource::new(lying(height, MAX_TEXTURE_EDGE, 3), MapRole::Height).unwrap();
     assert!(source.decode(|| false).is_err());
 }
 
@@ -175,10 +175,15 @@ fn a_designs_textures_share_one_decoded_budget() {
     };
     let mut budget = DecodeBudget::design();
     let largest = info(MAX_TEXTURE_EDGE, PixelLayout::Rgba8);
-    budget.admit(&largest).unwrap();
+    let fit = MAX_DESIGN_DECODED_BYTES / largest.decoded_bytes;
+    for _ in 0..fit {
+        budget.admit(&largest).unwrap();
+    }
     assert_eq!(budget.remaining(), 0);
     assert!(budget.admit(&info(1, PixelLayout::Gray16)).is_err());
-    budget.release(&largest);
+    for _ in 0..fit {
+        budget.release(&largest);
+    }
     for _ in 0..16 {
         budget.admit(&info(4096, PixelLayout::Rgba8)).unwrap();
     }
