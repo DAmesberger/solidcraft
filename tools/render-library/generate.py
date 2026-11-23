@@ -21,6 +21,7 @@ CATALOGS = {
     "hdr": "assets/render/starter/environments/manifest.json",
     "rigs": "assets/render/starter/lighting/exports/rigs.json",
     "scenes": "docs/render-materials/scene-presets.json",
+    "studios": "assets/render/catalog/studios.json",
     "quality": "docs/render-materials/quality-presets.json",
     "capabilities": "docs/render-materials/capabilities.json",
 }

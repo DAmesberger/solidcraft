@@ -58,12 +58,7 @@ static CATALOGS: OnceLock<std::result::Result<BTreeMap<&'static str, Value>, Str
 
 fn catalog(kind: &str, command: &str) -> Result<&'static [Value]> {
     if kind == "native_scenes" {
-        static NATIVE: OnceLock<Value> = OnceLock::new();
-        return NATIVE
-            .get_or_init(super::studio_presets::entries)
-            .as_array()
-            .map(Vec::as_slice)
-            .ok_or_else(|| bad(command, "native studio entries missing"));
+        return super::studio_presets::entries().map_err(|e| bad(command, e));
     }
     let cached = CATALOGS.get_or_init(|| {
         let mut catalogs = BTreeMap::new();

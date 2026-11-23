@@ -13,8 +13,7 @@ fn subject() -> Session {
 #[cfg(feature = "bundled-render-library")]
 #[test]
 fn native_studios_resolve_without_mutation_and_apply_one_complete_undo() {
-    let entries = super::entries();
-    let entries = entries.as_array().unwrap();
+    let entries = super::entries().unwrap();
     assert!(!entries.is_empty());
     let mut ids = std::collections::BTreeSet::new();
     let hdrs: std::collections::BTreeSet<_> = entries.iter().map(|item| item["hdr"].as_str().unwrap()).collect();
@@ -284,7 +283,7 @@ fn cpu_quality_rejects_unbound_ids_hostile_context_and_incompatible_adaptive_wit
 fn cpu_native_studios_preserve_full_job_and_exact_hdr_rig_authority_for_all_twenty_five() {
     use solidcraft_doc::render_settings::CpuJob;
     use solidcraft_render::job::{CpuBudget, CpuPathOptions, CpuProgressiveOptions, ThinLens, adaptive::AdaptiveSampling};
-    for entry in entries().as_array().unwrap() {
+    for entry in entries().unwrap() {
         let id = entry["id"].as_str().unwrap();
         let mut s = Session::default();
         s.execute("solid.box", &json!({"length":20,"width":15,"height":10,"body_name":"Subject"})).unwrap();
@@ -467,4 +466,14 @@ fn cpu_native_studio_cold_capture_matches_typed_source_every_prefix_and_raw_mast
         assert!(Arc::ptr_eq(&doc, &s.doc));
         assert_eq!((s.revision, s.undo.len(), s.redo.len()), history);
     }
+}
+
+#[test]
+fn moving_the_native_studios_to_data_preserves_the_compositions() {
+    let rows = entries().unwrap();
+    assert_eq!(rows.len(), 25);
+    let inputs: Vec<_> =
+        rows.iter().map(|row| json!([row["id"], row["hdr"], row["intensity"], row["exposure_ev"], row["ground"], row["rig"]])).collect();
+    let encoded = serde_json::to_vec(&inputs).unwrap();
+    assert_eq!(solidcraft_doc::render_resources::HdrId::of(&encoded).to_string(), "dc18eb3884fa38ecc06a01be459eb49bde034dd64af595035376b6ce02bb70b6");
 }
