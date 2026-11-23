@@ -147,8 +147,29 @@ impl Target for Raster {
     fn vec4(&self, index: &str) -> String {
         format!("mat_page.m[{index}]")
     }
-    fn image(&self, _binding: u8, _tc: &str, default: &str, params: ImageParams) -> String {
-        format!("sc_image_default({default}, {}u)", params.channel)
+    fn image(&self, binding: u8, tc: &str, default: &str, params: ImageParams) -> String {
+        // `textures::sampling_source`: the binding's texture (group 3, 4 + binding) with the wrap
+        // mode's sampler; the node's `default` until the texture is resident.
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_image_{binding}_{wrap}({tc}, {default}, {}u)", params.channel),
+            None => format!("sc_image_default({default}, {}u)", params.channel),
+        }
+    }
+    fn image_slope(&self, binding: u8, tc: &str, params: ImageParams) -> String {
+        match Self::sampler(binding, params) {
+            Some(wrap) => format!("mat_slope_{binding}_{wrap}({tc}, {}u)", params.channel),
+            None => ZERO3.to_owned(),
+        }
+    }
+}
+
+impl Raster {
+    /// The sampler name of a binding the raster target has (`None` past its four).
+    fn sampler(binding: u8, params: ImageParams) -> Option<&'static str> {
+        if usize::from(binding) >= super::scene::TEXTURE_SLOTS {
+            return None;
+        }
+        super::textures::WRAPS.get(usize::try_from(params.wrap).ok()?).copied()
     }
 }
 

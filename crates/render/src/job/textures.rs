@@ -1290,4 +1290,27 @@ mod tests {
         assert_eq!(task.completed_rows(), 0);
         assert!(task.finish().is_err());
     }
+    #[test]
+    fn legacy_gamma_maps_decode_as_the_plain_image() {
+        let pixels = [64_u8, 128, 192, 255].repeat(4);
+        let plain = png(2, 2, &pixels);
+        let mut declared = plain.clone();
+        let data = 100_000_u32.to_be_bytes();
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend(b"gAMA");
+        chunk.extend(data);
+        let mut crc = u32::MAX;
+        for byte in b"gAMA".iter().chain(&data) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320_u32.wrapping_mul(crc & 1));
+            }
+        }
+        chunk.extend((!crc).to_be_bytes());
+        declared.splice(33..33, chunk);
+        let map = TextureMap::new(declared, MapRole::BaseColor).unwrap();
+        let plain = TextureMap::new(plain, MapRole::BaseColor).unwrap();
+        let cancel = crate::job::CancelToken::default();
+        assert_eq!(map.decode(&cancel).unwrap(), plain.decode(&cancel).unwrap());
+    }
 }

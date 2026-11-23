@@ -23,7 +23,7 @@ mod silhouette;
 pub mod stage;
 pub mod studio;
 pub mod surface_patterns;
-pub mod texture_input;
+pub use solidcraft_viewport::texture_input;
 pub mod texture_interpolation;
 pub mod texture_lod;
 pub mod texture_sampling;

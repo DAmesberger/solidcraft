@@ -7,6 +7,8 @@
 //!   (`crate::shading`); no user string reaches WGSL.
 //! - [`scene`]: uniform pages (16 KiB, WebGL2's block limit), each material's record (its base
 //!   response, then its slots) and the per-draw vertices, which carry the record's vec4 offset.
+//! - [`textures`]: the decode worker, the resident size, GPU mips by render passes and the
+//!   sampling the raster target's `image` calls.
 //! - [`cache`]: pipelines by shape key (at most [`CACHE_SHAPES`], LRU), made on a worker thread
 //!   where the device allows (`compile`), else within a per-frame budget; a shape not compiled
 //!   yet draws its base response through the constant-graph fallback.
@@ -18,10 +20,12 @@ pub(crate) mod cache;
 pub mod codegen;
 mod compile;
 pub mod scene;
+pub mod textures;
 
 pub use cache::AppearanceStats;
 pub use codegen::{BASE_VEC4, CodegenError, ImageParams, Raster, Target, appearance_eval, generate};
-pub use scene::{GraphAppearance, GraphDraw, GraphScene, GraphSceneError, base_record};
+pub use scene::{GraphAppearance, GraphDraw, GraphScene, GraphSceneError, TEXTURE_SLOTS, TextureSet, base_record};
+pub use textures::{PreparedTexture, ResidentPolicy, TextureCaps, TextureDecoder, TextureKey, TextureStats, texture_keys};
 
 use solidcraft_viewport::appearance_graph::ir::Ir;
 
@@ -48,7 +52,7 @@ pub const PRELUDE: &str = include_str!("prelude.wgsl");
 
 fn module(eval: &str) -> String {
     // `pbr::SHADE` starts with the shared library.
-    format!("{}\n{}\n{STREAM}\n{PRELUDE}\n{eval}", crate::view::SHADER, crate::pbr::SOURCE)
+    format!("{}\n{}\n{STREAM}\n{PRELUDE}\n{}\n{eval}", crate::view::SHADER, crate::pbr::SOURCE, textures::sampling_source())
 }
 
 /// The WGSL module of a graph's shape: the shared library, the viewport's shading, the stream,

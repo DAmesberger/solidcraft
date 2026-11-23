@@ -6550,7 +6550,10 @@ dependencies = [
 name = "solidcraft-viewport"
 version = "0.46.2"
 dependencies = [
+ "flate2",
  "image",
+ "moxcms",
+ "png",
  "serde",
  "serde_json",
  "sha2 0.10.9",

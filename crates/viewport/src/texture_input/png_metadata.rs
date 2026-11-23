@@ -3,7 +3,7 @@
 //! Header admission uses the same ICC/EXIF/order policy without decoding pixels.
 use super::{MapRole, Result, invalid};
 
-pub(crate) const BLOCK_BYTES: usize = 4096;
+pub const BLOCK_BYTES: usize = 4096;
 // png0.18.1 uses a128KiB row-ring shift threshold and18KiB boxed
 // Huffman tables. This covers ring growth/relocation, bounded rows,
 // palette and fixed parser metadata for the admitted texture dimensions;
@@ -55,7 +55,7 @@ enum Phase {
     Done,
 }
 /// Fixed metadata only. No byte copy, map decode, recursion or caller-owned lease.
-pub(crate) struct PngMetadata {
+pub struct PngMetadata {
     phase: Phase,
     position: usize,
     kind: [u8; 4],
@@ -77,7 +77,7 @@ pub(crate) struct PngMetadata {
     text_counts: [u64; 3],
 }
 impl PngMetadata {
-    pub(crate) fn new(cpu: bool, verify_crc: bool) -> Self {
+    pub fn new(cpu: bool, verify_crc: bool) -> Self {
         Self {
             phase: Phase::Header,
             position: 8,
@@ -101,7 +101,7 @@ impl PngMetadata {
         }
     }
     /// Apply role-specific declarations during the existing bounded header steps.
-    pub(crate) fn with_role(mut self, role: MapRole) -> Self {
+    pub fn with_role(mut self, role: MapRole) -> Self {
         self.srgb = role == MapRole::BaseColor;
         self
     }
@@ -165,7 +165,7 @@ impl PngMetadata {
     }
     /// One header, at most4096 CRC bytes, EXIF header, or one IFD entry.
     /// The owner debits and checks cancellation before each call.
-    pub(crate) fn step(&mut self, bytes: &[u8]) -> Result<bool> {
+    pub fn step(&mut self, bytes: &[u8]) -> Result<bool> {
         match self.phase {
             Phase::Done => return Ok(true),
             Phase::Header => {
@@ -312,8 +312,8 @@ impl PngMetadata {
         }
         Ok(matches!(self.phase, Phase::Done))
     }
-    #[cfg(test)]
-    pub(crate) fn phase_name(&self) -> &'static str {
+    #[cfg(any(test, feature = "test-reference"))]
+    pub fn phase_name(&self) -> &'static str {
         match self.phase {
             Phase::Header => "metadata_header",
             Phase::Bytes { .. } => "metadata_bytes",
@@ -325,7 +325,7 @@ impl PngMetadata {
 }
 /// Shared capture policy: check unsupported metadata before a codec can allocate.
 /// Pixel/CRC decode remains a distinct later operation, as before.
-pub(crate) fn validate(bytes: &[u8]) -> Result<()> {
+pub fn validate(bytes: &[u8]) -> Result<()> {
     let mut scan = PngMetadata::new(false, false);
     while !scan.step(bytes)? {}
     Ok(())
@@ -333,7 +333,7 @@ pub(crate) fn validate(bytes: &[u8]) -> Result<()> {
 
 /// Role-aware encoded declaration check, separate from the common data/CRC policy.
 /// Untagged bytes are explicitly interpreted as sRGB by the caller's base-color role.
-pub(crate) fn validate_srgb_declarations(bytes: &[u8]) -> Result<()> {
+pub fn validate_srgb_declarations(bytes: &[u8]) -> Result<()> {
     let mut offset = 8usize;
     let mut seen = 0u8;
     while offset < bytes.len() {

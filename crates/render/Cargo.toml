@@ -10,7 +10,7 @@ workspace = true
 
 [features]
 default = []
-raytrace-cpu = ["dep:rayon"]
+raytrace-cpu = ["dep:rayon", "solidcraft-viewport/raytrace-cpu"]
 
 [dependencies]
 solidcore-record = { workspace = true }
@@ -33,6 +33,7 @@ rayon = { workspace = true, optional = true }
 sysinfo = { workspace = true }
 
 [dev-dependencies]
+solidcraft-viewport = { workspace = true, features = ["test-reference"] }
 flate2 = "1"
 
 [[example]]

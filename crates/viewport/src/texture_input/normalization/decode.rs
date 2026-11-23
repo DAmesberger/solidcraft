@@ -116,7 +116,7 @@ impl RawImage {
 
 fn dimensions(width: u32, height: u32, encoded: usize, budget: usize) -> Result<usize> {
     if width == 0 || height == 0 || width > MAX_TEXTURE_EDGE || height > MAX_TEXTURE_EDGE {
-        return Err(invalid("normalization dimensions exceed 2048x2048"));
+        return Err(invalid(format!("normalization dimensions exceed {MAX_TEXTURE_EDGE}x{MAX_TEXTURE_EDGE}")));
     }
     let pixels = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| invalid("image size overflow"))?;
     let rows = usize::try_from(u64::from(width) * 3 * 8 * 2).map_err(|_| invalid("row workspace overflow"))?;

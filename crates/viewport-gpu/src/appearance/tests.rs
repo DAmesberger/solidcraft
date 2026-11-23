@@ -909,7 +909,8 @@ pub(super) fn gpu_surfaces_with(
     textures: Option<[&wgpu::TextureView; 4]>,
 ) -> Result<Vec<Vec<f32>>, String> {
     use wgpu::util::DeviceExt;
-    let source = format!("{}\n{READBACK}\n{}\n{}", crate::shading::SOURCE, "", super::appearance_eval(ir).map_err(|e| e.0)?);
+    let source =
+        format!("{}\n{READBACK}\n{}\n{}", crate::shading::SOURCE, super::textures::sampling_source(), super::appearance_eval(ir).map_err(|e| e.0)?);
     super::validate(&source).map_err(|e| e.0)?;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(source.into()) });
     let entry = |binding, ty| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None };
@@ -1157,6 +1158,57 @@ fn vector_slopes_match_the_reference() {
             .any(|p| reference::evaluate(&ir, &words, &[], p).is_ok_and(|e| (e.surface.normal[2] - p.world_normal[2]).abs() > 1e-4));
         assert!(tilted, "case {i}: the height tilts the normal");
     }
+}
+
+/// C2's rule for the blended class: a surface that drives transmission or opacity, or holds a
+/// transmission above 0 or an opacity below 1, in any layer.
+#[test]
+fn scene_textures_are_decoded_and_drawn() {
+    let Some((_, device, queue)) = crate::open_headless(crate::test_env::policy()).ok() else { return };
+    let key = "ab".repeat(32);
+    let graph = lowered(&graph_of(json!({"name": "label", "nodes": [
+        {"id": "uv", "kind": "texcoord.planar", "params": {"space": "world"}, "inputs": {"origin": [-12, -12, 0], "u": [24, 0, 0], "v": [0, 24, 0]}},
+        {"id": "img", "kind": "image", "params": {"space": "srgb", "wrap": "clamp"}, "inputs": {"texcoord": {"from": "uv"}, "file": {"texture": key}, "default": [0.0, 0.8, 0.0]}},
+        {"id": "s", "kind": "standard_surface", "inputs": {"base_color": {"from": "img"}, "specular_roughness": 0.9}}], "output": "s"})))
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_fn(2, 1, |x, _| if x == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) });
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap_or_else(|e| panic!("{e}"));
+    let words = uniform_words(&graph.ir, &BTreeMap::new()).unwrap_or_else(|e| panic!("{e}"));
+    let set = super::texture_keys(&graph.ir, &BTreeMap::new());
+    assert!(set[0].is_some(), "the constant texture is bound");
+    let scene = || {
+        let mut scene = GpuScene::default();
+        let m = scene.graphs.textured_appearance(&graph.ir, &words, &graph.base, &set).unwrap_or_else(|e| panic!("{e}"));
+        for k in set.iter().flatten() {
+            scene.graphs.texture_source(k.clone(), Arc::new(png.clone()));
+        }
+        let face = scene.color([200, 200, 200, 255]);
+        for p in SQUARE {
+            scene.graphs.vertex(m, p, [0.0, 0.0, 1.0], p);
+            scene.tri(p, [0.0, 0.0, 1.0], face);
+        }
+        scene
+    };
+    let mut r = renderer(&device, &queue);
+    let side = |bytes: &[u8], x: usize| {
+        let at = (32 * SIZE as usize + x) * 4;
+        bytes.get(at..at + 3).map(|p| [p[0], p[1], p[2]]).unwrap_or_default()
+    };
+    let first = render_frame(&mut r, &device, &queue, &realistic(scene(), 1, 1.0), true);
+    let mut last = first.clone();
+    for key_n in (2..).take(200) {
+        if !r.wants_redraw() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        last = render_frame(&mut r, &device, &queue, &realistic(scene(), key_n, 1.0), true);
+    }
+    assert!(!r.wants_redraw(), "the texture finished decoding");
+    let (left, right) = (side(&last, 14), side(&last, 50));
+    assert!(left[0] > left[2] + 40 && right[2] > right[0] + 40, "red left, blue right: {left:?} {right:?}");
+    let before = side(&first, 14);
+    assert!(before[1] > before[0] || first == last, "before decoding the default colour (green) shows: {before:?}");
 }
 
 /// A graph of a shape no driver has seen: a chain of `n` additions on a noise (so its code, and

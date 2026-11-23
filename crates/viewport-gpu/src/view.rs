@@ -5046,7 +5046,7 @@ impl Renderer {
         if cb.product {
             let _ = res.prepare_product_geometry(device, queue, cb);
             res.product.sort_glass(queue, cb.back);
-            res.materials.prepare(&res.product.graphs, started);
+            res.materials.prepare(device, queue, &res.product.graphs, started);
             res.product.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
             // The product picture goes through the window's pass too: offscreen when the targets
             // differ or it is drawn smaller, else straight into the window's pass.
@@ -5130,7 +5130,7 @@ impl Renderer {
         uploads.push(res.preview.take(device, queue, &res.uniform, &res.uniform_bgl, cb.pv_key, &cb.pv_slot, None, oit));
         // A refused scene leaves the previous picture; a capture must not pass it off as the new one.
         res.refused_upload = uploads.into_iter().find_map(Result::err);
-        res.materials.prepare(&res.pic.model.graphs, started);
+        res.materials.prepare(device, queue, &res.pic.model.graphs, started);
         res.pic.model.graphs.bind(device, &res.materials, &res.studios, product_look(cb).map(|look| look.studio));
         // See-through surfaces are drawn without sorting where the device can (order-independent
         // transparency, in an offscreen frame); else their triangles are sorted for the view.
@@ -5297,6 +5297,43 @@ impl Renderer {
     /// [`Self::wants_redraw`] is false and must not spin meanwhile, such as an offscreen image.
     pub fn wait_for_appearances(&self, timeout: std::time::Duration) {
         self.materials.wait(timeout);
+    }
+
+    /// What this device keeps of material textures (docs/appearance-graph.md §4.3): what a
+    /// [`crate::appearance::TextureDecoder`] for it prepares to.
+    pub fn appearance_texture_policy(&self) -> crate::appearance::ResidentPolicy {
+        self.materials.textures.policy
+    }
+
+    /// The formats the adapter draws into ([`crate::appearance::TextureCaps::of`]); until set, the
+    /// ones every device has.
+    pub fn set_appearance_texture_caps(&mut self, caps: crate::appearance::TextureCaps) {
+        self.materials.textures.caps = caps;
+    }
+
+    pub fn appearance_texture_caps(&self) -> crate::appearance::TextureCaps {
+        self.materials.textures.caps
+    }
+
+    /// Make a decoded material texture resident: upload it, build its mips on the GPU, and keep
+    /// the texture budget by dropping levels of the least recently drawn. Draws of its key
+    /// sample it from the next frame on; until then they draw their `image` nodes' `default`.
+    pub fn install_appearance_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: crate::appearance::PreparedTexture,
+    ) -> Result<(), solidcraft_viewport::texture_input::TextureError> {
+        self.materials.textures.install(device, queue, texture)
+    }
+
+    /// Drop a material texture (its asset left the design).
+    pub fn remove_appearance_texture(&mut self, key: &crate::appearance::TextureKey) {
+        self.materials.textures.remove(key);
+    }
+
+    pub fn appearance_texture_stats(&self) -> crate::appearance::TextureStats {
+        self.materials.textures.stats()
     }
 
     #[cfg(test)]

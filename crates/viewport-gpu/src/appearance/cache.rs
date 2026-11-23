@@ -14,7 +14,8 @@ use std::sync::Arc;
 use solidcraft_viewport::appearance_graph::ir::{Ir, ShapeKey};
 
 use super::compile::{Compiler, Done, Job, PipelineSpec};
-use super::scene::{GraphAppearance, GraphScene};
+use super::scene::{GraphAppearance, GraphScene, TextureSet};
+use super::textures::ResidentTextures;
 use super::{CACHE_SHAPES, COMPILES_PER_FRAME, FRAME_BUDGET_MS, OBJECT_VERTEX_SIZE, PAGE_BYTES, VERTEX_SIZE};
 use crate::view::ibl::{StudioPreset, Studios};
 
@@ -93,6 +94,16 @@ pub(crate) struct AppearancePipelines {
     stats: AppearanceStats,
     /// Draws this frame that used the fallback (counted while drawing, which borrows `self`).
     fallback_draws: std::sync::atomic::AtomicU32,
+    /// A stand-in for the four material textures (1 × 1 white, made with the fallback) and the
+    /// samplers by wrap mode.
+    blank: Option<wgpu::TextureView>,
+    samplers: [wgpu::Sampler; 3],
+    /// The resident material textures (`textures`).
+    pub(crate) textures: ResidentTextures,
+    /// Decodes the textures a scene gives bytes for, on a worker (made on first use).
+    decoder: Option<std::sync::Mutex<super::TextureDecoder>>,
+    /// Textures still decoding, as of the last frame.
+    decoding: u32,
     /// Shapes kept and new pipelines a frame ([`CACHE_SHAPES`], [`COMPILES_PER_FRAME`]); tests
     /// lower them.
     pub(crate) capacity: usize,
@@ -118,6 +129,23 @@ impl AppearancePipelines {
             bind_group_layouts: &[Some(groups[0]), Some(groups[1]), Some(groups[2]), Some(&group3)],
             immediate_size: 0,
         });
+        let sampler = |label, mode| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(label),
+                address_mode_u: mode,
+                address_mode_v: mode,
+                address_mode_w: mode,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            })
+        };
+        let samplers = [
+            sampler("sc_appearance_repeat", wgpu::AddressMode::Repeat),
+            sampler("sc_appearance_clamp", wgpu::AddressMode::ClampToEdge),
+            sampler("sc_appearance_mirror", wgpu::AddressMode::MirrorRepeat),
+        ];
         AppearancePipelines {
             spec: PipelineSpec { device: device.clone(), layout, format, samples, depth },
             group3,
@@ -130,8 +158,13 @@ impl AppearancePipelines {
             frame: 0,
             stats: AppearanceStats::default(),
             fallback_draws: std::sync::atomic::AtomicU32::new(0),
+            blank: None,
             capacity: CACHE_SHAPES,
             compiles_per_frame: COMPILES_PER_FRAME,
+            samplers,
+            textures: ResidentTextures::new(device),
+            decoder: None,
+            decoding: 0,
             #[cfg(test)]
             no_time_budget: false,
         }
@@ -143,19 +176,45 @@ impl AppearancePipelines {
 
     /// Shapes of the last frame's scene are still compiling: a frame drawn now would differ.
     pub(crate) fn wants_redraw(&self) -> bool {
-        self.stats.pending > 0 || !self.in_flight.is_empty()
+        self.stats.pending > 0 || self.decoding > 0 || !self.in_flight.is_empty()
     }
 
     /// Ready this frame's pipelines for `scene`: the fallback when it first has material surfaces,
     /// then new shapes within the budget (`started`: when the frame began).
-    pub(crate) fn prepare(&mut self, scene: &GraphBatches, started: web_time::Instant) {
+    pub(crate) fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphBatches, started: web_time::Instant) {
         self.fallback_draws.store(0, std::sync::atomic::Ordering::Relaxed);
         self.frame += 1;
         let frame = self.frame;
+        self.textures.next_frame();
+        for set in scene.draws.iter().map(|d| d.set).chain(scene.placed.values().map(|p| p.set)) {
+            for key in scene.set(set).iter().flatten() {
+                self.textures.touch(key);
+            }
+        }
         self.stats = AppearanceStats { failed: u32::try_from(self.failed.len()).unwrap_or(u32::MAX), ..AppearanceStats::default() };
+        self.decode(device, queue, scene);
         if scene.draws.is_empty() && scene.placed.is_empty() {
             self.stats.ready = u32::try_from(self.shapes.len()).unwrap_or(u32::MAX);
             return;
+        }
+        if self.blank.is_none() {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("sc_appearance_blank"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &[255; 4],
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            );
+            self.blank = Some(texture.create_view(&Default::default()));
         }
         if self.threaded && self.compiler.is_none() {
             self.compiler = Compiler::start(&self.spec);
@@ -299,6 +358,42 @@ impl AppearancePipelines {
         self.take_finished(self.frame);
     }
 
+    /// Ask the decoder for the scene's textures that are neither resident nor decoding, and make
+    /// resident what it has finished. A texture that fails to decode stays its `image` nodes'
+    /// `default` (logged once; the decoder does not try it again).
+    fn decode(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &GraphBatches) {
+        let wanted: Vec<_> = scene.sources.iter().filter(|(key, _)| self.textures.view(key).is_none()).collect();
+        if wanted.is_empty() && self.decoder.as_mut().is_none_or(|d| d.get_mut().map_or(0, |d| d.pending()) == 0) {
+            self.decoding = 0;
+            return;
+        }
+        let (policy, caps) = (self.textures.policy, self.textures.caps);
+        let slot = self.decoder.get_or_insert_with(|| std::sync::Mutex::new(super::TextureDecoder::new(policy, caps)));
+        let decoder = match slot.get_mut() {
+            Ok(d) => d,
+            Err(e) => e.into_inner(),
+        };
+        for (key, bytes) in wanted {
+            if !decoder.is_pending(key)
+                && let Err(e) = decoder.request(key.clone(), bytes.as_ref().clone())
+            {
+                log::warn!("material texture {}: drawn as its default colour: {e}", key.sha256.get(..12).unwrap_or(""));
+            }
+        }
+        let finished = decoder.poll();
+        self.decoding = u32::try_from(decoder.pending()).unwrap_or(u32::MAX);
+        for done in finished {
+            match done {
+                Ok(texture) => {
+                    if let Err(e) = self.textures.install(device, queue, texture) {
+                        log::warn!("material texture not made resident: {e}");
+                    }
+                }
+                Err((key, e)) => log::warn!("material texture {}: drawn as its default colour: {e}", key.sha256.get(..12).unwrap_or("")),
+            }
+        }
+    }
+
     /// Free a cache slot if one is needed, dropping the least recently drawn shape not drawn this
     /// frame; false when every kept shape is in use.
     fn make_room(&mut self, frame: u64) -> bool {
@@ -344,6 +439,8 @@ struct DrawGpu {
     ir: Arc<Ir>,
     object: bool,
     page: usize,
+    /// Its texture set in `GraphBatches::sets`.
+    set: u32,
     buffer: wgpu::Buffer,
     vertices: u32,
 }
@@ -355,6 +452,7 @@ struct PlacedGpu {
     ir: Arc<Ir>,
     object: bool,
     page: usize,
+    set: u32,
 }
 
 /// One scene's material surfaces on the GPU: its pages, its draws and their group-3 binds.
@@ -364,10 +462,14 @@ pub(crate) struct GraphBatches {
     draws: Vec<DrawGpu>,
     /// The materials of the scene's instanced meshes.
     placed: HashMap<GraphAppearance, PlacedGpu>,
-    /// Group-3 binds by page.
-    binds: HashMap<usize, wgpu::BindGroup>,
+    /// The scene's texture sets (index 0 binds none).
+    sets: Vec<TextureSet>,
+    /// The latest scene's texture bytes, by key.
+    sources: HashMap<super::TextureKey, Arc<Vec<u8>>>,
+    /// Group-3 binds by (page, texture set).
+    binds: HashMap<(usize, u32), wgpu::BindGroup>,
     /// The studio (preset, installation), pages and texture generation the binds were made for.
-    bound: Option<(Option<StudioPreset>, u64, usize)>,
+    bound: Option<(Option<StudioPreset>, u64, usize, u64)>,
 }
 
 impl GraphBatches {
@@ -404,10 +506,16 @@ impl GraphBatches {
         if rebind {
             self.bound = None;
         }
+        self.sources.clone_from(scene.texture_sources());
+        let sets: Vec<TextureSet> = (0..=scene.draws().iter().map(|d| d.textures).max().unwrap_or(0)).map(|i| scene.texture_set(i)).collect();
+        if sets != self.sets {
+            self.sets = sets;
+            self.bound = None;
+        }
         let pages_written = written;
         written = 0;
-        let mut old: HashMap<(ShapeKey, usize, u64), DrawGpu> =
-            std::mem::take(&mut self.draws).into_iter().map(|d| ((d.shape, d.page, d.hash), d)).collect();
+        let mut old: HashMap<(ShapeKey, usize, u32, u64), DrawGpu> =
+            std::mem::take(&mut self.draws).into_iter().map(|d| ((d.shape, d.page, d.set, d.hash), d)).collect();
         for draw in scene.draws() {
             let stride = GraphScene::stride(draw.object);
             let vertices = u32::try_from(draw.vertices.len() / stride).unwrap_or(0);
@@ -421,7 +529,7 @@ impl GraphBatches {
                 draw.vertices.hash(&mut h);
                 h.finish()
             };
-            if let Some(kept) = old.remove(&(draw.shape, page, hash)) {
+            if let Some(kept) = old.remove(&(draw.shape, page, draw.textures, hash)) {
                 self.draws.push(DrawGpu { ir: ir.clone(), object: draw.object, ..kept });
                 continue;
             }
@@ -435,7 +543,16 @@ impl GraphBatches {
             bytes.resize(bytes.len().div_ceil(4) * 4, 0);
             queue.write_buffer(&buffer, 0, &bytes);
             written += bytes.len() as u64;
-            self.draws.push(DrawGpu { shape: draw.shape, hash, ir: ir.clone(), object: draw.object, page, buffer, vertices: vertices / 3 * 3 });
+            self.draws.push(DrawGpu {
+                shape: draw.shape,
+                hash,
+                ir: ir.clone(),
+                object: draw.object,
+                page,
+                set: draw.textures,
+                buffer,
+                vertices: vertices / 3 * 3,
+            });
         }
         (pages_written, written)
     }
@@ -447,7 +564,7 @@ impl GraphBatches {
         let m = scene.placed_appearance(material)?;
         let ir = scene.shape(&m.shape)?.clone();
         let page = usize::try_from(m.page).ok()?;
-        self.placed.insert(material, PlacedGpu { shape: m.shape, ir, object: m.object, page });
+        self.placed.insert(material, PlacedGpu { shape: m.shape, ir, object: m.object, page, set: m.textures });
         Some(m.record)
     }
 
@@ -459,7 +576,8 @@ impl GraphBatches {
     /// Set the pipeline and bind group of `material`'s placements. False until they can draw.
     pub(crate) fn begin_placed(&self, pass: &mut wgpu::RenderPass<'_>, pipelines: &AppearancePipelines, material: GraphAppearance) -> bool {
         let Some(p) = self.placed.get(&material) else { return false };
-        let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&p.shape, p.object, Variant::Placed), self.binds.get(&p.page)) else {
+        let (Some((pipeline, fallback)), Some(bind)) = (pipelines.for_draw(&p.shape, p.object, Variant::Placed), self.binds.get(&(p.page, p.set)))
+        else {
             return false;
         };
         pass.set_pipeline(pipeline);
@@ -470,27 +588,43 @@ impl GraphBatches {
         true
     }
 
-    /// Build one group per uniform page whenever a studio is replaced or the page count changes.
+    /// Texture set `i` (none past the scene's).
+    fn set(&self, i: u32) -> &TextureSet {
+        static NONE: TextureSet = [None, None, None, None];
+        usize::try_from(i).ok().and_then(|i| self.sets.get(i)).unwrap_or(&NONE)
+    }
+
+    /// Make the group-3 binds (studio + page + textures) of every (page, texture set) drawn, when
+    /// the studio, the pages or the resident textures changed. A texture not resident yet binds
+    /// the 1 × 1 stand-in, so its `image` nodes draw their `default`.
     pub(crate) fn bind(&mut self, device: &wgpu::Device, materials: &AppearancePipelines, studios: &Studios, preset: Option<StudioPreset>) {
-        let want = (preset, studios.generation(), self.pages.len());
-        if self.bound == Some(want) {
-            return;
+        let Some(blank) = materials.blank.as_ref().filter(|_| !self.draws.is_empty() || !self.placed.is_empty()) else { return };
+        let want = (preset, studios.generation(), self.pages.len(), materials.textures.generation());
+        if self.bound != Some(want) {
+            self.binds.clear();
         }
-        self.binds = self
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(index, page)| (index, studios.appearance_bind(device, &materials.group3, preset, &page.buffer)))
-            .collect();
+        let samplers = [&materials.samplers[0], &materials.samplers[1], &materials.samplers[2]];
+        let wanted: Vec<(usize, u32)> = self.draws.iter().map(|d| (d.page, d.set)).chain(self.placed.values().map(|p| (p.page, p.set))).collect();
+        for (page_index, set_index) in wanted {
+            if self.binds.contains_key(&(page_index, set_index)) {
+                continue;
+            }
+            let Some(page) = self.pages.get(page_index) else { continue };
+            let set = self.set(set_index);
+            let view = |i: usize| set.get(i).and_then(Option::as_ref).and_then(|k| materials.textures.view(k)).unwrap_or(blank);
+            let textures = [view(0), view(1), view(2), view(3)];
+            let bind = studios.appearance_bind(device, &materials.group3, preset, &page.buffer, textures, samplers);
+            self.binds.insert((page_index, set_index), bind);
+        }
         self.bound = Some(want);
     }
 
-    /// Draw every material surface: one draw per (shape, page); the opaque ones,
+    /// Draw every material surface: one draw per (shape, page, texture set); the opaque ones,
     /// then the see-through ones' far sides, then their near sides.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'static>, pipelines: &AppearancePipelines, tally: &crate::view::Tally) {
         for draw in &self.draws {
             let (Some((pipeline, fallback)), Some(bind)) =
-                (pipelines.for_draw(&draw.shape, draw.object, Variant::Opaque), self.binds.get(&draw.page))
+                (pipelines.for_draw(&draw.shape, draw.object, Variant::Opaque), self.binds.get(&(draw.page, draw.set)))
             else {
                 continue;
             };
